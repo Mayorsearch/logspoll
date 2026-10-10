@@ -1,0 +1,13 @@
+import { ArrowRight, LockKeyhole, Search, ShoppingBag, PackageCheck } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Categories } from '../components/Categories'
+
+export function Home() {
+  return <>
+    <section className="hero"><div className="container hero-grid"><div className="hero-copy"><span className="eyebrow"><LockKeyhole size={13} /> PRIVATE DIGITAL MARKETPLACE</span><h1>Access a Private<br />Digital Services<br /><span>Marketplace.</span></h1><p>Discover digital products and services for the way you work. Explore VPN services, business communication tools, virtual numbers and more.</p><div className="button-row"><Link className="button" to="/marketplace">Explore the marketplace <ArrowRight size={18} /></Link><Link className="text-link" to="/about">Get to know LOGSPOLL <ArrowUp /></Link></div><p className="hero-note">A fresh experience. Built around your digital needs.</p></div><div className="hero-art"><img src="/images/private-services.png" width="1122" height="1402" fetchPriority="high" alt="Illustration of connected digital services and communication tools" /></div></div></section>
+    <section className="section container"><div className="section-heading"><div><span className="eyebrow">FIND YOUR NEXT DIGITAL TOOL</span><h2>Popular service categories</h2><p>A place for the services that keep your day moving.</p></div><Link className="text-link" to="/categories">Explore categories <ArrowRight size={17} /></Link></div><Categories /></section>
+    <section className="how-section"><div className="container"><span className="eyebrow">A CLEAR PATH FROM DISCOVERY TO ACCESS</span><h2>How LOGSPOLL will work</h2><div className="steps">{[{ Icon: Search, title: 'Find your service', text: 'Explore categories and compare available product details.' }, { Icon: ShoppingBag, title: 'Choose with confidence', text: 'Review the price, requirements and terms before ordering.' }, { Icon: PackageCheck, title: 'Keep everything together', text: 'Access verified orders and purchase details in your account.' }].map(({ Icon, title, text }, i) => <article key={title}><div className="step-label"><Icon size={21} /><span>0{i + 1}</span></div><h3>{title}</h3><p>{text}</p></article>)}</div><p className="preview-note">Catalog, account and checkout connections are in development.</p></div></section>
+    <section className="container section"><div className="cta"><div><span className="eyebrow">START EXPLORING</span><h2>Your next digital tool starts here.</h2><p>Browse the categories and see what’s coming to LOGSPOLL.</p></div><Link className="button" to="/marketplace">Visit marketplace <ArrowRight size={18} /></Link></div></section>
+  </>
+}
+function ArrowUp() { return <ArrowRight size={16} /> }

@@ -1,0 +1,6 @@
+import { ArrowRight, Check, ReceiptText } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { FAQ } from '../components/FAQ'
+export function Pricing() {
+  return <div className="container section pricing-page"><div className="page-heading"><span className="eyebrow">CLEAR PRICING, INFORMED CHOICES</span><h1>Find your service.<br /><span>See its price.</span></h1><p>Product prices belong alongside the details that help you choose.</p></div><div className="pricing-panel"><div><span className="category-icon orange"><ReceiptText size={27} /></span><h2>Pricing by product</h2><p>Browse the marketplace to discover services. Live pricing will be published with each available product.</p><Link className="button" to="/marketplace">Explore marketplace <ArrowRight size={18} /></Link></div><div className="pricing-details"><h3>What to look for in each listing</h3>{['Product price and currency', 'What the service includes', 'Duration and usage requirements', 'Availability and delivery terms'].map(item => <p key={item}><Check size={18} />{item}</p>)}<small>No live prices or subscription plans are published yet. Checkout is not available in this preview.</small></div></div><div className="faq-section"><span className="eyebrow">A LITTLE MORE CLARITY</span><h2>Frequently asked questions</h2><FAQ /></div></div>
+}
