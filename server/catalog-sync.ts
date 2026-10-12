@@ -33,12 +33,17 @@ export async function readCatalog(base: string, key: string, approved: Record<st
   }
   const categories = categoriesFrom(await get('categories'))
   const subcategories: { id: string; slug: string; name: string; parent_id: string }[] = []
-  for (const category of categories) {
-    await options.progress?.(`Reading subcategories: ${subcategories.length} loaded`)
-    const response = await get(`categories/${identifier(category.id)}/subcategories`)
-    subcategories.push(...subcategoriesFrom(response, category.id))
+  // Subcategory reads take one API request per category. Keep that expensive
+  // traversal in Fetch Categories; ordinary product sync fetches categories,
+  // listings, and eligible detail metadata without deleting saved subcategories.
+  if (options.categoriesOnly) {
+    for (const category of categories) {
+      await options.progress?.(`Reading subcategories: ${subcategories.length} loaded`)
+      const response = await get(`categories/${identifier(category.id)}/subcategories`)
+      subcategories.push(...subcategoriesFrom(response, category.id))
+    }
+    return { categories, subcategories, subcategories_complete: true, products: [], scanned: 0, pages: 0 }
   }
-  if (options.categoriesOnly) return { categories, subcategories, subcategories_complete: true, products: [], scanned: 0, pages: 0 }
   const products: ReturnType<typeof listingsFrom>['products'] = []
   const seen = new Set<string>()
   let scanned = 0
@@ -64,7 +69,7 @@ export async function readCatalog(base: string, key: string, approved: Record<st
       for (const extra of mapped.categories) if (!categories.some(category => category.id === extra.id)) categories.push(extra)
     }
     await options.progress?.(`Reading catalog: page ${page}, ${scanned} scanned, ${products.length} eligible`)
-    if (pageIsComplete(response, page, rows.length)) return { categories, subcategories, subcategories_complete: true, products, scanned, pages: page }
+    if (pageIsComplete(response, page, rows.length)) return { categories, subcategories, subcategories_complete: false, products, scanned, pages: page }
   }
   throw new HttpError(502, 'Catalog exceeds the safe pagination limit; no partial inventory was imported.')
 }
@@ -92,7 +97,8 @@ export async function syncSupplier(env: Env, id: string, action: 'test' | 'categ
       ? { categories: categoriesFrom(await youngpgGet(config.data.base_url, key, 'categories')), products: [], subcategories: [], scanned: 0, pages: 0 }
       : await readCatalog(config.data.base_url, key, approved, { categoriesOnly: action === 'categories', progress: async status => {
         const updated = await db.from('supplier_connections').update({ last_status: status }).eq('id', id).eq('lease_token', lease!).select('id')
-        if (updated.error || updated.data?.length !== 1) throw new HttpError(409, 'Supplier sync lease lost; no partial snapshot was committed.')
+        if (updated.error) throw storageError()
+        if (updated.data?.length !== 1) throw new HttpError(409, 'Supplier sync lease lost; no partial snapshot was committed.')
       } })
     const saved = await db.rpc('finish_supplier_connection', { connection_uuid: id, token: lease, snapshot, failure: null })
     if (saved.error) throw storageError()
