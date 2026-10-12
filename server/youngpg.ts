@@ -78,6 +78,7 @@ export function resaleAllowlist(value: unknown): Record<string, string> {
       }),
   );
 }
+export const youngpgRequestTimeout = (resource: string) => resource === 'listings' ? 20000 : resource.startsWith('listings/') ? 15000 : 10000;
 export async function youngpgGet(
   base: string,
   key: string,
@@ -97,25 +98,37 @@ export async function youngpgGet(
     url.searchParams.set("per_page", "100");
     url.searchParams.set("page", String(page));
   }
+  const context = resource === 'listings' ? `Listing page ${page}` : resource.startsWith('listings/') ? 'Product detail' : resource.endsWith('/subcategories') ? 'Subcategories' : 'Categories';
+  const timeoutMs = youngpgRequestTimeout(resource);
+  const signal = AbortSignal.timeout(timeoutMs);
+  const networkFailure = (error: unknown) => {
+    // Only fixed diagnostics are exposed: never upstream messages, URLs or causes.
+    const name = error instanceof Error ? error.name : '';
+    const cause = error instanceof Error ? error.cause as { code?: unknown } | undefined : undefined;
+    const code = typeof cause?.code === 'string' ? cause.code : '';
+    const timedOut = signal.aborted || ['TimeoutError', 'AbortError'].includes(name) || ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT'].includes(code);
+    const reason = timedOut ? `request timed out (${timeoutMs / 1000}s limit)` : ['ENOTFOUND', 'EAI_AGAIN'].includes(code) ? 'DNS lookup failed' : code === 'ECONNRESET' ? 'connection reset' : code === 'ECONNREFUSED' ? 'connection refused' : 'network request failed';
+    return new SupplierReadError(timedOut ? 504 : 502, `${context}: supplier ${reason}. Retry later.`, 2000);
+  };
   let response: Response;
   try {
     response = await fetch(url, {
       redirect: "manual",
-      signal: AbortSignal.timeout(10000),
+      signal,
       headers: { Accept: "application/json", "X-API-Key": key },
     });
-  } catch {
-    throw new SupplierReadError(502, 'Supplier connection failed. Retry later.', 2000);
+  } catch (error) {
+    throw networkFailure(error);
   }
   if (response.status === 429) {
     const delay = Number(response.headers.get('Retry-After') ?? 60);
-    throw new SupplierReadError(429, 'Supplier rate limit reached; retry later.', Number.isFinite(delay) && delay >= 0 ? Math.ceil(delay * 1000) : 60000);
+    throw new SupplierReadError(429, `${context}: supplier rate limit reached; retry later.`, Number.isFinite(delay) && delay >= 0 ? Math.ceil(delay * 1000) : 60000);
   }
-  if (response.status >= 500) throw new SupplierReadError(502, 'Supplier temporarily unavailable.', 2000);
+  if (response.status >= 500) throw new SupplierReadError(502, `${context}: supplier returned HTTP ${response.status}; temporarily unavailable.`, 2000);
   if ([401, 403].includes(response.status))
     throw new HttpError(
       502,
-      "Supplier rejected the key or listings:read scope. Replace or correct the key.",
+      `${context}: supplier rejected the key or listings:read scope. Replace or correct the key.`,
     );
   if (
     !response.ok ||
@@ -123,10 +136,10 @@ export async function youngpgGet(
   )
     throw new HttpError(
       502,
-      "Supplier returned an unavailable or unsupported response.",
+      `${context}: supplier returned HTTP ${response.status} or an unsupported response.`,
     );
   const reader = response.body?.getReader();
-  if (!reader) throw new HttpError(502, "Supplier response is empty.");
+  if (!reader) throw new HttpError(502, `${context}: supplier response is empty.`);
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -135,11 +148,18 @@ export async function youngpgGet(
       if (chunk.done) break;
       size += chunk.value.length;
       if (size > 2_000_000) {
-        await reader.cancel();
-        throw new Error();
+        await reader.cancel().catch(() => {});
+        throw new HttpError(502, `${context}: supplier response exceeded the safe size limit.`);
       }
       chunks.push(chunk.value);
     }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw networkFailure(error);
+  } finally {
+    reader.releaseLock();
+  }
+  try {
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) {
@@ -152,7 +172,7 @@ export async function youngpgGet(
     if (result.success !== true) throw new Error();
     return result;
   } catch {
-    throw new HttpError(502, "Supplier JSON response could not be validated.");
+    throw new HttpError(502, `${context}: supplier JSON response could not be validated.`);
   }
 }
 export function collection(payload: Metadata) {

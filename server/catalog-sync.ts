@@ -3,7 +3,7 @@ import { HttpError } from './auth.ts'
 import type { Env } from './auth.ts'
 import { openCredential } from './supplier-crypto.ts'
 import { productImages } from '../src/lib/product-images.ts'
-import { categoriesFrom, collection, identifier, listingsFrom, missingDescription, pageIsComplete, record, resaleAllowlist, subcategoriesFrom, SupplierReadError, supplierOrigin, youngpgGet } from './youngpg.ts'
+import { categoriesFrom, collection, identifier, listingsFrom, missingDescription, pageIsComplete, record, resaleAllowlist, subcategoriesFrom, SupplierReadError, supplierOrigin, youngpgGet, youngpgRequestTimeout } from './youngpg.ts'
 
 export function supplierBackend(env: Env) {
   if (!env.SUPABASE_SERVICE_ROLE_KEY) throw new HttpError(503, 'Configure the server-only SUPABASE_SERVICE_ROLE_KEY in Pages Functions secrets.')
@@ -19,14 +19,15 @@ export async function readCatalog(base: string, key: string, approved: Record<st
   const deadline = now() + 240000 // Complete within the existing five-minute DB lease.
   let lastRequest = -Infinity
   const get = async (resource: Parameters<typeof youngpgGet>[2], page = 1) => {
+    const timeoutMs = youngpgRequestTimeout(resource)
     for (let attempt = 0; ; attempt++) {
       const wait = Math.max(0, lastRequest + 1200 - now()) // <=50 reads/minute/key, leaving headroom.
-      if (now() + wait + 10000 >= deadline) throw new HttpError(502, 'Catalog exceeded the safe sync window. No partial inventory was published; smaller resumable jobs are required.')
+      if (now() + wait + timeoutMs >= deadline) throw new HttpError(502, 'Catalog exceeded the safe sync window. No partial inventory was published; smaller resumable jobs are required.')
       if (wait) await sleep(wait)
       lastRequest = now()
       try { return await youngpgGet(base, key, resource, page) }
       catch (error) {
-        if (!(error instanceof SupplierReadError) || attempt >= 2 || now() + error.retryAfterMs + 10000 >= deadline) throw error
+        if (!(error instanceof SupplierReadError) || attempt >= 2 || now() + Math.max(error.retryAfterMs, 1000 * 2 ** attempt) + 1200 + timeoutMs >= deadline) throw error
         await sleep(Math.max(error.retryAfterMs, 1000 * 2 ** attempt))
       }
     }
