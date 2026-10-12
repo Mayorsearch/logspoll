@@ -7,7 +7,7 @@ interface Product { id: string; name: string; slug: string; price_minor: number;
 export function Cart({ checkout = false }: { checkout?: boolean }) {
   const { items, update, clear } = useCart()
   const { session } = useAuth()
-  const sandboxMode = import.meta.env.VITE_BACHS_SANDBOX_TEST_UI === 'true'
+  const sandboxMode = import.meta.env.DEV && import.meta.env.VITE_BACHS_SANDBOX_TEST_UI === 'true'
   const [sandboxBusy, setSandboxBusy] = useState(false)
   const [sandboxMessage, setSandboxMessage] = useState('')
   async function sandboxPay() {
