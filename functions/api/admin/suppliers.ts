@@ -90,7 +90,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     }
     if (!['test', 'categories', 'sync'].includes(String(action))) throw new HttpError(400, 'Unsupported supplier action.')
     id = uuid(body.id)
-    return json(await syncSupplier(env, id, action as 'test' | 'categories' | 'sync'))
+    return json(await syncSupplier(env, id, action as 'test' | 'categories' | 'sync', body.job_id == null ? undefined : uuid(body.job_id)))
   } catch (problem) {
     return failureResponse(problem)
   }

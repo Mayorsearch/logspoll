@@ -16,7 +16,7 @@ async function api(body?: Record<string, unknown>) {
   if (!session?.data.session) throw new Error('Sign in again with your verified administrator account.')
   const response = await fetch('/api/admin/suppliers', { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${session.data.session.access_token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Supplier backend unavailable. Use the Cloudflare Pages runtime; Vite alone does not run Functions.')
-  const result = await response.json() as { error?: string; suppliers?: Supplier[]; categories?: Category[]; imported?: number; detail_enrichment_skipped?: number; id?: string }
+  const result = await response.json() as { error?: string; suppliers?: Supplier[]; categories?: Category[]; imported?: number; detail_enrichment_skipped?: number; id?: string; job_id?: string; done?: boolean }
   if (!response.ok) throw new Error(result.error ?? 'Supplier operation failed.')
   return result
 }
@@ -95,7 +95,14 @@ export default function SupplierSettings() {
   }
   function connect(action: 'test' | 'categories' | 'sync') {
     void run(async () => {
-      const result = await api({ action, id: draft.id })
+      let result = await api({ action, id: draft.id })
+      // Each request commits one private checkpoint. Closing/reloading is safe:
+      // the next Sync Catalog click resumes the server's saved job.
+      for (let batches = 1; action === 'sync' && result.done === false; batches++) {
+        if (batches >= 2000 || !result.job_id) throw new Error('Sync stopped safely; retry to resume the saved checkpoint.')
+        await new Promise(resolve => window.setTimeout(resolve, 1500))
+        result = await api({ action, id: draft.id, job_id: result.job_id })
+      }
       await refresh(draft.id)
       if (action === 'categories') setSupplierCategories(result.categories ?? [])
       return action === 'sync' ? `${result.imported ?? 0} eligible listings synchronized. Pending products require approval before publication.${result.detail_enrichment_skipped ? ` ${result.detail_enrichment_skipped} product details were not enriched because YoungPG's detail endpoint was unreachable. Review descriptions and images before publishing.` : ''}` : action === 'categories' ? `${result.categories?.length ?? 0} supplier categories fetched.` : 'Connection authenticated; category response validated. Listings have not yet been synchronized.'

@@ -3,13 +3,16 @@ import { HttpError } from './auth.ts'
 import type { Env } from './auth.ts'
 import { openCredential } from './supplier-crypto.ts'
 import { productImages } from '../src/lib/product-images.ts'
+import { syncSupplierBatch } from './catalog-batch.ts'
 import { categoriesFrom, collection, identifier, listingsFrom, missingDescription, pageIsComplete, record, resaleAllowlist, subcategoriesFrom, SupplierReadError, supplierOrigin, youngpgGet, youngpgRequestTimeout } from './youngpg.ts'
 
 export function supplierBackend(env: Env) {
   if (!env.SUPABASE_SERVICE_ROLE_KEY) throw new HttpError(503, 'Configure the server-only SUPABASE_SERVICE_ROLE_KEY in Pages Functions secrets.')
-  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
+  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: {
+    fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.any([AbortSignal.timeout(10000), ...(init?.signal ? [init.signal] : [])]) }),
+  } })
 }
-type StorageOperation = 'read configuration' | 'claim lease' | 'verify revision' | 'save progress' | 'finalize snapshot' | 'record failure' | 'list connections' | 'save configuration'
+type StorageOperation = 'read configuration' | 'claim lease' | 'verify revision' | 'save progress' | 'finalize snapshot' | 'record failure' | 'list connections' | 'save configuration' | 'claim checkpoint (202610120002 required)' | 'commit checkpoint'
 export function supplierStorageError(operation: StorageOperation, error: { code?: string; message?: string } | null) {
   // Never return raw messages, details, hints, constraint names or arbitrary codes.
   const categories: Record<string, string> = {
@@ -104,7 +107,10 @@ export async function readCatalog(base: string, key: string, approved: Record<st
   throw new HttpError(502, 'Catalog exceeds the safe pagination limit; no partial inventory was imported.')
 }
 
-export async function syncSupplier(env: Env, id: string, action: 'test' | 'categories' | 'sync') {
+export async function syncSupplier(env: Env, id: string, action: 'test' | 'categories' | 'sync', expectedJob?: string) {
+  return action === 'sync' ? syncSupplierBatch(env, id, expectedJob) : syncSupplierOperation(env, id, action)
+}
+async function syncSupplierOperation(env: Env, id: string, action: 'test' | 'categories' | 'sync') {
   const db = supplierBackend(env)
   let lease: string | undefined
   try {

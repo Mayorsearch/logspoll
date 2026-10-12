@@ -79,7 +79,7 @@ test('a dynamic supplier cooldown stops all external requests before categories 
     const url = new URL(String(input)); const identity = authResponse(url)
     if (identity) return identity
     if (url.pathname === '/rest/v1/supplier_connections') return Response.json({ id: connectionId, revision: 1, enabled: true, provider: 'youngpg', auth_method: 'X-API-Key', base_url: 'https://youngpgmedia.com.ng', encrypted_key: sealed.ciphertext, key_nonce: sealed.nonce })
-    if (url.pathname === '/rest/v1/rpc/claim_supplier_connection') return Response.json(null)
+    if (url.pathname === '/rest/v1/rpc/claim_supplier_sync_batch') return Response.json(null)
     assert.fail('No supplier fetch or catalog write is permitted during cooldown')
   })
   assert.equal((await onRequestPost({ request: request({ action: 'sync', id: connectionId }), env })).status, 429)
@@ -114,7 +114,7 @@ test('saved configuration responses explicitly project metadata without encrypte
   const response = await onRequestGet({ request: new Request('https://app.test/api/admin/suppliers', { headers: { Authorization: 'Bearer synthetic-token-over-twenty-characters' } }), env })
   assert.equal(response.status, 200); assert.ok(!(await response.text()).includes(apiKey))
 })
-test('sync authenticates then commits only normalized authorized metadata and exact supplier cost', async t => {
+test('sync authenticates then checkpoints only normalized authorized metadata and exact supplier cost', async t => {
   const sealed = await sealCredential(apiKey, connectionId, encryption)
   let committed = false
   t.mock.method(globalThis, 'fetch', async (input, options: RequestInit) => {
@@ -122,17 +122,17 @@ test('sync authenticates then commits only normalized authorized metadata and ex
     if (identity) return identity
     if (url.pathname === '/rest/v1/supplier_connections' && options?.method === 'PATCH') return Response.json([{ id: connectionId }])
     if (url.pathname === '/rest/v1/supplier_connections') return Response.json({ id: connectionId, revision: 1, enabled: true, provider: 'youngpg', auth_method: 'X-API-Key', base_url: 'https://youngpgmedia.com.ng', encrypted_key: sealed.ciphertext, key_nonce: sealed.nonce, authorized_products: { '3': 'license-evidence-reference' } })
-    if (url.pathname === '/rest/v1/rpc/claim_supplier_connection') return Response.json(connectionId)
+    if (url.pathname === '/rest/v1/rpc/claim_supplier_sync_batch') return Response.json({ job_id: connectionId, token: connectionId, revision: 1, phase: 'listings', page: 1, categories: [{ id: '1', slug: 'licensed-resources', name: 'Licensed resources' }] })
     if (url.pathname === '/api/v1/categories/1/subcategories') return Response.json({ success: true, data: { category: { id: 1 }, subcategories: [] } })
     if (url.pathname === '/api/v1/categories') return Response.json({ success: true, data: [{ id: 1, slug: 'licensed-resources', title: 'Licensed resources' }] })
     if (url.pathname === '/api/v1/listings') return Response.json({ success: true, data: [{ id: 3, category: { slug: 'licensed-resources', title: 'Licensed resources' }, title: 'Licensed artwork', description: 'Permitted digital resource for resale.', price_ngn: '20.05', available_stock: 4 }, { id: 4, title: 'Unverified listing' }], meta: { current_page: 1, last_page: 1 } })
-    assert.equal(url.pathname, '/rest/v1/rpc/finish_supplier_connection')
-    const body = JSON.parse(String(options.body)); assert.equal(body.snapshot.products.length, 1); assert.equal(body.snapshot.products[0].cost_minor, 2005)
-    assert.ok(!JSON.stringify(body).includes(apiKey)); assert.equal(body.failure, null)
-    committed = true; return Response.json(1)
+    assert.equal(url.pathname, '/rest/v1/rpc/commit_supplier_sync_batch')
+    const body = JSON.parse(String(options.body)); assert.equal(body.batch.rows.filter((row: { product: unknown }) => row.product).length, 1); assert.equal(body.batch.rows[0].product.cost_minor, 2005)
+    assert.ok(!JSON.stringify(body).includes(apiKey)); assert.equal(body.batch.rows[1].product, null)
+    committed = true; return Response.json({ done: false, job_id: connectionId, scanned: 2 })
   })
   const response = await onRequestPost({ request: request({ action: 'sync', id: connectionId }), env })
-  assert.equal(response.status, 200); assert.equal((await response.json() as { imported: number }).imported, 1); assert.ok(committed)
+  assert.equal(response.status, 200); assert.equal((await response.json() as { done: boolean }).done, false); assert.ok(committed)
 })
 test('checkout remains unavailable and cannot fabricate a charge or order', async () => {
   assert.equal(checkout().status, 503)

@@ -3,6 +3,6 @@
   "main": "index.ts",
   "compatibility_date": "2026-10-10",
   "workers_dev": false,
-  "triggers": { "crons": ["*/30 * * * *"] },
+  "triggers": { "crons": ["*/5 * * * *"] },
   "vars": { "CATALOG_SYNC_URL": "https://mobile-preview.logspoll.pages.dev/api/internal/catalog-sync" }
 }
