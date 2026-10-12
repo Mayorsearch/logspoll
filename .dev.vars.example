@@ -16,3 +16,10 @@ SUPPLIER_AUTHORIZED_PRODUCTS={}
 # Scheduled read-only sync; disabled until configured and preview-tested.
 SUPPLIER_SYNC_ENABLED=false
 SCHEDULER_SHARED_SECRET=
+
+# Email preview/test sender ONLY. Never use VITE_ variables for these values.
+# Verify logspoll.com with Resend before enabling. Approve a dedicated test inbox.
+RESEND_API_KEY=
+EMAIL_TEST_ENABLED=false
+EMAIL_FROM=no-reply@logspoll.com
+EMAIL_TEST_TO=

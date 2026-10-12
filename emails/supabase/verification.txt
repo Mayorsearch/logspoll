@@ -1,0 +1,17 @@
+LOGSPOLL | Verify your email
+
+Hi there,
+
+Your account. Your next move.
+
+Verify your email to activate your LOGSPOLL account.
+
+Verify email address: {{ .ConfirmationURL }}
+
+This secure link is single-use and expires according to your account security settings. If it has expired, request a new link on LOGSPOLL.
+
+Support: https://logspoll.com/support
+
+Privacy: https://logspoll.com/privacy
+
+© 2026 LOGSPOLL. https://logspoll.com
