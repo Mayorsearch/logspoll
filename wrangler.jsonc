@@ -1,0 +1,24 @@
+{
+  "name": "logspoll",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-10-10",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "SUPABASE_URL": "https://hdxihldwkugboqrsxokh.supabase.co"
+  },
+  "env": {
+    "preview": {
+      "vars": {
+        "SUPABASE_URL": "https://hdxihldwkugboqrsxokh.supabase.co",
+        "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Lm7BlGxcxP8kQYJlEayRSg_dS-r35Im",
+        "SUPPLIER_SYNC_ENABLED": "false",
+        "BACHS_SANDBOX_ENABLED": "false",
+        "VITE_BACHS_SANDBOX_TEST_UI": "false",
+        "VITE_SUPABASE_URL": "https://hdxihldwkugboqrsxokh.supabase.co",
+        "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Lm7BlGxcxP8kQYJlEayRSg_dS-r35Im"
+      }
+    }
+  }
+}

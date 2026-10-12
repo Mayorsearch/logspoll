@@ -1,0 +1,36 @@
+/* Homepage only. Typography inherits the existing self-hosted Nunito Sans. */
+.homepage-layout{background:#fff9f4;padding-top:40px}
+.homepage-layout .homepage-header,.homepage-layout .reference-home{width:min(1440px,82%);margin-inline:auto;background:#fff;border:1px solid #f0ece8}
+.homepage-layout .homepage-header{position:relative;top:auto;border-radius:22px 22px 0 0;backdrop-filter:none}
+.homepage-header .header-inner{width:100%;padding-inline:32px;height:78px}
+.homepage-header .desktop-nav{margin-left:auto;gap:14px}
+.homepage-header .desktop-nav svg{display:none}
+.homepage-header .desktop-nav a{font-weight:600;background:none;padding-inline:6px}
+.homepage-header .header-actions .button{background:#fff;color:var(--orange);box-shadow:none;border:1px solid #ffb38b;padding-inline:21px}
+.homepage-header .header-actions .button:hover{background:var(--soft-orange)}
+.homepage-layout .reference-home{padding-top:0;border-top:0;border-radius:0 0 22px 22px;overflow:hidden;margin-bottom:48px}
+.private-access-hero{position:relative;isolation:isolate;display:grid;grid-template-columns:48% 52%;min-height:660px;overflow:hidden}
+.private-access-copy{padding:64px 0 72px 44px;align-self:center;position:relative;z-index:1}
+.private-access-badge{display:inline-flex;align-items:center;gap:9px;background:var(--soft-orange);color:#d94600;border-radius:13px;padding:9px 14px;font-size:12px;font-weight:800;letter-spacing:.035em;margin-bottom:24px}
+.private-access-copy h1{font-size:clamp(36px,3.8vw,66px);font-weight:900;line-height:1.08;letter-spacing:-.035em;margin:0 0 24px;color:#101828}
+.private-access-copy h1 span{color:var(--orange)}
+.private-access-copy p{font-size:16px;line-height:1.65;max-width:460px;margin:0 0 26px;color:var(--muted)}
+.private-access-button{gap:20px;padding:16px 25px;min-height:54px;font-size:15px;border-radius:10px;max-width:100%;text-align:left}
+.private-access-button svg{flex-shrink:0}
+.private-access-art{position:relative;align-self:stretch;min-width:0;display:flex;align-items:flex-end;padding-top:35px}
+.private-access-art::before{content:'';position:absolute;z-index:-1;inset:-10% -50% -15% -3%;background:#fff7f0;border-radius:48% 0 0 45%;transform:rotate(24deg)}
+.private-access-art>img{display:block;width:112%;max-width:none;height:auto;align-self:center;margin-left:-5%;object-fit:contain}
+.service-float{position:absolute;display:flex;align-items:center;justify-content:center;gap:4px;width:62px;height:64px;border:1px solid #f1e7de;border-radius:16px;background:#ffffffed;color:var(--orange);box-shadow:0 8px 20px #6b3e1410;animation:homepage-float 6s ease-in-out infinite;pointer-events:none}
+.service-float-vpn{left:10%;top:20%;flex-direction:column}
+.service-float-vpn small{font-size:9px;font-weight:800;letter-spacing:.1em;line-height:1}
+.service-float-instagram{right:8%;top:43%;animation-delay:-2s}
+.service-float-facebook{left:10%;bottom:15%;animation-delay:-4s}
+@keyframes homepage-float{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-9px) rotate(3deg)}}
+.homepage-layout .home-categories{padding-top:56px}
+.homepage-layout .reference-home .container{width:calc(100% - 88px)}
+@media(max-width:1150px){.homepage-layout .homepage-header,.homepage-layout .reference-home{width:calc(100% - 48px)}.homepage-header .header-inner{padding-inline:24px}.homepage-header .desktop-nav{gap:7px}.private-access-copy{padding-left:32px}.private-access-copy h1{font-size:clamp(36px,4.3vw,50px)}.private-access-copy p{font-size:15px}.private-access-hero{min-height:600px}.private-access-button{font-size:14px;padding-inline:18px;gap:12px}}
+@media(max-width:900px){.homepage-layout{padding-top:24px}.homepage-header .header-inner{height:72px}.private-access-hero{grid-template-columns:52% 48%;min-height:540px}.private-access-copy{padding-block:44px}.private-access-copy h1{font-size:clamp(30px,4.2vw,38px)}.private-access-copy p{font-size:14px}.private-access-button{font-size:13px;padding:13px 15px}.service-float{width:48px;height:50px;border-radius:13px}.service-float svg{width:24px;height:24px}.service-float-vpn{top:17%;left:6%}}
+@media(max-width:620px){.homepage-layout{padding-top:16px}.homepage-layout .homepage-header,.homepage-layout .reference-home{width:calc(100% - 24px)}.homepage-layout .homepage-header{border-radius:18px 18px 0 0}.homepage-header .header-inner{height:68px;padding-inline:18px;gap:10px}.homepage-header .header-actions{gap:9px}.homepage-header .header-actions .button{padding:8px 12px;min-height:36px}.private-access-hero{grid-template-columns:1fr;min-height:0}.private-access-copy{padding:38px 22px 12px}.private-access-copy h1{font-size:clamp(31px,8.6vw,44px);line-height:1.1;margin-bottom:20px}.private-access-copy p{font-size:15px}.private-access-badge{margin-bottom:22px;font-size:10px}.private-access-button{font-size:13px;padding:14px 16px;gap:12px}.private-access-art{width:100%;height:350px;padding-top:0}.private-access-art>img{height:100%;width:auto;max-width:100%;margin:auto;object-fit:contain}.private-access-art::before{inset:0 -20% -40% 0}.service-float-vpn{left:13%;top:14%}.service-float-instagram{right:12%;top:35%}.service-float-facebook{left:13%;bottom:18%}.homepage-layout .reference-home .container{width:calc(100% - 40px)}.homepage-layout .home-categories{padding-top:36px}}
+@media(prefers-reduced-motion:reduce){.homepage-layout .service-float{animation:none}}
+
+.homepage-header .desktop-nav a.active{background:none}

@@ -1,1 +1,2 @@
-/* /index.html 200
+# Cloudflare Pages uses native SPA fallback when no top-level 404.html exists.
+# Avoid /* /index.html 200: Wrangler detects an infinite loop in that rule.

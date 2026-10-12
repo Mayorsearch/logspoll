@@ -1,12 +1,14 @@
-import { Globe2, Users, Phone, Mail, ArrowUpRight } from 'lucide-react'
+import { Users, KeyRound, Cpu, ChartNoAxesColumnIncreasing, ArrowRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { homeCategories } from '../lib/category-navigation'
+import { useCatalogCategories } from './useCatalogCategories'
 
-export const categories = [
-  { slug: 'vpn-services', name: 'VPN Services', description: 'Private connection tools', Icon: Globe2, tone: 'blue' },
-  { slug: 'social-media-services', name: 'Social Media Services', description: 'Business & management tools', Icon: Users, tone: 'purple' },
-  { slug: 'virtual-numbers', name: 'Virtual Numbers', description: 'Business communication', Icon: Phone, tone: 'green' },
-  { slug: 'us-emails', name: 'US Emails', description: 'Business email services', Icon: Mail, tone: 'orange' },
-]
+const icons = [Users, KeyRound, Cpu, ChartNoAxesColumnIncreasing]
 export function Categories() {
-  return <div className="category-grid">{categories.map(({ slug, name, description, Icon, tone }) => <Link to={`/marketplace?category=${slug}`} className="category-card" key={slug}><span className={`category-icon ${tone}`}><Icon size={24} /></span><ArrowUpRight className="category-arrow" size={18} /><h3>{name}</h3><p>{description}</p></Link>)}</div>
+  const { categories, categoryError } = useCatalogCategories()
+  return <><div className="category-grid">{homeCategories.map((reference, index) => {
+    const category = categories.find(item => item.name === reference.name || item.slug === reference.slug) ?? reference
+    const Icon = icons[index]
+    return <Link to={`/marketplace?category=${encodeURIComponent(category.slug)}`} className="category-card" key={reference.slug}><span className="category-icon"><Icon size={29} /></span>{category.product_count !== undefined && <span className="home-category-count">{category.product_count}</span>}<h3>{reference.name}</h3><p>{reference.description}</p><span className="category-listings">View Listings <ArrowRight size={18} /></span></Link>
+  })}</div><nav className="category-directory" aria-label="All marketplace categories">{categories.map(category => <Link key={category.slug} to={`/marketplace?category=${encodeURIComponent(category.slug)}`}>{category.name}{category.product_count !== undefined && <span className="category-count">{category.product_count}</span>}</Link>)}</nav>{categoryError && <p className="preview-note" role="status">{categoryError}</p>}</>
 }
