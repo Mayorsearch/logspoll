@@ -4,7 +4,7 @@ import type { Env } from '../../../server/auth.ts'
 import { sealCredential } from '../../../server/supplier-crypto.ts'
 import { YOUNGPG_ORIGIN, supplierOrigin, record, resaleAllowlist } from '../../../server/youngpg.ts'
 
-import { syncSupplier } from '../../../server/catalog-sync.ts'
+import { syncSupplier, supplierStorageError } from '../../../server/catalog-sync.ts'
 
 const publicColumns = 'id,provider,name,base_url,auth_method,enabled,revision,authorized_products,last_attempt_at,last_sync_at,last_status,imported_count,updated_at'
 const uuid = (value: unknown) => {
@@ -23,15 +23,20 @@ async function readBody(request: Request) {
   while (true) { const part = await reader.read(); if (part.done) break; size += part.value.length; if (size > 64000) { await reader.cancel(); throw new HttpError(413, 'Configuration exceeds 64 KB.') }; value += decoder.decode(part.value, { stream: true }) }
   try { return record(JSON.parse(value + decoder.decode())) } catch { throw new HttpError(400, 'Invalid JSON configuration.') }
 }
-const databaseFailure = () => new HttpError(503, 'Supplier storage unavailable. Apply the reviewed 202610110002_configurable_suppliers.sql migration and verify server configuration.')
 const failureResponse = (problem: unknown) => json({ error: problem instanceof HttpError ? problem.message : 'Supplier operation unavailable. No success was assumed.' }, problem instanceof HttpError ? problem.status : 503)
 
 export async function onRequestGet({ request, env }: { request: Request; env: Env }) {
   try {
     await requireAdmin(request, env)
-    const result = await backend(env).from('supplier_connections').select(publicColumns).order('name')
-    if (result.error) throw databaseFailure()
-    return json({ suppliers: result.data })
+    const result = await backend(env).from('supplier_connections').select(`${publicColumns},lease_until,running_operation`).order('name')
+    if (result.error) throw supplierStorageError('list connections', result.error)
+    return json({ suppliers: result.data.map(({ lease_until, running_operation, ...supplier }) => ({
+      ...supplier,
+      // Report stale progress truthfully without changing the lease or inventory.
+      last_status: running_operation && lease_until && Date.parse(lease_until) <= Date.now()
+        ? 'Previous operation lease expired; no completed snapshot was confirmed. Retry Sync Catalog. Last progress: ' + supplier.last_status
+        : supplier.last_status,
+    })) })
   } catch (problem) { return failureResponse(problem) }
 }
 export async function onRequestPost({ request, env }: { request: Request; env: Env }) {
@@ -79,7 +84,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
         cipher: encrypted?.ciphertext ?? null, nonce: encrypted?.nonce ?? null })
       if (saved.error) {
         if (saved.error.code === '40001' || saved.error.code === '55P03') throw new HttpError(409, 'Configuration changed or a supplier operation is running. Reload and retry.')
-        throw databaseFailure()
+        throw supplierStorageError('save configuration', saved.error)
       }
       return json({ success: true, id }) // Never return the key, ciphertext or nonce.
     }

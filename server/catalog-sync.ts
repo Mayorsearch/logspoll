@@ -9,7 +9,20 @@ export function supplierBackend(env: Env) {
   if (!env.SUPABASE_SERVICE_ROLE_KEY) throw new HttpError(503, 'Configure the server-only SUPABASE_SERVICE_ROLE_KEY in Pages Functions secrets.')
   return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
 }
-const storageError = () => new HttpError(503, 'Supplier storage unavailable. Verify the reviewed supplier migrations and server configuration.')
+type StorageOperation = 'read configuration' | 'claim lease' | 'verify revision' | 'save progress' | 'finalize snapshot' | 'record failure' | 'list connections' | 'save configuration'
+export function supplierStorageError(operation: StorageOperation, error: { code?: string; message?: string } | null) {
+  // Never return raw messages, details, hints, constraint names or arbitrary codes.
+  const categories: Record<string, string> = {
+    '42P01': 'missing table', PGRST205: 'missing table', '42703': 'missing column', PGRST204: 'missing column',
+    '42883': 'missing RPC', PGRST202: 'missing RPC', '42501': 'permission denied',
+    '23503': 'foreign-key constraint', '23514': 'validation constraint', '23505': 'duplicate constraint',
+    '22023': 'invalid parameter', '22P02': 'invalid value', '57014': 'database timeout',
+    '40001': 'concurrent update', '55P03': 'database lock', P0001: 'database guard rejected operation',
+  }
+  const expired = error?.code === 'P0001' && error.message === 'Supplier lease expired'
+  const category = expired ? 'lease expired; retry after the current operation ends' : error?.code && Object.hasOwn(categories, error.code) ? categories[error.code] : 'transport or unclassified database failure'
+  return new HttpError(expired ? 409 : 503, `Supplier storage: ${operation}: ${category}. Verify supplier migrations and server configuration.`)
+}
 
 export async function readCatalog(base: string, key: string, approved: Record<string, string>, options: {
   sleep?: (ms: number) => Promise<void>; now?: () => number; progress?: (status: string) => Promise<void>; categoriesOnly?: boolean
@@ -96,17 +109,18 @@ export async function syncSupplier(env: Env, id: string, action: 'test' | 'categ
   let lease: string | undefined
   try {
     const config = await db.from('supplier_connections').select('*').eq('id', id).maybeSingle()
-    if (config.error) throw storageError()
+    if (config.error) throw supplierStorageError('read configuration', config.error)
     if (!config.data) throw new HttpError(404, 'Save the supplier configuration first.')
     if (!config.data.enabled) throw new HttpError(409, 'Enable and save the supplier before connecting.')
     if (config.data.provider !== 'youngpg' || config.data.auth_method !== 'X-API-Key') throw new HttpError(400, 'Unsupported supplier adapter or authentication method.')
     supplierOrigin(config.data.base_url)
     const claim = await db.rpc('claim_supplier_connection', { connection_uuid: id, operation: action })
-    if (claim.error) throw storageError()
+    if (claim.error) throw supplierStorageError('claim lease', claim.error)
     if (!claim.data) throw new HttpError(429, 'Supplier is busy or cooling down. Retry later.')
     lease = String(claim.data)
     const locked = await db.from('supplier_connections').select('revision').eq('id', id).single()
-    if (locked.error || locked.data.revision !== config.data.revision) throw new HttpError(409, 'Supplier configuration changed. Retry with the current configuration.')
+    if (locked.error) throw supplierStorageError('verify revision', locked.error)
+    if (locked.data.revision !== config.data.revision) throw new HttpError(409, 'Supplier configuration changed. Retry with the current configuration.')
     const key = await openCredential(config.data.encrypted_key, config.data.key_nonce, id, env.SUPPLIER_ENCRYPTION_KEY)
     const approved = resaleAllowlist(config.data.authorized_products)
     if (action === 'sync' && !Object.keys(approved).length) throw new HttpError(409, 'Add verified product-ID resale evidence before importing. No inventory is automatically authorized.')
@@ -114,16 +128,24 @@ export async function syncSupplier(env: Env, id: string, action: 'test' | 'categ
       ? { categories: categoriesFrom(await youngpgGet(config.data.base_url, key, 'categories')), products: [], subcategories: [], scanned: 0, pages: 0 }
       : await readCatalog(config.data.base_url, key, approved, { categoriesOnly: action === 'categories', progress: async status => {
         const updated = await db.from('supplier_connections').update({ last_status: status }).eq('id', id).eq('lease_token', lease!).select('id')
-        if (updated.error) throw storageError()
+        if (updated.error) throw supplierStorageError('save progress', updated.error)
         if (updated.data?.length !== 1) throw new HttpError(409, 'Supplier sync lease lost; no partial snapshot was committed.')
       } })
     const saved = await db.rpc('finish_supplier_connection', { connection_uuid: id, token: lease, snapshot, failure: null })
-    if (saved.error) throw storageError()
+    if (saved.error) throw supplierStorageError('finalize snapshot', saved.error)
     lease = undefined
     return { success: true, categories: snapshot.categories, subcategories: snapshot.subcategories, scanned: snapshot.scanned, pages: snapshot.pages, ...(action === 'sync' ? { imported: saved.data, approval_required: true, detail_enrichment_skipped: 'detail_enrichment_skipped' in snapshot ? snapshot.detail_enrichment_skipped : 0 } : {}) }
   } catch (problem) {
     if (lease) {
-      try { await db.rpc('finish_supplier_connection', { connection_uuid: id, token: lease, snapshot: problem instanceof SupplierReadError ? { retry_after_ms: problem.retryAfterMs } : null, failure: problem instanceof HttpError ? problem.message.slice(0, 300) : 'Supplier operation failed. Check server configuration.' }) } catch { /* Never log credentials or upstream payloads. */ }
+      let cleanupError: { code?: string; message?: string } | null
+      try {
+        const cleanup = await db.rpc('finish_supplier_connection', { connection_uuid: id, token: lease, snapshot: problem instanceof SupplierReadError ? { retry_after_ms: problem.retryAfterMs } : null, failure: problem instanceof HttpError ? problem.message.slice(0, 300) : 'Supplier operation failed. Check server configuration.' })
+        cleanupError = cleanup.error
+      } catch { cleanupError = {} /* Never log credentials or upstream payloads. */ }
+      if (cleanupError) {
+        const original = problem instanceof HttpError ? problem : new HttpError(503, 'Supplier operation failed.')
+        throw new HttpError(original.status, `${original.message} ${supplierStorageError('record failure', cleanupError).message}`)
+      }
     }
     throw problem
   }
