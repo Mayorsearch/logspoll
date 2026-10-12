@@ -108,7 +108,7 @@ export async function youngpgGet(
     const code = typeof cause?.code === 'string' ? cause.code : '';
     const timedOut = signal.aborted || ['TimeoutError', 'AbortError'].includes(name) || ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT'].includes(code);
     const reason = timedOut ? `request timed out (${timeoutMs / 1000}s limit)` : ['ENOTFOUND', 'EAI_AGAIN'].includes(code) ? 'DNS lookup failed' : code === 'ECONNRESET' ? 'connection reset' : code === 'ECONNREFUSED' ? 'connection refused' : 'network request failed';
-    return new SupplierReadError(timedOut ? 504 : 502, `${context}: supplier ${reason}. Retry later.`, 2000);
+    return new SupplierReadError(timedOut ? 504 : 502, `${context}: supplier ${reason}. Retry later.`, 2000, 'network');
   };
   let response: Response;
   try {
@@ -297,7 +297,10 @@ export function listingsFrom(
 
 export class SupplierReadError extends HttpError {
   readonly retryAfterMs: number
-  constructor(status: number, message: string, retryAfterMs: number) { super(status, message); this.retryAfterMs = retryAfterMs }
+  readonly failureKind: 'network' | 'other'
+  constructor(status: number, message: string, retryAfterMs: number, failureKind: 'network' | 'other' = 'other') {
+    super(status, message); this.retryAfterMs = retryAfterMs; this.failureKind = failureKind
+  }
 }
 
 // Explicit projection only: never store arbitrary detail responses or fulfillment fields.

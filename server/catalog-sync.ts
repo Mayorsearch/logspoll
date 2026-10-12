@@ -48,6 +48,8 @@ export async function readCatalog(base: string, key: string, approved: Record<st
   const products: ReturnType<typeof listingsFrom>['products'] = []
   const seen = new Set<string>()
   let scanned = 0
+  let detailEnrichmentSkipped = 0
+  let detailNetworkUnavailable = false
   for (let page = 1; page <= 1000; page++) {
     const response = await get('listings', page)
     const rows = collection(response).rows
@@ -60,17 +62,31 @@ export async function readCatalog(base: string, key: string, approved: Record<st
       if (!listingsFrom([item], categories, approved).products.length) continue
       let candidate = item
       if (item.slug != null) {
-        const detail = record((await get(`listings/${identifier(item.slug)}`)).data)
-        if (identifier(detail.id) !== id) throw new HttpError(502, 'Supplier detail identifier mismatch.')
-        // Cost/stock come from the coherent listing page; private detail fields are discarded.
-        candidate = { ...item, description: missingDescription(item.description) ? detail.description : item.description, image_urls: [...new Set([...productImages(item), ...productImages(detail)])], status: detail.status ?? item.status, subcategory: detail.subcategory ?? item.subcategory }
+        if (detailNetworkUnavailable) {
+          detailEnrichmentSkipped++
+        } else {
+          try {
+            const detail = record((await get(`listings/${identifier(item.slug)}`)).data)
+            if (identifier(detail.id) !== id) throw new HttpError(502, 'Supplier detail identifier mismatch.')
+            // Price/stock always come from the complete listing snapshot.
+            // Never copy credentials or private detail fields.
+            candidate = { ...item, description: missingDescription(item.description) ? detail.description : item.description, image_urls: [...new Set([...productImages(item), ...productImages(detail)])], status: detail.status ?? item.status, subcategory: detail.subcategory ?? item.subcategory }
+          } catch (error) {
+            // Only an exhausted, low-level network failure on OPTIONAL detail
+            // enrichment may fall back to the independently validated listing.
+            // A 401/403, 429, bad JSON, wrong ID, or failed listings page remains fatal.
+            if (!(error instanceof SupplierReadError) || error.failureKind !== 'network') throw error
+            detailNetworkUnavailable = true // avoid another slow failure per product
+            detailEnrichmentSkipped++
+          }
+        }
       }
       const mapped = listingsFrom([candidate], categories, approved)
       products.push(...mapped.products)
       for (const extra of mapped.categories) if (!categories.some(category => category.id === extra.id)) categories.push(extra)
     }
-    await options.progress?.(`Reading catalog: page ${page}, ${scanned} scanned, ${products.length} eligible`)
-    if (pageIsComplete(response, page, rows.length)) return { categories, subcategories, subcategories_complete: false, products, scanned, pages: page }
+    await options.progress?.(`Reading catalog: page ${page}, ${scanned} scanned, ${products.length} eligible${detailEnrichmentSkipped ? `; ${detailEnrichmentSkipped} details not enriched` : ''}`)
+    if (pageIsComplete(response, page, rows.length)) return { categories, subcategories, subcategories_complete: false, products, scanned, pages: page, detail_enrichment_skipped: detailEnrichmentSkipped }
   }
   throw new HttpError(502, 'Catalog exceeds the safe pagination limit; no partial inventory was imported.')
 }
@@ -104,7 +120,7 @@ export async function syncSupplier(env: Env, id: string, action: 'test' | 'categ
     const saved = await db.rpc('finish_supplier_connection', { connection_uuid: id, token: lease, snapshot, failure: null })
     if (saved.error) throw storageError()
     lease = undefined
-    return { success: true, categories: snapshot.categories, subcategories: snapshot.subcategories, scanned: snapshot.scanned, pages: snapshot.pages, ...(action === 'sync' ? { imported: saved.data, approval_required: true } : {}) }
+    return { success: true, categories: snapshot.categories, subcategories: snapshot.subcategories, scanned: snapshot.scanned, pages: snapshot.pages, ...(action === 'sync' ? { imported: saved.data, approval_required: true, detail_enrichment_skipped: 'detail_enrichment_skipped' in snapshot ? snapshot.detail_enrichment_skipped : 0 } : {}) }
   } catch (problem) {
     if (lease) {
       try { await db.rpc('finish_supplier_connection', { connection_uuid: id, token: lease, snapshot: problem instanceof SupplierReadError ? { retry_after_ms: problem.retryAfterMs } : null, failure: problem instanceof HttpError ? problem.message.slice(0, 300) : 'Supplier operation failed. Check server configuration.' }) } catch { /* Never log credentials or upstream payloads. */ }
