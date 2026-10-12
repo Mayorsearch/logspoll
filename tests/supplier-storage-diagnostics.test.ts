@@ -28,6 +28,8 @@ test('expired progress is reported without exposing lease internals or mutating 
     const url = new URL(String(input))
     if (url.pathname === '/auth/v1/user') return Response.json({ id, email_confirmed_at: '2026-10-11T00:00:00Z' })
     if (url.pathname === '/rest/v1/user_roles') return Response.json({ role: 'admin' })
+    if (url.pathname === '/rest/v1/supplier_catalog_jobs') return Response.json({ code: 'PGRST205' }, { status: 404 })
+    if (url.pathname === '/rest/v1/supplier_feed_items') return Response.json([], { headers: { 'Content-Range': '*/0' } })
     assert.equal(url.pathname, '/rest/v1/supplier_connections')
     return Response.json([
       { id, lease_until: '2020-01-01T00:00:00Z', running_operation: 'sync', last_status: 'Reading catalog: page 10', imported_count: 2 },
@@ -39,6 +41,8 @@ test('expired progress is reported without exposing lease internals or mutating 
   const body = await response.json()
   assert.match(body.suppliers[0].last_status, /lease expired.*page 10/)
   assert.equal(body.suppliers[0].imported_count, 2)
+  assert.equal(body.sync.ready, false)
+  assert.match(body.sync.blockers[0], /202610120002/)
   assert.equal(body.suppliers[1].last_status, 'Reading catalog: page 1')
   assert.ok(!JSON.stringify(body).includes('lease_until'))
   assert.ok(!JSON.stringify(body).includes('running_operation'))

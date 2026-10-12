@@ -5,6 +5,7 @@ import { sealCredential } from '../../../server/supplier-crypto.ts'
 import { YOUNGPG_ORIGIN, supplierOrigin, record, resaleAllowlist } from '../../../server/youngpg.ts'
 
 import { syncSupplier, supplierStorageError } from '../../../server/catalog-sync.ts'
+import { supplierReadiness } from '../../../server/launch-readiness.ts'
 
 const publicColumns = 'id,provider,name,base_url,auth_method,enabled,revision,authorized_products,last_attempt_at,last_sync_at,last_status,imported_count,updated_at'
 const uuid = (value: unknown) => {
@@ -30,7 +31,7 @@ export async function onRequestGet({ request, env }: { request: Request; env: En
     await requireAdmin(request, env)
     const result = await backend(env).from('supplier_connections').select(`${publicColumns},lease_until,running_operation`).order('name')
     if (result.error) throw supplierStorageError('list connections', result.error)
-    return json({ suppliers: result.data.map(({ lease_until, running_operation, ...supplier }) => ({
+    return json({ sync: await supplierReadiness(env), suppliers: result.data.map(({ lease_until, running_operation, ...supplier }) => ({
       ...supplier,
       // Report stale progress truthfully without changing the lease or inventory.
       last_status: running_operation && lease_until && Date.parse(lease_until) <= Date.now()

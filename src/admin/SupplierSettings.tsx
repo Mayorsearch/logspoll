@@ -10,13 +10,14 @@ interface Supplier {
 }
 interface Listing { external_id: string; name: string; description: string; external_category_id: string; supplier_cost_minor: number; currency: string; stock_quantity: number; approval: string; product_id: string | null; selling_price_override_minor: number | null; publication_enabled: boolean; catalog_metadata?: { image_urls?: string[] }; products: { price_minor: number; status: string; description: string } | null }
 interface Category { id: string; name: string; external_id?: string; markup_basis_points?: number }
+interface SyncReadiness { ready: boolean; blockers: string[]; pending: number | null; approved: number | null; progress: { connection_id: string; phase: string; next_page: number; scanned: number; skipped_details: number; imported: number | null }[] }
 const fresh = () => ({ id: '', provider: 'youngpg', name: 'YoungPG Media', base_url: 'https://youngpgmedia.com.ng', enabled: false, revision: 0, authorized_products: {}, last_sync_at: null, last_status: 'Not configured', imported_count: 0 }) as Supplier
 async function api(body?: Record<string, unknown>) {
   const session = await supabase?.auth.getSession()
   if (!session?.data.session) throw new Error('Sign in again with your verified administrator account.')
   const response = await fetch('/api/admin/suppliers', { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${session.data.session.access_token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) })
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Supplier backend unavailable. Use the Cloudflare Pages runtime; Vite alone does not run Functions.')
-  const result = await response.json() as { error?: string; suppliers?: Supplier[]; categories?: Category[]; imported?: number; detail_enrichment_skipped?: number; id?: string; job_id?: string; done?: boolean }
+  const result = await response.json() as { error?: string; sync?: SyncReadiness; suppliers?: Supplier[]; categories?: Category[]; imported?: number; detail_enrichment_skipped?: number; id?: string; job_id?: string; done?: boolean }
   if (!response.ok) throw new Error(result.error ?? 'Supplier operation failed.')
   return result
 }
@@ -25,6 +26,7 @@ export default function SupplierSettings() {
   const [draft, setDraft] = useState<Supplier>(fresh)
   const [evidence, setEvidence] = useState('{}')
   const [pricingReady, setPricingReady] = useState(false)
+  const [syncReady, setSyncReady] = useState<SyncReadiness | null>(null)
   const [items, setItems] = useState<Listing[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [supplierCategories, setSupplierCategories] = useState<Category[]>([])
@@ -43,12 +45,13 @@ export default function SupplierSettings() {
   }
   async function refresh(selectedId?: string) {
     const result = await api()
+    setSyncReady(result.sync ?? null)
     setSuppliers(result.suppliers ?? [])
     if (selectedId) { const value = result.suppliers?.find(value => value.id === selectedId); if (value) select(value) }
   }
   useEffect(() => {
     let active = true
-    void api().then(result => { if (active) { setSuppliers(result.suppliers ?? []); if (result.suppliers?.[0]) select(result.suppliers[0]) } }).catch(problem => { if (active) setError(problem instanceof Error ? problem.message : 'Supplier settings unavailable.') }).finally(() => { if (active) setLoading(false) })
+    void api().then(result => { if (active) { setSyncReady(result.sync ?? null); setSuppliers(result.suppliers ?? []); if (result.suppliers?.[0]) select(result.suppliers[0]) } }).catch(problem => { if (active) setError(problem instanceof Error ? problem.message : 'Supplier settings unavailable.') }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [])
   useEffect(() => {
@@ -68,7 +71,7 @@ export default function SupplierSettings() {
   useEffect(() => {
     if (!busy || !draft.id) return
     let active = true
-    const timer = window.setInterval(() => { void api().then(result => { const value = result.suppliers?.find(item => item.id === draft.id); if (active && value) setDraft(previous => ({ ...previous, last_status: value.last_status })) }).catch(() => {}) }, 5000)
+    const timer = window.setInterval(() => { void api().then(result => { const value = result.suppliers?.find(item => item.id === draft.id); if (active && value) { setSyncReady(result.sync ?? null); setDraft(previous => ({ ...previous, last_status: value.last_status })) } }).catch(() => {}) }, 5000)
     return () => { active = false; window.clearInterval(timer) }
   }, [busy, draft.id])
   async function run(work: () => Promise<string>, refreshOnFailure = true) {
@@ -134,7 +137,10 @@ export default function SupplierSettings() {
         <div className="button-row"><button className="button" type="submit">{busy ? 'Working…' : 'Save Configuration'}</button>{draft.id && <button className="demo-mini-button" type="submit" value="replace">Save / Replace API Key</button>}</div>
       </fieldset></form>
       <p>GET /api/v1/categories · GET /api/v1/listings · NGN prices → integer kobo</p>
-      <div className="button-row"><button className="demo-mini-button" disabled={!canConnect} onClick={() => connect('test')}>Test Connection</button><button className="demo-mini-button" disabled={!canConnect} onClick={() => connect('categories')}>Fetch Categories</button><button className="button" disabled={!canConnect} onClick={() => connect('sync')}>Sync Catalog</button><button className="demo-mini-button" disabled={busy || loading} onClick={() => void run(async () => { await refresh(draft.id); return 'Supplier status refreshed.' })}>Refresh status</button></div>
+      <div className="button-row"><button className="demo-mini-button" disabled={!canConnect} onClick={() => connect('test')}>Test Connection</button><button className="demo-mini-button" disabled={!canConnect} onClick={() => connect('categories')}>Fetch Categories</button><button className="button" disabled={!canConnect || !syncReady?.ready} onClick={() => connect('sync')}>Sync Catalog</button><button className="demo-mini-button" disabled={busy || loading} onClick={() => void run(async () => { await refresh(draft.id); return 'Supplier status refreshed.' })}>Refresh status</button></div>
+      {syncReady?.blockers.map(blocker => <p className="form-error" role="status" key={blocker}>{blocker}</p>)}
+      {syncReady && <p>Pending approvals: {syncReady.pending ?? 'Unverified'} · Approved listings: {syncReady.approved ?? 'Unverified'}</p>}
+      {syncReady?.progress.filter(job => job.connection_id === draft.id).map(job => <p role="status" key={job.connection_id}>Saved progress: {job.phase} · next page {job.next_page} · {job.scanned} scanned · {job.imported ?? 'Not finalized'} imported · {job.skipped_details} optional details skipped. Closing this page retains the checkpoint.</p>)}
       {dirty && <p>Save your changes before testing or synchronizing.</p>}<dl className="demo-detail-list"><div><dt>Last sync status</dt><dd>{draft.last_status}</dd></div><div><dt>Last successful sync</dt><dd>{draft.last_sync_at ? new Date(draft.last_sync_at).toLocaleString() : 'Never'}</dd></div><div><dt>Synchronized products (authorized only)</dt><dd>{draft.imported_count}</dd></div><div><dt>Synchronized categories</dt><dd>{supplierCategories.length}</dd></div><div><dt>Approved / published</dt><dd>{items.filter(item => item.approval === 'approved').length} / {items.filter(item => item.products?.status === 'active' && item.approval === 'approved').length}</dd></div><div><dt>Hidden or pending</dt><dd>{items.filter(item => item.approval !== 'approved' || item.products?.status !== 'active').length}</dd></div></dl>
       <form className="account-form" onSubmit={event => { event.preventDefault(); const values = new FormData(event.currentTarget); void catalog(null, 'markup', { category_id: values.get('supplier_category'), basis_points: Math.round(Number(values.get('markup')) * 100) }) }}><fieldset disabled={busy || dirty || !draft.id || !pricingReady}><h3>Automatic category pricing</h3><label>Supplier category<select name="supplier_category" required><option value="">Select category</option>{supplierCategories.map(category => <option key={category.id} value={category.id}>{category.name} · {(category.markup_basis_points ?? 0) / 100}%</option>)}</select></label><label>Markup (%)<input name="markup" type="number" min="0" max="1000" step="0.01" required /></label><button className="demo-mini-button">Save markup</button><small>Applies to new approvals and products reset to automatic pricing. Existing prices remain manual overrides.</small></fieldset></form>
       {supplierCategories.length > 0 && <ul>{supplierCategories.map(category => <li key={category.id}>{category.name} · {category.id}</li>)}</ul>}
