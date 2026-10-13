@@ -3,6 +3,7 @@ import type { SubmitEvent } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { LogOut, PackageOpen, House, History, List, Settings, UserRound, ShoppingBag, ShieldCheck, ArrowRight } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
+import { cloudflareMode, cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth'
 import { authRedirect, supabase } from '../lib/supabase'
 import { ReviewForm } from '../components/Reviews'
 import { loadOrders } from '../lib/customer-data'
@@ -16,10 +17,10 @@ export function DashboardLayout() {
   const [error, setError] = useState('')
   const displayName = String(session?.user.user_metadata.full_name || session?.user.email?.split('@')[0] || 'Your account')
   async function logout() {
-    if (!supabase || busy) return
+    if ((!supabase && !cloudflareMode) || busy) return
     setBusy(true); setError('')
     try {
-      const { error: problem } = await supabase.auth.signOut({ scope: 'local' })
+      const { error: problem } = cloudflareMode ? (await cloudflareAuth('sign-out', {}), { error: null }) : await supabase!.auth.signOut({ scope: 'local' })
       if (problem) throw problem
       navigate('/login', { replace: true })
     } catch { setError('Unable to sign out. Please try again.') }
@@ -34,12 +35,17 @@ export function CustomerRecords({ mode }: { mode: 'overview' | 'orders' | 'purch
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
+    if (cloudflareMode && session && mode !== 'transactions') {
+      let active = true
+      void cloudflareRequest<{records: Order[]}>('/api/orders').then(({records}) => { if (active) setRecords(mode === 'purchases' ? records.filter(order => order.payment_status === 'paid' && order.fulfillment_status === 'delivered') : records) }).catch(problem => { if (active) setError(problem.message) }).finally(() => { if (active) setLoading(false) })
+      return () => { active = false }
+    }
     if (!supabase || !session || mode === 'transactions') return
     let active = true
-    setLoading(true); setError(''); setRecords([])
-    void loadOrders(supabase, session.user.id, mode === 'purchases').then(data => { if (active) setRecords(data) }).catch(problem => { if (active) setError(problem.message) }).finally(() => { if (active) setLoading(false) })
+    const client = supabase
+    void Promise.resolve().then(() => { if (active) { setLoading(true); setError(''); setRecords([]) }; return loadOrders(client, session.user.id, mode === 'purchases') }).then(data => { if (active) setRecords(data) }).catch(problem => { if (active) setError(problem.message) }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [session?.user.id, mode, attempt])
+  }, [session, mode, attempt])
   const title = { overview: `Welcome back, ${String(session?.user.user_metadata.full_name || session?.user.email?.split('@')[0] || 'there')}! 👋`, orders: 'Your Orders', purchases: 'Purchase History', transactions: 'Transaction History' }[mode]
   return <div className={mode === 'overview' ? 'customer-overview' : 'customer-page-panel'}><h1>{title}</h1><p className="dashboard-intro">{mode === 'overview' ? 'Here’s what’s happening with your account today.' : mode === 'purchases' ? 'Access products from your paid, delivered orders.' : mode === 'transactions' ? 'View payment activity when transaction records are connected to this view.' : 'Track payment and fulfillment status for your orders.'}</p>
     {mode === 'overview' && <div className="customer-summary"><article className="customer-account-card"><span className="summary-label"><ShieldCheck size={18} /> YOUR ACCOUNT</span><div><p>Signed in as</p><strong>{session?.user.email}</strong></div><Link className="button" to="/dashboard/profile">Manage Profile <ArrowRight size={18} /></Link></article><article className="customer-assets-card"><span className="summary-label"><PackageOpen size={18} /> DIGITAL ASSETS</span><h2>Your Purchases</h2><p>Access your purchased tools and available delivery instructions.</p><Link className="button" to="/dashboard/purchases">View Purchases <ArrowRight size={18} /></Link><PackageOpen className="asset-watermark" size={150} aria-hidden="true" /></article></div>}
@@ -52,7 +58,7 @@ function Empty({ title, text }: { title: string; text: string }) { return <div c
 export function Profile() {
   const { session } = useAuth()
   const [name, setName] = useState(String(session?.user.user_metadata.full_name ?? ''))
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!cloudflareMode)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -66,14 +72,14 @@ export function Profile() {
       setLoading(false)
     })
     return () => { active = false }
-  }, [session?.user.id])
+  }, [session])
   async function save(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!supabase || busy) return
+    if ((!supabase && !cloudflareMode) || busy) return
     if (name.trim().length < 2) { setError('Enter at least 2 characters for your name.'); return }
     setBusy(true); setError(''); setMessage('')
     try {
-      const { error: problem } = await supabase.auth.updateUser({ data: { full_name: name.trim() } })
+      const { error: problem } = cloudflareMode ? (await cloudflareAuth('update-user', { name: name.trim() }), { error: null }) : await supabase!.auth.updateUser({ data: { full_name: name.trim() } })
       if (problem) throw problem
       setMessage('Account name saved.')
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Unable to save your name.') }
@@ -87,10 +93,10 @@ export function AccountSettings({ embedded = false }: { embedded?: boolean }) {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   async function reset() {
-    if (!supabase || !session?.user.email || busy) return
+    if ((!supabase && !cloudflareMode) || !session?.user.email || busy) return
     setBusy(true); setError(''); setMessage('')
     try {
-      const { error: problem } = await supabase.auth.resetPasswordForEmail(session.user.email, { redirectTo: authRedirect('/reset-password') })
+      const { error: problem } = cloudflareMode ? (await cloudflareAuth('request-password-reset', { email: session.user.email, redirectTo: '/reset-password' }), { error: null }) : await supabase!.auth.resetPasswordForEmail(session.user.email, { redirectTo: authRedirect('/reset-password') })
       if (problem) throw problem
       setMessage('A password reset link has been requested. Check your inbox and open it in this browser.')
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Unable to request a password reset.') }

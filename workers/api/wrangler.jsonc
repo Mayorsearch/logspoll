@@ -2,31 +2,43 @@
   "name": "logspoll-api-local",
   "main": "index.ts",
   "compatibility_date": "2026-10-10",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": false,
   "preview_urls": false,
-  "vars": { "ENVIRONMENT": "locked" },
+  "vars": {
+    "ENVIRONMENT": "locked"
+  },
   "env": {
     "staging": {
       "name": "logspoll-api-staging",
       "workers_dev": true,
       "vars": {
         "ENVIRONMENT": "staging",
-        "STAGING_SUPABASE_URL": "",
-        "STAGING_SUPABASE_PUBLISHABLE_KEY": "",
-        "LEGACY_SUPABASE_ORIGIN": "https://hdxihldwkugboqrsxokh.supabase.co"
+        "AUTH_ENABLED": "true",
+        "AUTH_ORIGIN": "https://logspoll-api-staging.comedianmayorsearch.workers.dev"
       },
-      "d1_databases": [{
-        "binding": "DB",
-        "database_name": "logspoll-d1-staging-20261012",
-        "database_id": "d337160c-36e3-4a1d-9908-76a6873b4188",
-        "migrations_dir": "migrations"
-      }]
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "logspoll-d1-staging-20261012",
+          "database_id": "d337160c-36e3-4a1d-9908-76a6873b4188",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "triggers": {
+        "crons": [
+          "*/5 * * * *"
+        ]
+      }
     },
     "production": {
       "name": "logspoll-api-production-locked",
       "workers_dev": false,
-      "vars": { "ENVIRONMENT": "locked" }
+      "vars": {
+        "ENVIRONMENT": "locked"
+      }
     }
   }
 }

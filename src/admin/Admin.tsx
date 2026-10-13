@@ -1,3 +1,4 @@
+import { cloudflareMode, cloudflareAuth } from '../lib/cloudflare-auth'
 import { Fragment, useEffect, useState } from 'react'
 import type { SubmitEvent } from 'react'
 import { Link, NavLink, Navigate, useNavigate, useParams } from 'react-router-dom'
@@ -23,7 +24,7 @@ export default function Admin() {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
-  async function logout() { const result = await supabase?.auth.signOut({ scope: 'local' }); if (result?.error) setError('Sign out failed. Please retry.'); else navigate('/admin/login', { replace: true }) }
+  async function logout() { const result = cloudflareMode ? (await cloudflareAuth('sign-out', {}), { error: null }) : await supabase?.auth.signOut({ scope: 'local' }); if (result?.error) setError('Sign out failed. Please retry.'); else navigate('/admin/login', { replace: true }) }
   const item = navigation.find(item => item[0] === section)
   if (!item) return <Navigate to="/admin" replace />
   if (tab && !supplierSettings && !emailSettings && !paymentSettings) return <Navigate to={`/admin/${section}`} replace />

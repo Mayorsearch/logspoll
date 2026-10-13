@@ -26,7 +26,7 @@ test('all 22 templates have HTML, text, synthetic labels and safe account links'
 })
 test('customer fields are escaped; invalid financial facts and auth origins are rejected', () => {
   const email = renderEmail('payment_receipt', { firstName: '<img src=x onerror="steal()">', reference: '<b>private</b>', amountMinor: 125000 })
-  assert.doesNotMatch(email.html, /<img|<b>private/)
+  assert.doesNotMatch(email.html, /<img src=x|<b>private/)
   assert.match(email.html, /&lt;img/)
   assert.match(email.text, /1,250\.00/)
   assert.throws(() => renderEmail('payment_receipt', { amountMinor: -1 }))

@@ -23,8 +23,19 @@
         "BACHS_SANDBOX_ENABLED": "false",
         "VITE_BACHS_SANDBOX_TEST_UI": "false",
         "VITE_SUPABASE_URL": "https://hdxihldwkugboqrsxokh.supabase.co",
-        "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Lm7BlGxcxP8kQYJlEayRSg_dS-r35Im"
-      }
+        "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Lm7BlGxcxP8kQYJlEayRSg_dS-r35Im",
+        "ENVIRONMENT": "staging",
+        "AUTH_ENABLED": "true",
+        "AUTH_ORIGIN": "https://mobile-preview.logspoll.pages.dev",
+        "VITE_AUTH_PROVIDER": "cloudflare"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "logspoll-d1-staging-20261012",
+          "database_id": "d337160c-36e3-4a1d-9908-76a6873b4188"
+        }
+      ]
     }
   }
 }

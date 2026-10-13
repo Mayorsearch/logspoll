@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from './AuthProvider'
+import { cloudflareMode, cloudflareRequest } from '../lib/cloudflare-auth'
 import { supabase } from '../lib/supabase'
 
 export function ProtectedRoute() {
@@ -17,12 +18,16 @@ export function AdminGate() {
   const [state, setState] = useState<'loading' | 'allowed' | 'denied'>('loading')
   useEffect(() => {
     let active = true
+    if (cloudflareMode && session) {
+      void cloudflareRequest('/api/admin/overview').then(() => { if (active) setState('allowed') }).catch(() => { if (active) setState('denied') })
+      return () => { active = false }
+    }
     if (!supabase || !session) return
     void supabase.from('user_roles').select('role').eq('user_id', session.user.id).maybeSingle().then(({ data, error }) => {
       if (active) setState(!error && data?.role === 'admin' ? 'allowed' : 'denied')
     })
     return () => { active = false }
-  }, [session?.user.id])
+  }, [session])
   if (state === 'loading') return <p className="container section" role="status">Checking administrator access…</p>
   if (state === 'denied') return <section className="container section info-page"><h1>Administrator access unavailable.</h1><p>Your account needs an existing administrator role and verified database policies.</p><Link className="button" to="/dashboard">Customer dashboard</Link></section>
   return <Outlet />

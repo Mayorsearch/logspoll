@@ -5,11 +5,17 @@ export interface Statement {
   all<T = Record<string, unknown>>(): Promise<{ results: T[]; success: boolean }>
   run(): Promise<unknown>
 }
-export interface Database { prepare(sql: string): Statement }
+export interface Database {
+  prepare(sql: string): Statement
+  batch(statements: Statement[]): Promise<unknown[]>
+  exec(query: string): Promise<unknown>
+}
 export interface ApiEnv {
   ENVIRONMENT: 'staging' | 'locked'
   DB?: Database
-  STAGING_SUPABASE_URL?: string
-  STAGING_SUPABASE_PUBLISHABLE_KEY?: string
-  LEGACY_SUPABASE_ORIGIN?: string
+  AUTH_ENABLED?: string
+  AUTH_ORIGIN?: string
+  AUTH_SECRET?: string
+  RESEND_API_KEY?: string
 }
+export interface Execution { waitUntil(promise: Promise<unknown>): void }

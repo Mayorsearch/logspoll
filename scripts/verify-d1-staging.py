@@ -14,6 +14,8 @@ def baseline():
             for table in ['users','profiles','user_roles','categories','products','inventory','orders']}
 
 before = baseline()
+db.executescript((root / 'workers/api/migrations/0002_cloudflare_auth.sql').read_text())
+assert baseline() == before, 'Authentication migration changed existing application records'
 db.executescript(fixture)
 assert baseline() == before, 'Idempotent fixture import changed records'
 assert [len(before[t]) for t in before] == [2,2,2,1,1,1,2], 'Record count mismatch'
