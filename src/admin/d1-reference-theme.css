@@ -40,3 +40,19 @@
 @media(max-width:1100px){.d1-reference-admin .cf-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:760px){.d1-reference-admin .cf-header.demo-heading{flex-wrap:wrap}.d1-reference-admin .cf-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.d1-reference-admin .demo-sidebar{transform:translateX(-100%);transition:transform .2s}.d1-reference-admin .demo-sidebar.is-open{transform:translateX(0)}.d1-reference-admin .d1-logout-top{display:none}.d1-reference-admin .demo-content{width:calc(100% - 32px)}}
 @media(max-width:480px){.d1-reference-admin .cf-metrics strong{font-size:21px}.d1-reference-admin .cf-panel{padding:15px}}
+
+/* YoungPG mobile form: scoped to the D1 Admin HQ, never affects storefront. */
+.d1-reference-admin .catalog-config-form fieldset{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px;border:0;margin:0 0 18px;padding:0;min-width:0}
+.d1-reference-admin .catalog-config-form .catalog-field{display:flex;flex-direction:column;gap:7px;min-width:0;color:#b8c3d5;font-size:11px;line-height:1.45;font-weight:650}
+.d1-reference-admin .catalog-config-form .catalog-field input,.d1-reference-admin .catalog-config-form .catalog-field select,.d1-reference-admin .catalog-config-form .catalog-field textarea{box-sizing:border-box;display:block;width:100%;max-width:100%;min-width:0;padding:10px 11px;background:#111a2b;border:1px solid #344054;border-radius:7px;color:#e2e8f0;font:inherit;font-size:12px;line-height:1.4}
+.d1-reference-admin .catalog-config-form .catalog-field input:read-only{color:#aab6c9}
+.d1-reference-admin .catalog-config-form .catalog-field textarea{resize:vertical;min-height:78px}
+.d1-reference-admin .catalog-config-form .catalog-wide,.d1-reference-admin .catalog-config-form .catalog-help,.d1-reference-admin .catalog-config-form .catalog-note{grid-column:1/-1;min-width:0}
+.d1-reference-admin .catalog-config-form .catalog-help,.d1-reference-admin .catalog-config-form .catalog-note{margin:0;color:#9aa6b9;line-height:1.6;font-size:11px;overflow-wrap:anywhere}
+.d1-reference-admin .catalog-config-form .catalog-note{color:#7ae1bb}
+.d1-reference-admin .catalog-config-form .catalog-checkbox{display:flex;align-items:center;gap:8px;min-width:0;font-size:11px;color:#d6dfeb}
+.d1-reference-admin .catalog-config-form .catalog-checkbox input{width:16px;height:16px;flex-shrink:0;accent-color:#ff5a0a}
+.d1-reference-admin .catalog-config-form .catalog-save{justify-self:start;align-self:center}
+.d1-reference-admin .catalog-actions{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px}
+.d1-reference-admin .catalog-status,.d1-reference-admin .catalog-progress{overflow-wrap:anywhere}
+@media(max-width:760px){.d1-reference-admin .catalog-config-form fieldset{grid-template-columns:minmax(0,1fr);gap:13px}.d1-reference-admin .catalog-config-form .catalog-save{width:100%}.d1-reference-admin .catalog-actions{flex-direction:column}.d1-reference-admin .catalog-actions .cf-btn{width:100%}}

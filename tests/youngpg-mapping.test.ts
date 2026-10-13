@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { categoriesFrom, listingsFrom, DESCRIPTION_REQUIRED } from '../server/youngpg.ts'
+import { categoriesFrom, listingsFrom, DESCRIPTION_REQUIRED, resaleAllowlist } from '../server/youngpg.ts'
 
 const payload = { success: true, data: [
   { id: 1, slug: 'vpn-premium', title: 'Premium VPN' },
@@ -54,4 +54,20 @@ test('blank descriptions remain review-required and ordinary multiline product t
   }
   const description = 'Licensed software.\nInstall with the official installer.'
   assert.equal(listingsFrom([sample(1, 'apps', 'Software', { description })], cats, { 1: 'agreement-ref' }).products[0].description, description)
+})
+
+test('supplier-wide resale evidence covers eligible goods but not account credentials', () => {
+  const categories = categoriesFrom(payload)
+  const approved = resaleAllowlist({ '*': 'YoungPG-supplier-wide-authorization-reference' })
+  const result = listingsFrom([
+    sample(300, 'apps', 'Software', { title: 'Licensed software package' }),
+    sample(301, 'apps', 'Software', { title: 'Facebook accounts and session cookies' }),
+  ], categories, approved)
+  assert.deepEqual(result.products.map(product => product.id), ['300'])
+  assert.equal(result.products[0].authorization_ref, approved['*'])
+  assert.throws(() => resaleAllowlist({ '*': 'bad' }))
+  const specific = listingsFrom([
+    sample(300, 'apps', 'Software', { title: 'Licensed software package' }),
+  ], categories, resaleAllowlist({ '*': 'supplier-wide-reference', '300': 'product-specific-reference' }))
+  assert.equal(specific.products[0].authorization_ref, 'product-specific-reference')
 })

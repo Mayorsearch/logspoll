@@ -35,7 +35,7 @@ export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
   if (!c) return {done:false,skipped:'busy_or_cooling_down'}
   try {
     const approved=resaleAllowlist(JSON.parse(c.authorized_products))
-    if (!Object.keys(approved).length) throw new HttpError(409,'Product-specific resale evidence is required before ingestion.')
+    if (!Object.keys(approved).length) throw new HttpError(409,'Supplier-wide or product-specific resale authorization reference is required before ingestion.')
     let job=await db.prepare('SELECT * FROM supplier_sync_jobs WHERE connection_id=?').bind(c.id).first<Job>()
     if (!job || job.phase==='complete' || job.revision!==c.revision || now-job.started_at>3600000) {
       const id=crypto.randomUUID()
@@ -145,7 +145,9 @@ export async function catalogAdmin(request:Request,env:ApiEnv) {
   if (actor.role!=='admin') throw new HttpError(403,'Administrator access required.')
   if (request.method==='GET') {
     const result=await env.DB.prepare(`SELECT c.id,c.name,c.enabled,c.revision,c.last_status,c.last_verified_scan_at,
-      j.phase,j.page,j.scanned,j.total FROM staging_supplier_connections c LEFT JOIN supplier_sync_jobs j ON j.connection_id=c.id ORDER BY c.name`).all()
+      j.phase,j.page,j.scanned,j.total,
+      CASE WHEN json_type(c.authorized_products,'$."*"')='text' THEN 1 ELSE 0 END AS supplier_wide_authorized
+      FROM staging_supplier_connections c LEFT JOIN supplier_sync_jobs j ON j.connection_id=c.id ORDER BY c.name`).all()
     return json({suppliers:result.results,publicationEnabled:false})
   }
   if (request.method!=='POST'||request.headers.get('Origin')!==new URL(request.url).origin) throw new HttpError(403,'Same-origin POST required.')
@@ -162,7 +164,7 @@ export async function catalogAdmin(request:Request,env:ApiEnv) {
   if (body.action!=='save'||typeof body.name!=='string'||body.name.trim().length<2||body.name.length>120||!Number.isSafeInteger(body.revision)||typeof body.enabled!=='boolean') throw new HttpError(400,'Invalid supplier configuration.')
   const existing=await env.DB.prepare('SELECT encrypted_key,key_nonce,authorized_products FROM staging_supplier_connections WHERE id=?').bind(id).first<{encrypted_key:string;key_nonce:string;authorized_products:string}>()
   let approved:Record<string,string>
-  try{approved=resaleAllowlist(body.authorized_products??JSON.parse(existing?.authorized_products??'{}'))}catch{throw new HttpError(400,'Valid product-specific resale evidence required.')}
+  try{approved=resaleAllowlist(body.authorized_products??JSON.parse(existing?.authorized_products??'{}'))}catch{throw new HttpError(400,'Valid supplier-wide or product-specific resale authorization reference required.')}
   let cipher=existing?.encrypted_key;let nonce=existing?.key_nonce
   if (body.api_key!==undefined) {
     if (typeof body.api_key!=='string'||!/^ypg_[a-fA-F0-9]{48}$/.test(body.api_key)) throw new HttpError(400,'Valid YoungPG read-only key required.')

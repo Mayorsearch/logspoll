@@ -67,7 +67,7 @@ export function resaleAllowlist(value: unknown): Record<string, string> {
     throw new HttpError(400, "At most 500 authorized products are supported.");
   return Object.fromEntries(
     entries
-      .map(([key, evidence]) => [identifier(key), label(evidence, 1000)])
+      .map(([key, evidence]) => [key === '*' ? '*' : identifier(key), label(evidence, 1000)])
       .map(([key, evidence]) => {
         if (evidence.length < 5)
           throw new HttpError(
@@ -254,7 +254,8 @@ export function listingsFrom(
     const id = identifier(item.id);
     if (seen.has(id)) throw new HttpError(502, 'Duplicate supplier listing IDs.');
     seen.add(id);
-    if (!Object.hasOwn(approved, id)) continue;
+    const authorization = approved[id] ?? approved['*'];
+    if (!authorization) continue;
 
     const name = label(item.title, 200);
     const description = missingDescription(item.description) ? DESCRIPTION_REQUIRED : label(item.description, 10000, true);
@@ -287,7 +288,7 @@ export function listingsFrom(
     products.push({
       id, category_id: categoryId, name, description,
       cost_minor: minorPrice(item.price_ngn), currency: 'NGN',
-      stock: ['inactive', 'unavailable', 'discontinued', 'sold_out'].includes(String(item.status)) ? 0 : Number(stock), authorization_ref: approved[id],
+      stock: ['inactive', 'unavailable', 'discontinued', 'sold_out'].includes(String(item.status)) ? 0 : Number(stock), authorization_ref: authorization,
       ...listingMetadata(item),
     });
   }
