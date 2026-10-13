@@ -1,4 +1,5 @@
 import { HttpError, json } from './http.ts'
+import { supplierReview } from './supplier-review.ts'
 import { authReady, consumeVerification, createAuth, identity } from './auth.ts'
 import { drainMail, enqueueMail } from './mail.ts'
 import type { ApiEnv, Execution } from './types.ts'
@@ -37,6 +38,7 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
       headers.set('Cache-Control', 'no-store'); headers.set('Referrer-Policy', 'no-referrer'); headers.set('X-Content-Type-Options', 'nosniff')
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
     }
+    if (url.pathname === '/api/admin/supplier-review') return await supplierReview(request, env)
     if (request.method !== 'GET') throw new HttpError(405, 'Application writes are not migrated yet.')
     if (url.pathname === '/api/health') {
       const marker = await env.DB.prepare('SELECT value FROM migration_metadata WHERE key=\'dataset\'').first<{ value: string }>()

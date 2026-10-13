@@ -13,6 +13,7 @@ import './demo-admin.css'
 import SupplierSettings from './SupplierSettings'
 import EmailNotifications from './EmailNotifications'
 import PaymentProviders from './PaymentProviders'
+import CloudflareAdmin from './CloudflareAdmin'
 
 const navigation = [['overview', 'Dashboard overview', LayoutDashboard], ['customers', 'Customers', Users], ['products', 'Products', Package], ['categories', 'Categories', Tags], ['orders', 'Orders', ShoppingBag], ['purchases', 'Purchases', ShoppingBag], ['transactions', 'Transactions', CreditCard], ['reviews', 'Reviews', MessageSquare], ['integrations', 'API Integrations', Plug], ['support', 'Support tickets', LifeBuoy], ['settings', 'Website settings', Settings], ['profile', 'Admin profile', UserCircle]] as const
 export default function Admin() {
@@ -25,6 +26,8 @@ export default function Admin() {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
   async function logout() { const result = cloudflareMode ? (await cloudflareAuth('sign-out', {}), { error: null }) : await supabase?.auth.signOut({ scope: 'local' }); if (result?.error) setError('Sign out failed. Please retry.'); else navigate('/admin/login', { replace: true }) }
+  // New D1 staging environment uses an isolated admin interface, never legacy Supabase queries.
+  if (cloudflareMode) return <CloudflareAdmin />
   const item = navigation.find(item => item[0] === section)
   if (!item) return <Navigate to="/admin" replace />
   if (tab && !supplierSettings && !emailSettings && !paymentSettings) return <Navigate to={`/admin/${section}`} replace />
