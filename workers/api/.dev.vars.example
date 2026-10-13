@@ -1,4 +1,7 @@
 # Local placeholders only. Never commit .dev.vars.staging or real keys.
 AUTH_SECRET=REPLACE_WITH_A_RANDOM_SECRET_OF_AT_LEAST_32_CHARACTERS
 RESEND_API_KEY=REPLACE_WITH_YOUR_RESEND_KEY
+# Catalog remains disabled until the additive D1 migration and real integration checks pass.
+CATALOG_SYNC_ENABLED=false
+SUPPLIER_ENCRYPTION_KEY=REPLACE_WITH_32_RANDOM_BYTES_BASE64
 AUTH_ORIGIN=https://localhost:8789

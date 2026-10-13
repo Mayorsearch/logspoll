@@ -1,5 +1,6 @@
 import { HttpError, json } from './http.ts'
 import { supplierReview } from './supplier-review.ts'
+import { catalogAdmin, syncCatalogBatch } from './catalog-sync.ts'
 import { authReady, consumeVerification, createAuth, identity } from './auth.ts'
 import { drainMail, enqueueMail } from './mail.ts'
 import type { ApiEnv, Execution } from './types.ts'
@@ -39,11 +40,12 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
     }
     if (url.pathname === '/api/admin/supplier-review') return await supplierReview(request, env)
+    if (url.pathname === '/api/admin/catalog') return await catalogAdmin(request, env)
     if (request.method !== 'GET') throw new HttpError(405, 'Application writes are not migrated yet.')
     if (url.pathname === '/api/health') {
       const marker = await env.DB.prepare('SELECT value FROM migration_metadata WHERE key=\'dataset\'').first<{ value: string }>()
       if (marker?.value !== 'synthetic-staging') throw new HttpError(503, 'Staging dataset validation failed.')
-      return json({ status: 'ok', environment: 'staging', database: 'D1', dataset: 'synthetic-only', authReplacement: authReady(env), supplierSync: false, livePayments: false })
+      return json({ status: 'ok', environment: 'staging', database: 'D1', dataset: 'staging', syntheticBusinessFixturesPresent: true, authReplacement: authReady(env), supplierSyncConfigured: env.CATALOG_SYNC_ENABLED==='true'&&Boolean(env.SUPPLIER_ENCRYPTION_KEY), livePayments: false })
     }
     const user = await identity(request, env)
     if (url.pathname === '/api/account/session') return json({ user })
@@ -65,4 +67,14 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     return json({ dataset: 'synthetic-staging', records: result.results })
   } catch (error) { return json({ error: error instanceof HttpError ? error.message : 'Staging API unavailable. No write or success was assumed.' }, error instanceof HttpError ? error.status : 503) }
 }
-export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, context: Execution) => { context.waitUntil(drainMail(env)) } }
+export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, context: Execution) => {
+  context.waitUntil(drainMail(env))
+  if (env.CATALOG_SYNC_ENABLED==='true') context.waitUntil((async()=>{
+    // Two resources per minute; bounded D1 queries/subrequests on the Free plan.
+    for(let batch=0;batch<2;batch++) {
+      try { const result=await syncCatalogBatch(env); if(result.skipped) break }
+      catch { break /* Redacted failure/cooldown is persisted by the batch handler. */ }
+      if(batch===0) await new Promise(resolve=>setTimeout(resolve,1600))
+    }
+  })())
+} }

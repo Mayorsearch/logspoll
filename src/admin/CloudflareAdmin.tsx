@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth'
 import { useAuth } from '../auth/AuthProvider'
 import './cloudflare-admin.css'
+import CloudflareCatalog from './CloudflareCatalog'
 
 type Counts = { customers: number; products: number; orders: number }
 type FeedItem = {
@@ -12,6 +13,7 @@ type FeedItem = {
   source_checked_at: number; approval: 'pending' | 'approved' | 'rejected'
   category_id: string | null; selling_price_minor: number | null
   delivery_type: string | null; reviewed_at: number | null
+  supplier_description?: string
 }
 type ReviewSnapshot = {
   environment: string; supplierSyncEnabled: boolean; publicationEnabled: boolean
@@ -47,25 +49,24 @@ export default function CloudflareAdmin() {
   const [description, setDescription] = useState('')
   const viewing = ['products', 'integrations', 'supplier-review', 'settings'].includes(section ?? '') ? 'review' : section === 'payments' ? 'payments' : 'overview'
 
-  const refresh = useCallback(async () => {
-    setError('')
-    try {
-      const [o, r] = await Promise.all([
+  const refresh = useCallback(() => {
+    return Promise.all([
         cloudflareRequest<{ records: Counts[] }>('/api/admin/overview'),
         cloudflareRequest<ReviewSnapshot>('/api/admin/supplier-review'),
-      ])
+      ]).then(([o,r])=>{
+      setError('')
       setOverview(o.records?.[0] ?? null)
       setReview(r)
-    } catch (problem) {
+    }).catch(problem=>{
       setError(problem instanceof Error ? problem.message : 'Staging administrator data unavailable.')
-    } finally { setLoading(false) }
+    }).finally(()=>setLoading(false))
   }, [])
   useEffect(() => { void refresh() }, [refresh])
 
   function edit(item: FeedItem) {
     setChosen(item); setCategoryId(item.category_id ?? '')
     setPrice(item.selling_price_minor == null ? '' : String(item.selling_price_minor / 100))
-    setDelivery(item.delivery_type ?? deliveryMethods[0]); setDescription(''); setError(''); setNotice('')
+    setDelivery(item.delivery_type ?? deliveryMethods[0]); setDescription(item.supplier_description==='Description not supplied by supplier; administrator review required.'?'':item.supplier_description??''); setError(''); setNotice('')
   }
   async function decide(item: FeedItem, action: 'approve' | 'reject') {
     if (busy) return
@@ -110,6 +111,7 @@ export default function CloudflareAdmin() {
       {loading && <p role="status">Loading authenticated staging records…</p>}
       {error && <p className="cf-error" role="alert">{error}</p>}
       {notice && <p className="cf-success" role="status">{notice}</p>}
+      {viewing==='review'&&<CloudflareCatalog onComplete={refresh}/>}
       {viewing === 'overview' && <>
         <div className="cf-metrics">
           <div><span>Customers (D1 staging)</span><strong>{overview?.customers ?? '—'}</strong></div>
@@ -117,7 +119,7 @@ export default function CloudflareAdmin() {
           <div><span>Orders (D1 staging)</span><strong>{overview?.orders ?? '—'}</strong></div>
           <div><span>Pending staged reviews</span><strong>{review ? pending : '—'}</strong></div>
         </div>
-        <section className="cf-panel"><h2>Migration status</h2><p>Supplier synchronization to D1: <strong>Not connected</strong></p><p>Sellable supplier inventory: <strong>Disabled</strong></p><p>Bachs live payments: <strong>Disabled</strong></p><p>Original Supabase products and the pending approval queue are not represented by these staging counts.</p><Link className="cf-btn" to="/admin/products">Open staging supplier reviews</Link></section>
+        <section className="cf-panel"><h2>Migration status</h2><p>Supplier synchronization to D1: <strong>{review?.supplierSyncEnabled?'Configured; verify actual progress in supplier reviews':'Disabled pending migration and configuration'}</strong></p><p>Sellable supplier inventory: <strong>Disabled</strong></p><p>Bachs live payments: <strong>Disabled</strong></p><p>Original Supabase products and the pending approval queue are not represented by these staging counts.</p><Link className="cf-btn" to="/admin/products">Open staging supplier reviews</Link></section>
       </>}
       {viewing === 'payments' && <section className="cf-panel"><h2>Bachs integration</h2><p>Payments and automatic fulfillment are deliberately disabled during the D1 migration. Do not accept live payments or assume the old Supabase sandbox ledger has been migrated.</p></section>}
       {viewing === 'review' && <>

@@ -11,7 +11,7 @@ function setup() {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys=ON')
   for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql',
-    'migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql']) {
+    'migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql']) {
     sqlite.exec(readFileSync(new URL('../workers/api/'+file, import.meta.url), 'utf8'))
   }
   const db = {
@@ -37,7 +37,7 @@ function setup() {
     async exec(sql: string) { sqlite.exec(sql) },
   } as Database
   const env: ApiEnv = { ENVIRONMENT: 'staging', DB: db, AUTH_ENABLED: 'true', AUTH_ORIGIN: 'https://staging.test',
-    AUTH_SECRET: 'synthetic-secret-for-d1-staging-review-test-only', RESEND_API_KEY: 're_synthetic_key' }
+    AUTH_SECRET: 'synthetic-secret-for-d1-staging-review-test-only', RESEND_API_KEY: 're_synthetic_key', SUPPLIER_ENCRYPTION_KEY:btoa('s'.repeat(32)) }
   const request = (path: string, data?: unknown, cookie?: string, origin = 'https://staging.test') => new Request('https://staging.test'+path, {
     ...(data === undefined ? {} : { method: 'POST', body: JSON.stringify(data) }),
     headers: { Origin: origin, 'Content-Type': 'application/json', 'cf-connecting-ip': '192.0.2.10', ...(cookie ? { Cookie: cookie } : {}) },
@@ -60,10 +60,33 @@ async function member(ctx: ReturnType<typeof setup>) {
   return {cookie,id:body.user.id}
 }
 function stage(sqlite: DatabaseSync, externalId: string, kind = 'permitted_digital_good', authorized = 1) {
+  const previous=sqlite.prepare('SELECT authorized_products FROM staging_supplier_connections WHERE id=?').get(connect)!
+  sqlite.prepare('UPDATE staging_supplier_connections SET enabled=1,authorized_products=? WHERE id=?')
+    .run(JSON.stringify({...JSON.parse(String(previous.authorized_products)),[externalId]:'DOCUMENTED-LICENSE-REF'}),connect)
   sqlite.prepare(`INSERT INTO staging_supplier_feed_items(connection_id,external_id,name,source_category,supplier_cost_minor,
     stock_quantity,authorization_verified,evidence_reference,source_checked_at)
     VALUES(?,?,?,?,?,?,?,?,?)`).run(connect,externalId,'Synthetic licensed item',kind,500,4,authorized,'DOCUMENTED-LICENSE-REF',Date.now())
 }
+
+test('catalog settings require server admin role; key rotation preserves evidence and never returns ciphertext',async()=>{
+  const ctx=setup();const account=await member(ctx)
+  const path='/api/admin/catalog'
+  assert.equal((await apiFetch(ctx.request(path),ctx.env)).status,401)
+  assert.equal((await apiFetch(ctx.request(path,undefined,account.cookie),ctx.env)).status,403)
+  ctx.sqlite.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").run(account.id)
+  const data={action:'save',id:connect,name:'Licensed supplier',revision:0,enabled:true,api_key:'ypg_'+'a'.repeat(48),authorized_products:{'1':'LICENSE-EVIDENCE-1'}}
+  const saved=await apiFetch(ctx.request(path,data,account.cookie),ctx.env)
+  assert.equal(saved.status,200,await saved.clone().text())
+  const before=ctx.sqlite.prepare('SELECT encrypted_key FROM staging_supplier_connections').get()!.encrypted_key
+  const rotated=await apiFetch(ctx.request(path,{action:'save',id:connect,name:'Licensed supplier',revision:1,enabled:true,api_key:'ypg_'+'b'.repeat(48)},account.cookie),ctx.env)
+  assert.equal(rotated.status,200,await rotated.clone().text())
+  assert.notEqual(ctx.sqlite.prepare('SELECT encrypted_key FROM staging_supplier_connections').get()!.encrypted_key,before)
+  assert.equal(ctx.sqlite.prepare('SELECT authorized_products FROM staging_supplier_connections').get()!.authorized_products,JSON.stringify(data.authorized_products))
+  const visible=await(await apiFetch(ctx.request(path,undefined,account.cookie),ctx.env)).text()
+  assert.doesNotMatch(visible,/encrypted_key|key_nonce|ypg_|LICENSE-EVIDENCE/)
+  assert.equal((await apiFetch(ctx.request(path,data,account.cookie),ctx.env)).status,409)
+  assert.equal((await apiFetch(ctx.request(path,{...data,revision:2},account.cookie,'https://evil.test'),ctx.env)).status,403)
+})
 test('staging D1 supplier review requires verified administrator, same-origin POST, and separate migrations',async () => {
   const ctx=setup()
   const {sqlite,request,env}=ctx

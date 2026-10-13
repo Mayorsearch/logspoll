@@ -17,5 +17,7 @@ export interface ApiEnv {
   AUTH_ORIGIN?: string
   AUTH_SECRET?: string
   RESEND_API_KEY?: string
+  SUPPLIER_ENCRYPTION_KEY?: string
+  CATALOG_SYNC_ENABLED?: string
 }
 export interface Execution { waitUntil(promise: Promise<unknown>): void }

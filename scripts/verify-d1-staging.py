@@ -16,6 +16,8 @@ def baseline():
 before = baseline()
 db.executescript((root / 'workers/api/migrations/0002_cloudflare_auth.sql').read_text())
 db.executescript((root / 'workers/api/migrations/0003_auth_mail_diagnostics.sql').read_text())
+db.executescript((root / 'workers/api/migrations/0004_supplier_review.sql').read_text())
+db.executescript((root / 'workers/api/migrations/0005_supplier_sync.sql').read_text())
 assert baseline() == before, 'Authentication migration changed existing application records'
 db.executescript(fixture)
 assert baseline() == before, 'Idempotent fixture import changed records'
