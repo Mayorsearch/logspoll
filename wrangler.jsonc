@@ -26,6 +26,7 @@
         "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Lm7BlGxcxP8kQYJlEayRSg_dS-r35Im",
         "ENVIRONMENT": "staging",
         "AUTH_ENABLED": "true",
+        "CATALOG_SYNC_ENABLED": "true",
         "AUTH_ORIGIN": "https://mobile-preview.logspoll.pages.dev",
         "VITE_AUTH_PROVIDER": "cloudflare"
       },

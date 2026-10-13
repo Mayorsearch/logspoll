@@ -17,7 +17,7 @@
       "vars": {
         "ENVIRONMENT": "staging",
         "AUTH_ENABLED": "true",
-        "CATALOG_SYNC_ENABLED": "false",
+        "CATALOG_SYNC_ENABLED": "true",
         "AUTH_ORIGIN": "https://logspoll-api-staging.comedianmayorsearch.workers.dev"
       },
       "d1_databases": [

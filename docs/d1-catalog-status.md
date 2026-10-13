@@ -25,9 +25,9 @@ native D1 bindings, not this operator REST adapter:
 
 ## Gates still closed
 
-- Deployment requires explicit approval. The prepared minute cron remains disabled
-  by `CATALOG_SYNC_ENABLED=false`. Set the backend-only `SUPPLIER_ENCRYPTION_KEY`
-  consistently on the Worker and Pages before enabling the approved staging build.
+- The user approved staging deployment on 2026-10-13. The approved staging
+  configuration enables the minute cron with `CATALOG_SYNC_ENABLED=true`; production
+  remains locked. Both staging runtimes use the same private supplier encryption key.
 - Native deployed-Worker synchronization and Free-plan execution limits still need
   end-to-end verification. Node/REST integration is not proof of deployed execution.
 - Complete customer/role/product/order migration, original approval import,
