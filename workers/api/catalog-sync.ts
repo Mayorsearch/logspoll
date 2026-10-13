@@ -1,4 +1,4 @@
-import { categoriesFrom, collection, DESCRIPTION_REQUIRED, identifier, listingsFrom, pageIsComplete, record, resaleAllowlist, subcategoriesFrom, SupplierReadError, YOUNGPG_ORIGIN, youngpgGet } from '../../server/youngpg.ts'
+import { categoriesFrom, collection, DESCRIPTION_REQUIRED, identifier, listingsFrom, pageIsComplete, record, resaleAllowlist, SupplierReadError, YOUNGPG_ORIGIN, youngpgGet } from '../../server/youngpg.ts'
 import { openCredential, sealCredential } from '../../server/supplier-crypto.ts'
 import { requireRuntime } from './runtime.ts'
 import { identity } from './auth.ts'
@@ -51,15 +51,14 @@ export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
     let total=job.total; let last=job.last_page
     const get=(resource:Parameters<typeof youngpgGet>[2],p=1)=>youngpgGet(YOUNGPG_ORIGIN,key,resource,p)
     if (job.phase==='categories') {
-      categories=categoriesFrom(await get('categories')); next=categories.length?'subcategories':'listings'
+      // Listing data already identifies product categories and optional subcategory IDs.
+      // Avoid dozens of nonessential per-category requests and upstream 429 responses.
+      categories=categoriesFrom(await get('categories')); next='listings'
     } else if (job.phase==='subcategories') {
-      const category=categories[sub]
-      if (!category) throw new HttpError(409,'Category checkpoint is invalid.')
-      const children=subcategoriesFrom(await get(`categories/${identifier(category.id)}/subcategories`),category.id)
-      statements.push(db.prepare(`INSERT INTO supplier_sync_subcategories(job_id,external_id,parent_id,slug,name)
-        SELECT ?,json_extract(value,'$.id'),json_extract(value,'$.parent_id'),json_extract(value,'$.slug'),json_extract(value,'$.name') FROM json_each(?)`)
-        .bind(job.id,JSON.stringify(children)))
-      sub++; if (sub===categories.length) next='listings'
+      // Resume pre-patch checkpoints without deleting previously collected subcategories.
+      // The existing records remain available at finalization; no supplier request needed.
+      if (!categories.length || sub > categories.length) throw new HttpError(409,'Category checkpoint is invalid.')
+      next='listings'
     } else if (job.phase==='listings') {
       const response=await get('listings',page); const values=collection(response); const meta=record(values.meta)
       const complete=pageIsComplete(response,page,values.rows.length)

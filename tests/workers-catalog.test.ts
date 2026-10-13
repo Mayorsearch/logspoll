@@ -40,7 +40,7 @@ test('D1 sync resumes failed details, validates the full snapshot and preserves 
     if(fail)throw new TypeError('secret supplier response must never escape')
     return Response.json({success:true,data:{id:u.pathname.endsWith('utility-1')?'1':'2',description:'Verified public licensed utility description.',image_url:'https://cdn.example.test/product.png',price_ngn:'0.01',available_stock:999}})
   })
-  for(let i=0;i<4;i++)await f.step()
+  for(let i=0;i<3;i++)await f.step()
   assert.equal(f.sqlite.prepare("SELECT supplier_cost_minor FROM staging_supplier_feed_items WHERE external_id='1'").get()!.supplier_cost_minor,1000)
   await assert.rejects(f.step(),error=>error instanceof Error&&!error.message.includes('secret supplier response'))
   assert.equal(f.sqlite.prepare('SELECT phase FROM supplier_sync_jobs').get()!.phase,'details')
@@ -61,7 +61,7 @@ test('D1 sync resumes failed details, validates the full snapshot and preserves 
 test('duplicate listing IDs abort the batch without partial imports or checkpoint advancement',async t=>{
   const f=await fixture(t)
   t.mock.method(globalThis,'fetch',async input=>{const u=new URL(String(input));if(u.pathname.endsWith('/subcategories'))return subcategories();if(u.pathname.endsWith('/categories'))return categories();return page(Number(u.searchParams.get('page')),['1'])})
-  for(let i=0;i<3;i++)await f.step()
+  for(let i=0;i<2;i++)await f.step()
   await assert.rejects(f.step(),/checkpoint retained/)
   assert.equal(f.sqlite.prepare('SELECT page FROM supplier_sync_jobs').get()!.page,2)
   assert.equal(f.sqlite.prepare('SELECT count(*) n FROM staging_supplier_feed_items').get()!.n,0)
@@ -73,4 +73,25 @@ test('an expired or stolen lease cannot commit and failure cleanup cannot clear 
   assert.equal(f.sqlite.prepare('SELECT lease_owner FROM staging_supplier_connections').get()!.lease_owner,'new-owner')
   assert.equal(f.sqlite.prepare('SELECT phase FROM supplier_sync_jobs').get()!.phase,'categories')
   assert.equal((await f.step()).skipped,'busy_or_cooling_down')
+})
+
+
+test('D1 catalog skips optional supplier subcategory calls and resumes older checkpoints', async t => {
+  const f=await fixture(t)
+  const paths:string[]=[]
+  t.mock.method(globalThis,'fetch',async input=>{
+    const url=new URL(String(input))
+    paths.push(url.pathname)
+    if(url.pathname.endsWith('/categories'))return categories()
+    if(url.pathname.endsWith('/subcategories'))throw new Error('Unexpected subcategory request')
+    throw new Error('Unexpected API route')
+  })
+  await f.step()
+  assert.equal(f.sqlite.prepare('SELECT phase FROM supplier_sync_jobs').get()!.phase,'listings')
+  assert.equal(paths.length,1)
+  f.sqlite.prepare("UPDATE supplier_sync_jobs SET phase='subcategories',subcategory_index=0").run()
+  await f.step()
+  assert.equal(f.sqlite.prepare('SELECT phase FROM supplier_sync_jobs').get()!.phase,'listings')
+  assert.equal(paths.length,1) // resumed without a network request
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM supplier_sync_jobs').get()!.n,1)
 })

@@ -76,7 +76,7 @@ export default function CloudflareCatalog({ onComplete }: { onComplete: () => Pr
         setStatus(`${result.phase ?? result.skipped}: ${result.scanned ?? 0} listings scanned. Approval and publication remain separate.`)
         if (result.done) { await onComplete(); break }
         if (result.skipped) break
-        await new Promise(resolve => setTimeout(resolve, 1600))
+        await new Promise(resolve=>setTimeout(resolve,5500))
       }
       await refresh()
     } catch (error) {
