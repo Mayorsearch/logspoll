@@ -1,0 +1,42 @@
+/* D1 presentation bridge: original LOGSPOLL Admin HQ palette and shell.
+   Current D1 APIs, auth, routes and permission checks are untouched. */
+.d1-reference-admin{background:#11152a;color:#f8fafc;min-height:100vh}
+.d1-reference-admin .demo-main{min-width:0}
+.d1-reference-admin .demo-content{padding-bottom:38px}
+.d1-reference-admin .cf-header.demo-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 20px;min-height:80px;margin:0 0 20px;background:#080d18;border:1px solid #202a40;border-radius:10px}
+.d1-reference-admin .cf-header.demo-heading h1{font-size:19px;color:#f8fafc;font-weight:900;margin:3px 0 6px}
+.d1-reference-admin .cf-header.demo-heading p{font-size:10px;color:#95a0b4;margin:0}
+.d1-reference-admin .cf-eyebrow{font-size:8px;color:#ff9d69;letter-spacing:.11em;font-weight:800}
+.d1-reference-admin .cf-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin:0 0 20px}
+.d1-reference-admin .cf-metrics>div{background:#080d18;border:1px solid #202a40;border-radius:10px;padding:15px 12px;min-width:0;min-height:118px;display:flex;flex-direction:column;justify-content:space-between}
+.d1-reference-admin .cf-metrics span{font-size:9px;color:#9aa6b9;font-weight:700;line-height:1.5;letter-spacing:.045em}
+.d1-reference-admin .cf-metrics strong{font-size:23px;color:#fff;line-height:1.25;font-weight:900;margin-top:10px}
+.d1-reference-admin .cf-metrics>div:nth-child(5) strong{color:#2dd4bf}
+.d1-reference-admin .cf-metrics>div:nth-child(6) strong{color:#fb7185}
+.d1-reference-admin .cf-panel{background:#080d18;border:1px solid #202a40;border-radius:10px;padding:22px;margin:0 0 20px;color:#d4dce9;box-shadow:none}
+.d1-reference-admin .cf-panel h2{font-size:13px;color:#f1f5f9;font-weight:800;margin:0 0 15px}
+.d1-reference-admin .cf-panel p,.d1-reference-admin .cf-muted{font-size:11px;line-height:1.7;color:#9aa6b9}
+.d1-reference-admin .cf-panel strong{color:#f8fafc}
+.d1-reference-admin .cf-btn{background:#ff5a0a;border-color:#ff5a0a;color:white;font-size:10px;font-weight:750;border-radius:6px}
+.d1-reference-admin .cf-btn.secondary{background:#172033;border-color:#344054;color:#e2e8f0}
+.d1-reference-admin .cf-btn.danger{background:#341923;border-color:#71313a;color:#fecdd3}
+.d1-reference-admin .cf-warning{border:1px solid #6e3f24;background:#2a1b1b;color:#f0bd9b;font-size:10px;padding:12px 14px;margin-bottom:18px;border-radius:7px}
+.d1-reference-admin .cf-error{background:#331923;border-color:#71313a;color:#fecdd3;font-size:11px}
+.d1-reference-admin .cf-success{background:#10352c;border-color:#1e5947;color:#a7f3d0;font-size:11px}
+.d1-reference-admin .cf-table-scroll{overflow-x:auto}
+.d1-reference-admin .cf-table-scroll table{width:100%;min-width:720px;border-collapse:collapse}
+.d1-reference-admin .cf-table-scroll th{background:#0e1425;color:#98a2b3;border-color:#202a40;font-size:9px;text-transform:uppercase;letter-spacing:.04em;padding:11px}
+.d1-reference-admin .cf-table-scroll td{background:#080d18;color:#c5cede;border-color:#1b2233;font-size:10px;padding:13px 11px;max-width:none}
+.d1-reference-admin .cf-table-scroll tr:hover td{background:#111a2b}
+.d1-reference-admin .cf-table-scroll td strong{color:#f5f7fa;font-size:11px}
+.d1-reference-admin .cf-table-scroll td small{color:#96a2b7}
+.d1-reference-admin .cf-editor label{color:#b8c3d5;font-size:11px}
+.d1-reference-admin .cf-editor input,.d1-reference-admin .cf-editor select,.d1-reference-admin .cf-editor textarea{background:#111a2b;border-color:#344054;color:#e2e8f0}
+.d1-reference-admin .demo-sidebar .demo-nav-label{padding:0 6px}
+.d1-reference-admin .demo-sidebar .demo-sidebar-bottom button{display:inline-flex;align-items:center;gap:8px}
+.d1-reference-admin .d1-logout-top{display:inline-flex;align-items:center}
+.d1-reference-admin .demo-sidebar nav a.active{background:#ff5a0a;color:#fff}
+.d1-reference-admin .demo-sidebar nav a{white-space:normal}
+@media(max-width:1100px){.d1-reference-admin .cf-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){.d1-reference-admin .cf-header.demo-heading{flex-wrap:wrap}.d1-reference-admin .cf-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.d1-reference-admin .demo-sidebar{transform:translateX(-100%);transition:transform .2s}.d1-reference-admin .demo-sidebar.is-open{transform:translateX(0)}.d1-reference-admin .d1-logout-top{display:none}.d1-reference-admin .demo-content{width:calc(100% - 32px)}}
+@media(max-width:480px){.d1-reference-admin .cf-metrics strong{font-size:21px}.d1-reference-admin .cf-panel{padding:15px}}
