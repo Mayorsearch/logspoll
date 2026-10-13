@@ -11,6 +11,7 @@
 		"SUPPLIER_SYNC_ENABLED": "false",
 		"ENVIRONMENT": "production",
     "PRODUCTION_CUTOVER_ENABLED": "true",
+    "CATALOG_SYNC_ENABLED": "true",
 		"AUTH_ENABLED": "true",
               "AUTH_ORIGIN": "https://logspoll.com"
 	},
