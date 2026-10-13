@@ -11,7 +11,7 @@ export async function scheduledSync(env: SchedulerEnv, options: { sleep?: (ms: n
   // Below the Free-plan 50 subrequest limit, even for very large catalogs.
   // Further invocations resume privately persisted progress without a computer.
   for (let batch = 0; batch < 40 && now() < deadline; batch++) {
-    const response = await fetch(url, { method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${env.SCHEDULER_SHARED_SECRET}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ job_id: job, connection_id: connection }), signal: AbortSignal.timeout(100000) })
+    const response = await fetch(url, { method: 'POST', redirect: 'manual', headers: { Authorization: `Bearer ${env.SCHEDULER_SHARED_SECRET}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ job_id: job, connection_id: connection }), signal: AbortSignal.timeout(100000) })
     if (response.status === 429) { await response.body?.cancel(); return }
     if (!response.ok) { await response.body?.cancel(); throw new Error(`Catalog sync returned HTTP ${response.status}`) }
     const result = await response.json() as { done?: boolean; skipped?: string; job_id?: string; connection_id?: string }

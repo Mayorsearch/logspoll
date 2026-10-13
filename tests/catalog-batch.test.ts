@@ -55,10 +55,20 @@ test('scheduler keeps one connection/job and stays below 50 requests per invocat
   let calls = 0
   const connection_id = '11111111-1111-4111-8111-111111111111'
   t.mock.method(globalThis, 'fetch', async (_input, options: RequestInit) => {
+    assert.equal(options.redirect, 'manual')
     const body = JSON.parse(String(options.body))
     if (calls++) assert.deepEqual(body, { job_id: connection_id, connection_id })
     return Response.json({ done: false, job_id: connection_id, connection_id })
   })
   await scheduledSync({ CATALOG_SYNC_URL: 'https://mobile-preview.logspoll.pages.dev/api/internal/catalog-sync', SCHEDULER_SHARED_SECRET: 's'.repeat(48) }, { sleep: async () => {}, now: () => 0 })
   assert.equal(calls, 40)
+})
+test('scheduler refuses Access redirects without forwarding its secret or advancing a checkpoint', async t => {
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async (_input, options: RequestInit) => {
+    calls++; assert.equal(options.redirect, 'manual')
+    return new Response(null, { status: 302, headers: { Location: 'https://untrusted.example.test' } })
+  })
+  await assert.rejects(scheduledSync({ CATALOG_SYNC_URL: 'https://mobile-preview.logspoll.pages.dev/api/internal/catalog-sync', SCHEDULER_SHARED_SECRET: 's'.repeat(48) }), /HTTP 302/)
+  assert.equal(calls, 1)
 })

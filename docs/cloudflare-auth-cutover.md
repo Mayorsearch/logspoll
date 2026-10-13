@@ -21,6 +21,7 @@ does not initialize Supabase. Production retains its old provider until cutover.
 There is no separate demo login and no invented customer purchase activity.
 
 Apply workers/api/migrations/0002_cloudflare_auth.sql only after 0001, staging first.
+Then apply 0003_auth_mail_diagnostics.sql for private sanitized mail diagnostics.
 The new auth tables do not alter existing products, prices, approvals, users or
 orders. Tests compare product records and foreign keys before/after auth operations.
 New authenticated UUIDs are mapped to new customer records, never matched to
@@ -37,10 +38,13 @@ Set a missing Worker key interactively (never put it in source or shell argument
 
 The 5-minute Worker cron drains an encrypted D1 outbox without a running computer,
 but cannot send until the standalone Resend key is bound. Each auth request also
-attempts one delivery through Pages waitUntil. Provider idempotency keys and atomic
+attempts up to two deliveries through Pages waitUntil. Provider idempotency keys and atomic
 lease ownership make uncertain delivery retries safe; attempts are bounded to six
 and 15 minutes, and encrypted payloads are deleted after acceptance or after a day.
 Resend acceptance is not proof of inbox delivery. Resend outages leave pending
+mail with private HTTP/timeout error codes and successful provider receipt IDs.
+Provider responses, recipient addresses and links are never included in diagnostics.
+See https://resend.com/docs/api-reference/emails/retrieve-email for provider delivery events.
 mail; users can request fresh links. Do not rotate AUTH_SECRET with pending outbox
 entries without an explicit rotation plan. Expired/outstanding links are not logged.
 
@@ -68,6 +72,14 @@ investigation; no destructive rollback SQL is necessary. Production is unaffecte
 
 ## Explicit remaining cutover gates
 
+Staging verification (2026-10-13): fixed a Workers transport TypeError caused by
+unsupported `redirect: 'error'`. Mail now uses `manual` and rejects non-2xx responses
+without forwarding credentials. The real staging Worker accepted registration and
+password-reset requests; Resend accepted both messages from
+`LOGSPOLL <no-reply@logspoll.com>`, and the owner confirmed both arrived at the approved
+test inbox. This verifies sending permission and sender acceptance, not receiving-MX
+configuration. Production authentication and DNS were not changed.
+
 - Export/import actual customers, private identity mapping, existing roles, products,
   approval evidence, pricing overrides, orders, transactions and inventory, with
   counts, checksums, foreign keys and authorization checks. No password import.
@@ -80,8 +92,8 @@ investigation; no destructive rollback SQL is necessary. Production is unaffecte
   Supabase code remains solely for the unchanged legacy deployment/rollback.
 - Verify auth/email end-to-end in staging with real Resend delivery and Free-plan
   CPU/subrequest limits. Local runtime success alone is not a live capacity test.
-- Restore approved logspoll.com DNS/hosting before relying on production links or
-  the existing hosted email logo. Pages preview remains behind Cloudflare Access.
+- logspoll.com now responds successfully. Pages preview remains behind Cloudflare
+  Access; no Access restrictions were removed for testing.
 - Keep payments and automatic supplier fulfillment disabled. Obtain explicit final
   production cutover approval, then switch all runtime readers/writers and remove
   the remaining Supabase runtime dependency. Do not uninstall it prematurely.

@@ -26,7 +26,7 @@ export async function sendTestEmail(env: EmailEnv, input: { template?: unknown; 
   const key = `logspoll-test/${input.requestId}`
   let response: Response
   try {
-    response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: payload, signal: AbortSignal.timeout(15000), redirect: 'error' })
+    response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: payload, signal: AbortSignal.timeout(15000), redirect: 'manual' })
   } catch { throw new HttpError(503, 'Provider timeout or network failure. Acceptance is unknown; retry this same test request.') }
   if (!response.ok) throw new HttpError(response.status === 429 || response.status >= 500 ? 503 : 502, `Email provider rejected the test (HTTP ${response.status}). Check provider configuration and logs; credentials were not returned.`)
   const result = await response.json().catch(() => null) as { id?: unknown } | null

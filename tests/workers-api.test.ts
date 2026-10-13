@@ -10,7 +10,7 @@ import type { ApiEnv, Database, Statement } from '../workers/api/types.ts'
 function fixture() {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys=ON')
-  for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql']) sqlite.exec(readFileSync(new URL('../workers/api/'+file,import.meta.url),'utf8'))
+  for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql','migrations/0003_auth_mail_diagnostics.sql']) sqlite.exec(readFileSync(new URL('../workers/api/'+file,import.meta.url),'utf8'))
   const db = {
     prepare(sql: string) {
       let values: unknown[] = []
@@ -22,7 +22,7 @@ function fixture() {
     async batch(statements: Statement[]) { sqlite.exec('BEGIN'); try { const result = await Promise.all(statements.map(s => s.all())); sqlite.exec('COMMIT'); return result } catch (e) { sqlite.exec('ROLLBACK'); throw e } },
     async exec(sql: string) { sqlite.exec(sql) },
   } as Database
-  const env: ApiEnv = { ENVIRONMENT:'staging', DB:db, AUTH_ENABLED:'true', AUTH_ORIGIN:'https://staging.test', AUTH_SECRET:'local-test-authentication-secret-not-used-outside-tests', RESEND_API_KEY:'synthetic-only-never-send' }
+  const env: ApiEnv = { ENVIRONMENT:'staging', DB:db, AUTH_ENABLED:'true', AUTH_ORIGIN:'https://staging.test', AUTH_SECRET:'local-test-authentication-secret-not-used-outside-tests', RESEND_API_KEY:'re_synthetic_only_never_send' }
   const request = (path:string, body?:unknown, cookie?:string, origin='https://staging.test') => new Request('https://staging.test'+path, { ...(body ? { method:'POST', body:JSON.stringify(body) } : {}), headers:{Origin:origin,'Content-Type':'application/json','cf-connecting-ip':'192.0.2.1', ...(cookie ? {Cookie:cookie} : {})} })
   return { env, db, sqlite, request }
 }
@@ -99,13 +99,44 @@ test('auth rate limits persist in D1; email failures retry without duplicate eve
   const row=await db.prepare('SELECT * FROM auth_mail_outbox').first<{id:string;payload:string}>()
   assert.ok(row); assert.doesNotMatch(row.payload,/queued@example|verify-email|token=/)
   let idempotency=''
-  t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{ idempotency=(init.headers as Record<string,string>)['Idempotency-Key']; return Response.json({error:'synthetic failure'},{status:503}) })
+  t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{ assert.equal(init.redirect,'manual'); idempotency=(init.headers as Record<string,string>)['Idempotency-Key']; return Response.json({error:'synthetic failure'},{status:503}) })
   await drainMail(env)
   assert.equal((await db.prepare('SELECT attempts FROM auth_mail_outbox').first<{attempts:number}>())!.attempts,1)
+  assert.equal((await db.prepare('SELECT last_error FROM auth_mail_outbox').first<{last_error:string}>())!.last_error,'provider_http_503')
   await db.prepare('UPDATE auth_mail_outbox SET next_attempt=0').run()
   let retryKey=''
-  t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{ retryKey=(init.headers as Record<string,string>)['Idempotency-Key']; return Response.json({id:'synthetic-accepted'}) })
+  t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{ retryKey=(init.headers as Record<string,string>)['Idempotency-Key']; return Response.json({id:'00000000-0000-4000-8000-000000000001'}) })
   await drainMail(env); assert.equal(retryKey,idempotency)
   assert.equal((await db.prepare('SELECT payload FROM auth_mail_outbox').first<{payload:string}>())!.payload,'')
+  const receipt = await db.prepare('SELECT last_error,provider_message_id FROM auth_mail_outbox').first()
+  assert.equal(receipt!.last_error,null); assert.equal(receipt!.provider_message_id,'00000000-0000-4000-8000-000000000001')
   assert.equal((await createAuth(env).api.getSession({headers:new Headers()})),null)
+})
+test('mail dispatcher bounds batches and cleans expired records even without deliverable mail',async t=>{
+  const {env,db,sqlite}=fixture()
+  const {enqueueMail}=await import('../workers/api/mail.ts')
+  for(let i=0;i<3;i++) await enqueueMail(env,`batch-${i}`,'welcome',{name:'Test',email:'batch@example.test'})
+  let calls=0
+  t.mock.method(globalThis,'fetch',async()=>{calls++;return Response.json({id:'00000000-0000-4000-8000-000000000001'})})
+  await drainMail(env)
+  assert.equal(calls,2); assert.equal(sqlite.prepare('SELECT count(*) n FROM auth_mail_outbox WHERE delivered_at IS NOT NULL').get()!.n,2)
+  await db.prepare('UPDATE auth_mail_outbox SET created_at=0').run()
+  await db.prepare("INSERT INTO auth_email_tokens(token_hash,expires_at) VALUES('expired',0)").run()
+  await drainMail(env)
+  assert.equal(calls,2);assert.equal(sqlite.prepare('SELECT count(*) n FROM auth_mail_outbox').get()!.n,0)
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM auth_email_tokens').get()!.n,0)
+})
+test('mail redirects are rejected without forwarding the API key or claiming delivery',async t=>{
+  const {env,db}=fixture()
+  const {enqueueMail}=await import('../workers/api/mail.ts')
+  await enqueueMail(env,'redirect-test','welcome',{name:'Test',email:'redirect@example.test'})
+  let calls=0
+  t.mock.method(globalThis,'fetch',async(url:unknown,init:RequestInit)=>{
+    calls++;assert.equal(url,'https://api.resend.com/emails');assert.equal(init.redirect,'manual')
+    return new Response(null,{status:302,headers:{Location:'https://untrusted.example.test'}})
+  })
+  await drainMail(env)
+  const row=await db.prepare('SELECT delivered_at,last_error,payload FROM auth_mail_outbox').first()
+  assert.equal(calls,1);assert.equal(row!.delivered_at,null);assert.equal(row!.last_error,'provider_http_302')
+  assert.ok(row!.payload)
 })
