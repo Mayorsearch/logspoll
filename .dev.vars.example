@@ -1,8 +1,5 @@
 # LOCAL Pages Functions only; copy to ignored .dev.vars. Never use VITE_ for secrets.
-SUPABASE_URL=https://hdxihldwkugboqrsxokh.supabase.co
-SUPABASE_PUBLISHABLE_KEY=
 # NEW dynamic Supplier API settings: backend-only, never VITE_ variables.
-SUPABASE_SERVICE_ROLE_KEY=
 # 32 random bytes, base64 encoded; generate locally using: openssl rand -base64 32
 SUPPLIER_ENCRYPTION_KEY=
 # Legacy ShopViaClone22 connector only. YoungPG keys are entered through /admin/settings/supplier-api.

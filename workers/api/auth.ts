@@ -29,6 +29,12 @@ export function createAuth(env: ApiEnv) {
       onPasswordReset: async ({ user }) => {
         // Revoke before any mail operation that might fail; the library also revokes afterward.
         await env.DB!.prepare('DELETE FROM auth_session WHERE userId=?').bind(user.id).run()
+        // Only a trusted offline import can reserve an original application UUID.
+        // A consumed reset token proves inbox ownership; public signup cannot link old records.
+        await env.DB!.batch([
+          env.DB!.prepare("UPDATE auth_user SET emailVerified=1 WHERE id=? AND EXISTS(SELECT 1 FROM external_identities WHERE issuer='cloudflare-reset-enrollment:v1' AND user_id=auth_user.id AND subject=lower(auth_user.email))").bind(user.id),
+          env.DB!.prepare("DELETE FROM external_identities WHERE issuer='cloudflare-reset-enrollment:v1' AND user_id=?").bind(user.id),
+        ])
         await enqueueMail(env, `password-reset:${user.id}:${Date.now()}`, 'password_changed', user)
       } },
     emailVerification: { sendOnSignUp: true, sendOnSignIn: false, autoSignInAfterVerification: false, expiresIn: 900,

@@ -9,12 +9,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "check:functions": "tsc -p tsconfig.functions.json",
-    "check:supabase": "node scripts/check-supabase.mjs",
-    "prepare:database": "node scripts/prepare-database.mjs",
     "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.117.3",
     "@tailwindcss/vite": "^4.3.3",
     "better-auth": "^1.7.7",
     "lucide-react": "^1.55.0",

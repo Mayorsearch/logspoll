@@ -10,7 +10,7 @@ import type { ApiEnv, Database, Statement } from '../workers/api/types.ts'
 function fixture() {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys=ON')
-  for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql','migrations/0003_auth_mail_diagnostics.sql']) sqlite.exec(readFileSync(new URL('../workers/api/'+file,import.meta.url),'utf8'))
+  for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql','migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql','migrations/0006_admin_publication.sql']) sqlite.exec(readFileSync(new URL('../workers/api/'+file,import.meta.url),'utf8'))
   const db = {
     prepare(sql: string) {
       let values: unknown[] = []
@@ -37,6 +37,7 @@ async function lastMail(env:ApiEnv, db:Database) {
 test('Cloudflare auth fails closed; application writes and cross-origin requests stay blocked',async()=>{
   const {env,request}=fixture()
   assert.equal((await apiFetch(request('/api/health'),{...env,ENVIRONMENT:'locked'})).status,503)
+  assert.equal((await apiFetch(request('/api/products'),{...env,ENVIRONMENT:'production',PRODUCTION_CUTOVER_ENABLED:'true'})).status,503)
   assert.equal((await apiFetch(request('/api/orders',{}),env)).status,405)
   assert.equal((await apiFetch(request('/api/auth/sign-in/email',{},undefined,'https://evil.test'),env)).status,403)
   assert.equal((await apiFetch(request('/api/account/session'),{...env,AUTH_SECRET:''})).status,503)
@@ -139,4 +140,52 @@ test('mail redirects are rejected without forwarding the API key or claiming del
   const row=await db.prepare('SELECT delivered_at,last_error,payload FROM auth_mail_outbox').first()
   assert.equal(calls,1);assert.equal(row!.delivered_at,null);assert.equal(row!.last_error,'provider_http_302')
   assert.ok(row!.payload)
+})
+
+test('D1 customer routes enforce ownership, publication, verified stock and paid delivery without supplier secrets', async () => {
+  const { env, db, sqlite, request } = fixture()
+  const email = 'routes@example.test', password = 'Synthetic password 2026!'
+  await apiFetch(request('/api/auth/sign-up/email', { email, password, name: 'Route Customer' }), env)
+  const mail = await lastMail(env, db), verificationUrl = mail.text.match(/https:\/\/staging\.test\/api\/auth\/verify-email\?[^\s]+/)![0]
+  await apiFetch(new Request(verificationUrl), env)
+  const login = await apiFetch(request('/api/auth/sign-in/email', { email, password }), env)
+  const cookie = login.headers.get('set-cookie')!.split(';')[0]
+  const me = await (await apiFetch(request('/api/account/session', undefined, cookie), env)).json()
+  assert.equal((await apiFetch(request('/api/products'), env)).status, 200)
+  assert.equal((await apiFetch(request('/api/categories'), env)).status, 200)
+  assert.equal((await apiFetch(request('/api/orders'), env)).status, 401)
+  const products = await (await apiFetch(request('/api/products?slug=synthetic-product', undefined, cookie), env)).json()
+  assert.equal(products.records.length, 1); assert.equal(products.records[0].price_minor, 12345)
+  assert.equal(products.records[0].available_quantity, 0)
+  assert.equal(products.records[0].category_name, 'Synthetic staging category')
+  assert.deepEqual(products.records[0].supplier_image_urls, [])
+  for (const field of ['supplier_name', 'supplier_cost_minor', 'authorization_evidence']) assert.equal(field in products.records[0], false)
+  assert.equal((await (await apiFetch(request('/api/products?availability=in-stock', undefined, cookie), env)).json()).total, 0)
+  assert.equal((await apiFetch(request('/api/products?ids=malformed', undefined, cookie), env)).status, 400)
+  assert.equal((await (await apiFetch(request('/api/categories', undefined, cookie), env)).json()).records[0].product_count, 1)
+  sqlite.prepare('UPDATE products SET publication_verified=0').run()
+  assert.equal((await (await apiFetch(request('/api/products', undefined, cookie), env)).json()).total, 0)
+  sqlite.prepare('UPDATE products SET publication_verified=1').run()
+  const order = '40000000-0000-4000-8000-000000000003', item = '50000000-0000-4000-8000-000000000003'
+  sqlite.prepare("INSERT INTO orders(id,customer_id,reference,total_minor,payment_status,fulfillment_status) VALUES(?,?,'ROUTE-ORDER',12345,'paid','delivered')").run(order, me.user.id)
+  sqlite.prepare("INSERT INTO order_items(id,order_id,product_id,product_name,category_name,quantity,unit_price_minor) VALUES(?,?,'30000000-0000-4000-8000-000000000001','Purchased product','Category',1,12345)").run(item, order)
+  sqlite.prepare("INSERT INTO product_entitlements(id,order_item_id,instructions) VALUES('private-entitlement',?,'PRIVATE DELIVERY')").run(item)
+  const purchases = await (await apiFetch(request('/api/orders?purchases=true', undefined, cookie), env)).json()
+  assert.equal(purchases.records[0].order_items[0].product_entitlements.instructions, 'PRIVATE DELIVERY')
+  assert.doesNotMatch(await (await apiFetch(request('/api/orders', undefined, cookie), env)).text(), /PRIVATE DELIVERY/)
+  const feedback = { item_uuid: item, stars: 5, feedback: 'A verified customer review of this purchase.', customer_name: 'Buyer', customer_location: '' }
+  assert.equal((await apiFetch(request('/api/reviews', feedback, cookie), env)).status, 201)
+  assert.equal((await apiFetch(request('/api/reviews', feedback, cookie), env)).status, 409)
+  assert.equal((await (await apiFetch(request('/api/reviews'), env)).json()).reviews.length, 0)
+  sqlite.prepare("UPDATE reviews SET status='approved'").run()
+  assert.equal((await (await apiFetch(request('/api/reviews'), env)).json()).reviews.length, 1)
+  sqlite.prepare("UPDATE orders SET payment_status='refunded' WHERE id=?").run(order)
+  assert.equal((await (await apiFetch(request('/api/orders?purchases=true', undefined, cookie), env)).json()).records.length, 0)
+  assert.equal((await (await apiFetch(request('/api/reviews'), env)).json()).reviews.length, 0)
+  assert.equal((await apiFetch(request('/api/support', { user_id: '10000000-0000-4000-8000-000000000001', subject: 'Test', message: 'Customer support request.' }, cookie), env)).status, 201)
+  assert.equal(sqlite.prepare('SELECT user_id FROM support_tickets').get()!.user_id, me.user.id)
+  assert.equal((await apiFetch(request('/api/support', { subject: 'Test', message: 'Customer support request.' }, cookie, 'https://evil.test'), env)).status, 403)
+  assert.equal((await apiFetch(request('/api/support', { subject: 'Test', message: 'Customer support request.' }, cookie, ''), env)).status, 403)
+  assert.equal((await apiFetch(request('/api/support', { subject: 'Test', message: 'X'.repeat(20000) }, cookie), env)).status, 413)
+  assert.equal(sqlite.prepare('PRAGMA foreign_key_check').all().length, 0)
 })

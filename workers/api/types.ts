@@ -11,9 +11,11 @@ export interface Database {
   exec(query: string): Promise<unknown>
 }
 export interface ApiEnv {
-  ENVIRONMENT: 'staging' | 'locked'
+  ENVIRONMENT: 'staging' | 'production' | 'locked'
+  PRODUCTION_CUTOVER_ENABLED?: string
   DB?: Database
   AUTH_ENABLED?: string
+  APP_ORIGIN?: string
   AUTH_ORIGIN?: string
   AUTH_SECRET?: string
   RESEND_API_KEY?: string

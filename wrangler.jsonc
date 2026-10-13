@@ -1,42 +1,46 @@
 {
-  "name": "logspoll",
-  "pages_build_output_dir": "./dist",
-  "compatibility_date": "2026-10-10",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
-  "vars": {
-    "SUPABASE_URL": "https://hdxihldwkugboqrsxokh.supabase.co",
-    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Lm7BlGxcxP8kQYJlEayRSg_dS-r35Im",
-    "BACHS_SANDBOX_ENABLED": "false",
-    "VITE_BACHS_SANDBOX_TEST_UI": "false",
-    "SUPPLIER_SYNC_ENABLED": "false",
-    "VITE_SUPABASE_URL": "https://hdxihldwkugboqrsxokh.supabase.co",
-    "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Lm7BlGxcxP8kQYJlEayRSg_dS-r35Im"
-  },
-  "env": {
-    "preview": {
-      "vars": {
-        "SUPABASE_URL": "https://hdxihldwkugboqrsxokh.supabase.co",
-        "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Lm7BlGxcxP8kQYJlEayRSg_dS-r35Im",
-        "SUPPLIER_SYNC_ENABLED": "false",
-        "BACHS_SANDBOX_ENABLED": "false",
-        "VITE_BACHS_SANDBOX_TEST_UI": "false",
-        "VITE_SUPABASE_URL": "https://hdxihldwkugboqrsxokh.supabase.co",
-        "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Lm7BlGxcxP8kQYJlEayRSg_dS-r35Im",
-        "ENVIRONMENT": "staging",
-        "AUTH_ENABLED": "true",
-        "CATALOG_SYNC_ENABLED": "true",
-        "AUTH_ORIGIN": "https://mobile-preview.logspoll.pages.dev",
-        "VITE_AUTH_PROVIDER": "cloudflare"
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "logspoll-d1-staging-20261012",
-          "database_id": "d337160c-36e3-4a1d-9908-76a6873b4188"
-        }
-      ]
-    }
-  }
+	"name": "logspoll",
+	"pages_build_output_dir": "./dist",
+	"compatibility_date": "2026-10-10",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"vars": {
+		"BACHS_SANDBOX_ENABLED": "false",
+		"VITE_BACHS_SANDBOX_TEST_UI": "false",
+		"SUPPLIER_SYNC_ENABLED": "false",
+		"ENVIRONMENT": "production",
+    "PRODUCTION_CUTOVER_ENABLED": "true",
+		"AUTH_ENABLED": "true",
+              "AUTH_ORIGIN": "https://logspoll.com"
+	},
+	"env": {
+		"preview": {
+			"vars": {
+				"SUPPLIER_SYNC_ENABLED": "false",
+				"BACHS_SANDBOX_ENABLED": "false",
+				"VITE_BACHS_SANDBOX_TEST_UI": "false",
+				"ENVIRONMENT": "staging",
+				"AUTH_ENABLED": "true",
+				"CATALOG_SYNC_ENABLED": "true",
+				"AUTH_ORIGIN": "https://mobile-preview.logspoll.pages.dev",
+				"APP_ORIGIN": "https://mobile-preview.logspoll.pages.dev"
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "logspoll-d1-staging-20261012",
+					"database_id": "d337160c-36e3-4a1d-9908-76a6873b4188"
+				}
+			]
+		}
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "logspoll-d1-production",
+			"database_id": "f0be42ec-fbae-4134-9eef-19ef26098e33",
+      "migrations_dir": "workers/api/migrations"
+		}
+	]
 }

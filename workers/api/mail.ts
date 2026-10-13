@@ -7,7 +7,7 @@ async function key(env: ApiEnv) {
   return crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new TextEncoder().encode(env.AUTH_SECRET)), 'AES-GCM', false, ['encrypt', 'decrypt'])
 }
 export async function enqueueMail(env: ApiEnv, event: string, kind: EmailKind, user: { email: string; name: string }, url?: string) {
-  const message = renderEmail(kind, { firstName: user.name, ...(url ? { confirmationUrl: url, confirmationOrigin: env.AUTH_ORIGIN, confirmationProvider: 'cloudflare' as const } : {}) })
+  const message = renderEmail(kind, { firstName: user.name, appOrigin:env.APP_ORIGIN??env.AUTH_ORIGIN, ...(url ? { confirmationUrl: url, confirmationOrigin: env.AUTH_ORIGIN, confirmationProvider: 'cloudflare' as const } : {}) })
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await key(env), new TextEncoder().encode(JSON.stringify({ from: 'LOGSPOLL <no-reply@logspoll.com>', to: [user.email], ...message })))
   const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))
@@ -55,4 +55,12 @@ export async function drainMail(env: ApiEnv) {
   const now = Date.now()
   await env.DB.prepare('DELETE FROM auth_mail_outbox WHERE created_at<?').bind(now - 86400000).run()
   await env.DB.prepare('DELETE FROM auth_email_tokens WHERE expires_at<?').bind(now).run()
+}
+
+// Events are committed with their business mutation. Queue IDs make retries deduplicate.
+export async function drainBusinessMail(env:ApiEnv) {
+ if(!env.DB||!env.AUTH_SECRET)return
+ let rows:{results:{id:string;kind:EmailKind;email:string;name:string}[]}
+ try{rows=await env.DB.prepare("SELECT e.id,e.kind,a.email,a.name FROM business_mail_events e JOIN auth_user a ON a.id=e.user_id WHERE e.queued_at IS NULL AND a.emailVerified=1 ORDER BY e.created_at LIMIT 2").all()}catch{return}
+ for(const row of rows.results){await enqueueMail(env,'business:'+row.id,row.kind,row);await env.DB.prepare('UPDATE business_mail_events SET queued_at=? WHERE id=? AND queued_at IS NULL').bind(Date.now(),row.id).run()}
 }

@@ -8,7 +8,7 @@ export default function CloudflareCatalog({onComplete}:{onComplete:()=>Promise<v
   const [enabled,setEnabled]=useState(false);const [evidence,setEvidence]=useState('');const [status,setStatus]=useState('');const [busy,setBusy]=useState(false)
   const key=useRef<HTMLInputElement>(null)
   async function refresh(){const result=await cloudflareRequest<{suppliers:Supplier[]}>('/api/admin/catalog');setRows(result.suppliers)}
-  useEffect(()=>{let active=true;void cloudflareRequest<{suppliers:Supplier[]}>('/api/admin/catalog').then(result=>{if(active)setRows(result.suppliers)}).catch(()=>{if(active)setStatus('Catalog configuration unavailable. Apply the reviewed D1 migration first.')});return()=>{active=false}},[])
+  useEffect(()=>{let active=true;void cloudflareRequest<{suppliers:Supplier[]}>('/api/admin/catalog').then(result=>{if(active){setRows(result.suppliers);const first=result.suppliers.find(r=>r.enabled);if(first){setId(first.id);setName(first.name);setEnabled(true)}}}).catch(error=>{if(active)setStatus(error instanceof Error?error.message:'Catalog configuration unavailable.')});return()=>{active=false}},[])
   function select(value:string){setId(value);const row=rows.find(r=>r.id===value);setName(row?.name??'YoungPG Media');setEnabled(Boolean(row?.enabled));setEvidence('');if(key.current)key.current.value=''}
   async function save(event:FormEvent){event.preventDefault();setBusy(true);setStatus('')
     try{
@@ -22,7 +22,7 @@ export default function CloudflareCatalog({onComplete}:{onComplete:()=>Promise<v
     try{
       for(let batch=0;batch<2000;batch++){
         const result=await cloudflareRequest<{done:boolean;skipped?:string;phase:string;scanned:number}>('/api/admin/catalog',{action:'sync',id})
-        setStatus(`${result.phase??result.skipped}: ${result.scanned??0} listings scanned. Publication remains locked.`)
+        setStatus(`${result.phase??result.skipped}: ${result.scanned??0} listings scanned. Approval and publication remain separate.`)
         if(result.done){await onComplete();break}
         if(result.skipped)break
         await new Promise(resolve=>setTimeout(resolve,1600))
@@ -42,7 +42,7 @@ export default function CloudflareCatalog({onComplete}:{onComplete:()=>Promise<v
       <label><input type="checkbox" checked={enabled} onChange={e=>setEnabled(e.target.checked)}/>Enabled</label>
       <button className="cf-btn">Save / replace key</button>
     </fieldset></form>
-    <button className="cf-btn" disabled={busy||!id} onClick={()=>void sync()}>Sync complete catalog</button>
+    <button className="cf-btn" disabled={busy||!id||!rows.find(r=>r.id===id)?.enabled} onClick={()=>void sync()}>Sync complete catalog</button>
     <button className="cf-btn secondary" disabled={busy} onClick={()=>void refresh().catch(()=>setStatus('Status unavailable.'))}>Refresh progress</button>
     {status&&<p role="status">{status}</p>}
     {rows.map(row=><p key={row.id}>{row.name}: {row.last_status} · {row.scanned??0}/{row.total??'unknown'} scanned</p>)}

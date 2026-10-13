@@ -1,11 +1,11 @@
-// Shared by Pages Functions, the admin preview, and the static Supabase export.
+// Shared by Pages Functions, the admin preview, and the static Cloudflare export.
 // Templates describe notifications; rendering never sends or changes business records.
 export const emailTemplates = {
   welcome: ['Welcome to LOGSPOLL', 'Your account is ready.', 'Your email is verified. Welcome to your private digital marketplace.', 'Open marketplace', '/marketplace', 'Verified account activation', false],
-  verification: ['Verify your email', 'Your account. Your next move.', 'Verify your email to activate your LOGSPOLL account.', 'Verify email address', '', 'Supabase signup confirmation', true],
-  password_reset: ['Reset your password', 'Let’s get you back in.', 'Use the secure link below to choose a new password. If you did not request this, ignore this email.', 'Reset password', '', 'Supabase recovery request', true],
-  password_changed: ['Your password was changed', 'Your security comes first.', 'Your LOGSPOLL password was changed. If this was not you, reset your password and contact support immediately.', 'Secure my account', '/forgot-password', 'Supabase password-changed notification', true],
-  email_changed: ['Your email address was changed', 'Your account details changed.', 'Your LOGSPOLL email address was changed. If you did not authorize this, contact support immediately.', 'Contact support', '/support', 'Supabase email-changed notification', true],
+  verification: ['Verify your email', 'Your account. Your next move.', 'Verify your email to activate your LOGSPOLL account.', 'Verify email address', '', 'Cloudflare signup confirmation', true],
+  password_reset: ['Reset your password', 'Let’s get you back in.', 'Use the secure link below to choose a new password. If you did not request this, ignore this email.', 'Reset password', '', 'Cloudflare recovery request', true],
+  password_changed: ['Your password was changed', 'Your security comes first.', 'Your LOGSPOLL password was changed. If this was not you, reset your password and contact support immediately.', 'Secure my account', '/forgot-password', 'Cloudflare password-changed notification', true],
+  email_changed: ['Your email address was changed', 'Your account details changed.', 'Your LOGSPOLL email address was changed. If you did not authorize this, contact support immediately.', 'Contact support', '/support', 'Cloudflare email-changed notification', true],
   new_signin: ['New sign-in detected', 'Was this you?', 'A new or unusual sign-in was detected. Review your account security if you do not recognize this activity.', 'Review security', '/dashboard/settings', 'Reliable server-side sign-in detection; not yet implemented', true],
   wallet_funded: ['Wallet funding confirmed', 'Your funds are available.', 'Your funding payment was verified and your wallet ledger has been credited.', 'View transactions', '/dashboard/transactions', 'Verified funding AND committed wallet credit; wallet not implemented', true],
   funding_pending: ['Wallet funding pending', 'Your payment is processing.', 'Your funding request is pending. Funds are not available until payment verification and wallet credit are complete.', 'View transactions', '/dashboard/transactions', 'Persisted pending funding event; wallet not implemented', true],
@@ -36,6 +36,7 @@ export interface EmailData {
   refundStatus?: 'not_required' | 'pending' | 'completed' | 'not_confirmed'
   accountStatus?: 'restricted' | 'restored'
   confirmationUrl?: string
+  appOrigin?: string
   confirmationOrigin?: string
   confirmationProvider?: 'cloudflare'
   year?: number
@@ -48,20 +49,17 @@ const site = 'https://logspoll.com'
 const authKinds = new Set<EmailKind>(['verification', 'password_reset'])
 function confirmationLink(data: EmailData) {
   if (data.preview) return `${site}/verify-email#sample-only`
-  if (!data.confirmationUrl || !data.confirmationOrigin) throw new Error('A Supabase-generated URL and trusted confirmation origin are required.')
+  if (!data.confirmationUrl || !data.confirmationOrigin) throw new Error('A Cloudflare-generated URL and trusted confirmation origin are required.')
   const url = new URL(data.confirmationUrl)
   const origin = new URL(data.confirmationOrigin)
-  if (data.confirmationProvider === 'cloudflare') {
-    if (origin.protocol !== 'https:' || url.protocol !== 'https:' || url.origin !== origin.origin || url.username || url.password || !(/^\/api\/auth\/(verify-email|reset-password\/[A-Za-z0-9_-]+)$/.test(url.pathname))) throw new Error('Invalid Cloudflare confirmation URL.')
-    return url.href
-  }
-  if (origin.protocol !== 'https:' || url.protocol !== 'https:' || url.origin !== origin.origin || url.username || url.password || url.pathname !== '/auth/v1/verify') throw new Error('Invalid Supabase confirmation URL.')
+  if (origin.protocol !== 'https:' || url.protocol !== 'https:' || url.origin !== origin.origin || url.username || url.password || !(/^\/api\/auth\/(verify-email|reset-password\/[A-Za-z0-9_-]+)$/.test(url.pathname))) throw new Error('Invalid Cloudflare confirmation URL.')
   return url.href
 }
 export function renderEmail(kind: EmailKind, data: EmailData = {}) {
   if (!isEmailKind(kind)) throw new Error('Unknown email template.')
   const [subject, title, message, action, path] = emailTemplates[kind]
-  const url = authKinds.has(kind) ? confirmationLink(data) : site + path
+  const app=new URL(data.appOrigin??site);if(app.protocol!=='https:'||app.username||app.password||app.pathname!=='/'||app.search||app.hash)throw new Error('Invalid application origin.')
+  const url = authKinds.has(kind) ? confirmationLink(data) : app.origin + path
   const name = clean(data.firstName?.trim() || 'there')
   const facts: [string, string][] = []
   if (data.reference) facts.push(['Reference', clean(data.reference)])

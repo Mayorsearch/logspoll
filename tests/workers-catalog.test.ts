@@ -10,7 +10,7 @@ import type { ApiEnv,Database,Statement } from '../workers/api/types.ts'
 const connection='50000000-0000-4000-8000-000000000001'
 async function fixture(t: TestContext) {
   const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON')
-  for(const file of ['0001_staging_foundation.sql','0002_cloudflare_auth.sql','0003_auth_mail_diagnostics.sql','0004_supplier_review.sql','0005_supplier_sync.sql'])sqlite.exec(readFileSync(new URL('../workers/api/migrations/'+file,import.meta.url),'utf8'))
+  for(const file of ['0001_staging_foundation.sql','0002_cloudflare_auth.sql','0003_auth_mail_diagnostics.sql','0004_supplier_review.sql','0005_supplier_sync.sql','0006_admin_publication.sql'])sqlite.exec(readFileSync(new URL('../workers/api/migrations/'+file,import.meta.url),'utf8'))
   sqlite.exec(readFileSync(new URL('../workers/api/fixtures.sql',import.meta.url),'utf8'))
   const db={prepare(sql:string){let values:unknown[]=[];const stmt={bind(...args:unknown[]){values=args;return stmt},async all(){return{results:sqlite.prepare(sql).all(...values as never[]),success:true}},async first(){return(await stmt.all()).results[0]??null},async run(){return stmt.all()}};return stmt},async batch(statements:Statement[]){sqlite.exec('BEGIN');try{const rows=[];for(const stmt of statements)rows.push(await stmt.all());sqlite.exec('COMMIT');return rows}catch(error){sqlite.exec('ROLLBACK');throw error}},async exec(sql:string){sqlite.exec(sql)}} as Database
   const env:ApiEnv={ENVIRONMENT:'staging',DB:db,CATALOG_SYNC_ENABLED:'true',SUPPLIER_ENCRYPTION_KEY:btoa('s'.repeat(32))}

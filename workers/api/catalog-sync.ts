@@ -1,5 +1,6 @@
 import { categoriesFrom, collection, DESCRIPTION_REQUIRED, identifier, listingsFrom, pageIsComplete, record, resaleAllowlist, subcategoriesFrom, SupplierReadError, YOUNGPG_ORIGIN, youngpgGet } from '../../server/youngpg.ts'
 import { openCredential, sealCredential } from '../../server/supplier-crypto.ts'
+import { requireRuntime } from './runtime.ts'
 import { identity } from './auth.ts'
 import { HttpError, json } from './http.ts'
 import type { ApiEnv, Statement } from './types.ts'
@@ -22,7 +23,8 @@ async function commit(env:ApiEnv, c:Connection, owner:string, statements:Stateme
 }
 
 export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
-  if (env.ENVIRONMENT!=='staging' || env.CATALOG_SYNC_ENABLED!=='true' || !env.DB || !env.SUPPLIER_ENCRYPTION_KEY) throw new HttpError(503,'D1 catalog synchronization is not enabled/configured.')
+  await requireRuntime(env)
+  if ((env.ENVIRONMENT!=='staging'&&!(env.ENVIRONMENT==='production'&&env.PRODUCTION_CUTOVER_ENABLED==='true')) || env.CATALOG_SYNC_ENABLED!=='true' || !env.DB || !env.SUPPLIER_ENCRYPTION_KEY) throw new HttpError(503,'D1 catalog synchronization is not enabled/configured.')
   const db=env.DB; const now=Date.now(); const owner=crypto.randomUUID()
   const c=await db.prepare(`UPDATE staging_supplier_connections SET lease_owner=?,lease_until=?
     WHERE id=(SELECT id FROM staging_supplier_connections WHERE enabled=1 AND (? IS NULL OR id=?)
@@ -115,6 +117,7 @@ export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
           supplier_category_id=excluded.supplier_category_id,supplier_subcategory_id=excluded.supplier_subcategory_id,snapshot_id=excluded.snapshot_id`)
         .bind(c.id,job.started_at,job.id,job.id))
       statements.push(db.prepare('UPDATE staging_supplier_feed_items SET stock_quantity=0 WHERE connection_id=? AND (snapshot_id IS NULL OR snapshot_id<>?)').bind(c.id,job.id))
+      statements.push(db.prepare('INSERT OR IGNORE INTO supplier_snapshots(id,connection_id,revision,started_at,completed_at) VALUES(?,?,?,?,?)').bind(job.id,c.id,c.revision,job.started_at,now))
       statements.push(db.prepare("UPDATE supplier_sync_jobs SET phase='complete',completed_at=? WHERE id=?").bind(now,job.id))
       statements.push(db.prepare('UPDATE staging_supplier_connections SET last_verified_scan_at=? WHERE id=?').bind(now,c.id))
       next='complete'

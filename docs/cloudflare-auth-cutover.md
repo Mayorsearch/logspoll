@@ -1,5 +1,8 @@
 # Cloudflare authentication milestone — staging only
 
+Latest local Phase 1 progress, private customer enrollment, tests and remaining
+disconnect gates: [phase1-supabase-removal.md](phase1-supabase-removal.md).
+
 Better Auth 1.7.7 uses its native D1 adapter, maintained scrypt password hashing,
 Secure/HttpOnly/SameSite=Lax signed cookies, origin/CSRF checks, database-backed
 atomic rate limits, 15-minute verification/reset links and reset session revocation.

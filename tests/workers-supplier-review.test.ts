@@ -11,7 +11,7 @@ function setup() {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys=ON')
   for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql',
-    'migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql']) {
+    'migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql','migrations/0006_admin_publication.sql']) {
     sqlite.exec(readFileSync(new URL('../workers/api/'+file, import.meta.url), 'utf8'))
   }
   const db = {
@@ -60,12 +60,14 @@ async function member(ctx: ReturnType<typeof setup>) {
   return {cookie,id:body.user.id}
 }
 function stage(sqlite: DatabaseSync, externalId: string, kind = 'permitted_digital_good', authorized = 1) {
+  sqlite.prepare('INSERT OR IGNORE INTO supplier_snapshots(id,connection_id,revision,started_at,completed_at) VALUES(?,?,1,?,?)').run('test-snapshot',connect,Date.now()-1000,Date.now()-500)
   const previous=sqlite.prepare('SELECT authorized_products FROM staging_supplier_connections WHERE id=?').get(connect)!
   sqlite.prepare('UPDATE staging_supplier_connections SET enabled=1,authorized_products=? WHERE id=?')
     .run(JSON.stringify({...JSON.parse(String(previous.authorized_products)),[externalId]:'DOCUMENTED-LICENSE-REF'}),connect)
   sqlite.prepare(`INSERT INTO staging_supplier_feed_items(connection_id,external_id,name,source_category,supplier_cost_minor,
     stock_quantity,authorization_verified,evidence_reference,source_checked_at)
     VALUES(?,?,?,?,?,?,?,?,?)`).run(connect,externalId,'Synthetic licensed item',kind,500,4,authorized,'DOCUMENTED-LICENSE-REF',Date.now())
+  sqlite.prepare("UPDATE staging_supplier_feed_items SET snapshot_id='test-snapshot' WHERE connection_id=?").run(connect)
 }
 
 test('catalog settings require server admin role; key rotation preserves evidence and never returns ciphertext',async()=>{
@@ -101,40 +103,77 @@ test('staging D1 supplier review requires verified administrator, same-origin PO
   const response=await read.json() as {items:unknown[];supplierSyncEnabled:boolean;publicationEnabled:boolean;legacyApprovalsImported:boolean}
   assert.equal(response.items.length,1)
   assert.equal(response.supplierSyncEnabled,false)
-  assert.equal(response.publicationEnabled,false)
-  assert.equal(response.legacyApprovalsImported,false)
+  assert.equal(response.publicationEnabled,true)
   assert.equal((await apiFetch(request('/api/admin/supplier-review',{action:'reject',connection_id:connect,external_id:'approved-source'},cookie,'https://evil.test'),env)).status,403)
   assert.equal(sqlite.prepare('SELECT approval FROM staging_supplier_feed_items').get()!.approval,'pending')
   assert.equal((await apiFetch(request('/api/admin/supplier-review',{action:'reject',connection_id:connect,external_id:'approved-source'},cookie),env)).status,200)
   assert.equal(sqlite.prepare('SELECT approval FROM staging_supplier_feed_items').get()!.approval,'rejected')
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM staging_supplier_review_events').get()!.n,1)
 })
-test('D1 approval requires vetted rights and fresh supplier data but cannot publish, alter stock or bypass safeguards',async () => {
-  const ctx=setup();const {sqlite,env,request}=ctx
-  sqlite.prepare('INSERT INTO staging_supplier_connections(id,provider,name) VALUES(?,?,?)').run(connect,'youngpg','Synthetic YoungPG')
-  for (const [id,kind,verified] of [['license', 'permitted_digital_good',1],['accounts','account_access',1],['unverified','permitted_digital_good',0]] as const) stage(sqlite,id,kind,verified)
-  stage(sqlite,'stale')
-  sqlite.prepare('UPDATE staging_supplier_feed_items SET source_checked_at=0 WHERE external_id=?').run('stale')
-  const before=sqlite.prepare('SELECT * FROM products ORDER BY id').all()
-  const inventory=sqlite.prepare('SELECT * FROM inventory ORDER BY product_id').all()
-  const {cookie,id}=await member(ctx)
-  sqlite.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").run(id)
-  const action=(external_id:string,more:Record<string,unknown>={})=>request('/api/admin/supplier-review', {
-    action:'approve',connection_id:connect,external_id,category_id:category,price_minor:1800,
-    delivery_type:'Redemption code',description:'Synthetic reviewed licensed digital product.',...more,
-  },cookie)
-  assert.equal((await apiFetch(action('license',{price_minor:2.5}),env)).status,400)
-  assert.equal((await apiFetch(action('license',{category_id:'60000000-0000-4000-8000-000000000001'}),env)).status,409)
-  assert.equal((await apiFetch(action('accounts'),env)).status,409)
-  assert.equal((await apiFetch(action('unverified'),env)).status,409)
-  assert.equal((await apiFetch(action('stale'),env)).status,409)
-  const approved=await apiFetch(action('license'),env)
-  assert.equal(approved.status,200,await approved.clone().text())
-  assert.equal((await approved.json()).published,false)
-  assert.equal((await apiFetch(action('license'),env)).status,409)
-  assert.equal(sqlite.prepare('SELECT approval FROM staging_supplier_feed_items WHERE external_id=?').get('license')!.approval,'approved')
-  assert.deepEqual(sqlite.prepare('SELECT * FROM products ORDER BY id').all(),before)
-  assert.deepEqual(sqlite.prepare('SELECT * FROM inventory ORDER BY product_id').all(),inventory)
-  assert.equal(sqlite.prepare('SELECT available_quantity FROM staging_storefront_products').get()!.available_quantity,0)
-  assert.equal(sqlite.prepare('PRAGMA foreign_key_check').all().length,0)
+test('D1 approval, publication, stock revocation, price overrides and descriptions stay consistent',async()=>{
+ const ctx=setup(),{sqlite,request,env}=ctx;sqlite.prepare('INSERT INTO staging_supplier_connections(id,provider,name) VALUES(?,?,?)').run(connect,'youngpg','Reviewed supplier')
+ stage(sqlite,'license');stage(sqlite,'auto');stage(sqlite,'zero');stage(sqlite,'forbidden','account_access',1)
+ sqlite.prepare("UPDATE staging_supplier_feed_items SET stock_quantity=0 WHERE external_id='zero'").run()
+ const {cookie,id}=await member(ctx);sqlite.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").run(id)
+ const review=(external_id:string,price_minor?:number)=>request('/api/admin/supplier-review',{action:'approve',connection_id:connect,external_id,category_id:category,delivery_type:'Redemption code',description:'Administrator reviewed licensed digital utility.',...(price_minor===undefined?{}:{price_minor})},cookie)
+ assert.equal((await apiFetch(review('forbidden'),env)).status,409)
+ assert.equal((await apiFetch(review('license',2.3),env)).status,400)
+ const approved=await apiFetch(review('license',7777),env);assert.equal(approved.status,200,await approved.clone().text());const product=(await approved.json()).product_id
+ assert.equal((await apiFetch(review('license',7777),env)).status,200) // Retry creates no duplicates.
+ assert.equal(sqlite.prepare('SELECT count(*) n FROM supplier_products WHERE external_id=?').get('license')!.n,1)
+ assert.equal(sqlite.prepare('SELECT status FROM products WHERE id=?').get(product)!.status,'draft')
+ const action=(body:unknown)=>apiFetch(request('/api/admin/operations',body,cookie),env)
+ assert.equal((await action({action:'publish',id:product})).status,200)
+ let visible=await(await apiFetch(request('/api/products?category=synthetic-staging',undefined,cookie),env)).json()
+ assert.ok(visible.records.some((p:{id:string;available_quantity:number})=>p.id===product&&p.available_quantity===4))
+ const save={action:'save_product',id:product,category_id:category,name:'Reviewed utility',slug:'reviewed-utility',description:'Administrator edited description retained on future sync.',price_minor:9999,delivery_type:'Redemption code'}
+ assert.equal((await action(save)).status,200)
+ sqlite.prepare("UPDATE staging_supplier_feed_items SET supplier_cost_minor=600,supplier_description='Changed supplier description' WHERE external_id='license'").run()
+ assert.equal(sqlite.prepare('SELECT price_minor FROM products WHERE id=?').get(product)!.price_minor,9999)
+ assert.equal(sqlite.prepare('SELECT description FROM products WHERE id=?').get(product)!.description,save.description)
+ const automatic=await apiFetch(review('auto'),env);assert.equal(automatic.status,200);const autoId=(await automatic.json()).product_id
+ sqlite.prepare("UPDATE staging_supplier_feed_items SET supplier_cost_minor=800 WHERE external_id='auto'").run()
+ assert.equal(sqlite.prepare('SELECT price_minor FROM products WHERE id=?').get(autoId)!.price_minor,800)
+ const zero=await apiFetch(review('zero'),env);assert.equal(zero.status,200);assert.equal((await action({action:'publish',id:(await zero.json()).product_id})).status,409)
+ sqlite.prepare('UPDATE staging_supplier_connections SET enabled=0 WHERE id=?').run(connect)
+ assert.equal(sqlite.prepare('SELECT available_quantity FROM verified_product_stock WHERE id=?').get(product)!.available_quantity,0)
+ sqlite.prepare('UPDATE staging_supplier_connections SET enabled=1 WHERE id=?').run(connect)
+ assert.equal((await apiFetch(request('/api/admin/supplier-review',{action:'reject',connection_id:connect,external_id:'license'},cookie),env)).status,200)
+ visible=await(await apiFetch(request('/api/products',undefined,cookie),env)).json();assert.ok(!visible.records.some((p:{id:string})=>p.id===product))
+ assert.equal((await action({...save,available_quantity:100})).status,400)
+ assert.equal((await apiFetch(request('/api/admin/readiness',undefined,cookie),env)).status,200)
+ assert.equal((await apiFetch(request('/api/admin/operations',{action:'publish',id:product},cookie,'https://evil.test'),env)).status,403)
+ assert.equal(sqlite.prepare('PRAGMA foreign_key_check').all().length,0)
+})
+
+test('D1 admin CRUD, account restrictions, invitations, audit and durable notification events enforce roles',async()=>{
+ const ctx=setup(),{sqlite,request,env}=ctx;const first=await member(ctx)
+ assert.equal((await apiFetch(request('/api/admin/operations',undefined,first.cookie),env)).status,403)
+ sqlite.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").run(first.id)
+ const action=(body:unknown)=>apiFetch(request('/api/admin/operations',body,first.cookie),env)
+ const cat='60000000-0000-4000-8000-000000000001'
+ assert.equal((await action({action:'save_category',id:cat,name:'Utilities',short_name:'Tools',slug:'licensed-utilities',description:'Licensed digital utilities',active:true})).status,200)
+ const manual={action:'save_product',category_id:cat,name:'Licensed manual product',slug:'licensed-manual',description:'Verified licensed resource, reviewed for resale.',price_minor:1234,delivery_type:'Licensed digital download',available_quantity:2,evidence:'TEST-REVIEWED-LICENSE'}
+ const created=await action(manual);assert.equal(created.status,200,await created.clone().text());const product=(await created.json()).id
+ assert.equal((await action({action:'publish',id:product})).status,200)
+ assert.equal(sqlite.prepare('SELECT available_quantity FROM storefront_products WHERE id=?').get(product)!.available_quantity,2)
+ assert.equal((await action({action:'settings',value:{support_email:'support@example.test'}})).status,200)
+ assert.equal((await action({action:'account_status',id:first.id,status:'restricted'})).status,400)
+ const email='invitee@example.test',password='Synthetic secure password 2026!'
+ assert.equal((await apiFetch(request('/api/auth/sign-up/email',{email,password,name:'Invited Customer'}),env)).status,200)
+ sqlite.prepare('UPDATE auth_user SET emailVerified=1 WHERE email=?').run(email)
+ const login=await apiFetch(request('/api/auth/sign-in/email',{email,password}),env);assert.equal(login.status,200);const cookie=login.headers.get('set-cookie')!.split(';')[0]
+ const user=(await(await apiFetch(request('/api/account/session',undefined,cookie),env)).json()).user
+ assert.equal((await apiFetch(request('/api/account/admin-enrollment',{},cookie),env)).status,403)
+ assert.equal((await action({action:'invite_admin',id:user.id})).status,200)
+ assert.equal((await apiFetch(request('/api/account/admin-enrollment',{},cookie),env)).status,200)
+ assert.equal((await apiFetch(request('/api/account/admin-enrollment',{},cookie),env)).status,403)
+ assert.equal((await apiFetch(request('/api/admin/overview',undefined,cookie),env)).status,200)
+ assert.equal((await action({action:'account_status',id:user.id,status:'restricted'})).status,200)
+ assert.equal((await apiFetch(request('/api/account/session',undefined,cookie),env)).status,401)
+ assert.equal((await action({action:'account_status',id:user.id,status:'active'})).status,200)
+ assert.ok(Number(sqlite.prepare('SELECT count(*) n FROM business_mail_events').get()!.n)>=3)
+ assert.ok(Number(sqlite.prepare('SELECT count(*) n FROM audit_logs').get()!.n)>=5)
+ assert.equal((await action({action:'deliver',id:'40000000-0000-4000-8000-000000000001',instructions:'Not paid; must not deliver.'})).status,409)
+ assert.equal(sqlite.prepare('PRAGMA foreign_key_check').all().length,0)
 })

@@ -2,7 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readCatalog } from '../server/catalog-sync.ts'
 import { listingMetadata } from '../server/youngpg.ts'
-import { onRequestPost } from '../functions/api/internal/catalog-sync.ts'
 import { scheduledSync } from '../workers/catalog-scheduler/index.ts'
 import { productImages } from '../src/lib/product-images.ts'
 
@@ -68,16 +67,6 @@ test('detail identifiers must match and unsupported metadata never persists', as
     return Response.json({ success: true, data: [item(3, { slug: 'resource' })], meta: { current_page: 1, last_page: 1 } })
   })
   await assert.rejects(readCatalog(base, key, { 3: 'license-3' }, clock()), /identifier mismatch/)
-})
-
-test('scheduled sync is disabled by default and rejects missing, forged or browser authentication before storage access', async t => {
-  t.mock.method(globalThis, 'fetch', async () => { assert.fail('No backend or supplier access before machine authentication') })
-  const env = { SUPABASE_URL: 'https://project.supabase.co', SUPABASE_PUBLISHABLE_KEY: 'public', SUPPLIER_SYNC_ENABLED: 'true', SCHEDULER_SHARED_SECRET: 's'.repeat(48) }
-  const request = (headers = {}) => new Request('https://mobile-preview.logspoll.pages.dev/api/internal/catalog-sync', { method: 'POST', headers })
-  assert.equal((await onRequestPost({ request: request(), env: { ...env, SUPPLIER_SYNC_ENABLED: 'false' } })).status, 503)
-  assert.equal((await onRequestPost({ request: request(), env })).status, 401)
-  assert.equal((await onRequestPost({ request: request({ Authorization: 'Bearer forged-secret' }), env })).status, 401)
-  assert.equal((await onRequestPost({ request: request({ Authorization: `Bearer ${env.SCHEDULER_SHARED_SECRET}`, Origin: 'https://evil.test' }), env })).status, 403)
 })
 
 test('cron worker refuses production and credential-bearing targets', async t => {

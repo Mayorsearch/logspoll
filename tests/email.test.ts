@@ -1,13 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import { emailTemplates, renderEmail, sampleEmail, isEmailKind } from '../src/lib/email-templates.ts'
 import type { EmailKind } from '../src/lib/email-templates.ts'
 import { emailTestReady, sendTestEmail } from '../server/email.ts'
-import { onRequestGet, onRequestPost } from '../functions/api/admin/email.ts'
 
 const now = Date.parse('2026-10-12T12:00:00Z')
-const env = { SUPABASE_URL: 'https://project.supabase.co', SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_synthetic', RESEND_API_KEY: 're_synthetic_only', EMAIL_FROM: 'no-reply@logspoll.com', EMAIL_TEST_TO: 'approved@example.test', EMAIL_TEST_ENABLED: 'true' }
+const env = { AUTH_ORIGIN: 'https://staging.test', RESEND_API_KEY: 're_synthetic_only', EMAIL_FROM: 'no-reply@logspoll.com', EMAIL_TEST_TO: 'approved@example.test', EMAIL_TEST_ENABLED: 'true' }
 const input = { template: 'verification', requestId: '11111111-1111-4111-8111-111111111111', startedAt: now }
 test('all 22 templates have HTML, text, synthetic labels and safe account links', () => {
   assert.equal(Object.keys(emailTemplates).length, 22)
@@ -33,8 +31,8 @@ test('customer fields are escaped; invalid financial facts and auth origins are 
   assert.throws(() => renderEmail('payment_receipt', { amountMinor: 1.1 }))
   assert.throws(() => renderEmail('security_alert', { occurredAt: 'not-a-date' }))
   assert.throws(() => renderEmail('verification'))
-  for (const confirmationUrl of ['javascript:alert(1)', 'https://evil.test/auth/v1/verify', 'https://project.supabase.co/wrong-path', 'https://user:pass@project.supabase.co/auth/v1/verify']) assert.throws(() => renderEmail('password_reset', { confirmationUrl, confirmationOrigin: env.SUPABASE_URL }))
-  assert.match(renderEmail('verification', { confirmationUrl: `${env.SUPABASE_URL}/auth/v1/verify?token=synthetic&type=signup`, confirmationOrigin: env.SUPABASE_URL }).html, /token=synthetic&amp;type=signup/)
+  for (const confirmationUrl of ['javascript:alert(1)', 'https://evil.test/auth/v1/verify', 'https://staging.test/wrong-path', 'https://user:pass@staging.test/auth/v1/verify']) assert.throws(() => renderEmail('password_reset', { confirmationUrl, confirmationOrigin: env.AUTH_ORIGIN }))
+  assert.match(renderEmail('verification', { confirmationUrl: `${env.AUTH_ORIGIN}/api/auth/verify-email?token=synthetic&type=signup`, confirmationOrigin: env.AUTH_ORIGIN }).html, /token=synthetic&amp;type=signup/)
 })
 test('failure notifications distinguish payment from fulfillment and do not promise refunds', () => {
   const email = renderEmail('transaction_failed', { failureStage: 'fulfillment', refundStatus: 'not_confirmed' })
@@ -42,13 +40,6 @@ test('failure notifications distinguish payment from fulfillment and do not prom
   assert.match(email.text, /Refund status: not confirmed/)
   assert.match(renderEmail('order_cancelled').text, /does not confirm a refund/)
   assert.match(renderEmail('order_delivered').text, /Sensitive access details are never included/)
-})
-test('Supabase export retains native links and contains no invented tokens or preview data', async () => {
-  for (const kind of ['verification', 'password_reset', 'password_changed', 'email_changed']) {
-    const html = await readFile(new URL(`../emails/supabase/${kind}.html`, import.meta.url), 'utf8')
-    assert.doesNotMatch(html, /template\.invalid|SAMPLE EMAIL|SAMPLE-0001/)
-    if (['verification', 'password_reset'].includes(kind)) assert.match(html, /\{\{ \.ConfirmationURL \}\}/)
-  }
 })
 test('sending fails closed without approved server settings and rejects invalid/expired retries', async t => {
   t.mock.method(globalThis, 'fetch', () => { throw new Error('Unexpected network request') })
@@ -82,26 +73,4 @@ test('provider errors and network failures remain redacted, with no success assu
   await assert.rejects(sendTestEmail(env, input, now), /Acceptance is unknown/)
   t.mock.method(globalThis, 'fetch', async () => Response.json({ unexpected: 'private' }))
   await assert.rejects(sendTestEmail(env, input, now), /could not be confirmed/)
-})
-test('admin endpoint verifies identity/role and strips client recipients/content', async t => {
-  let role = 'customer'; let verified = true; let sent = 0
-  t.mock.method(globalThis, 'fetch', async (url: string, options?: RequestInit) => {
-    const path = new URL(String(url)).pathname
-    if (path === '/auth/v1/user') return Response.json({ id: '11111111-1111-4111-8111-111111111111', email_confirmed_at: verified ? '2026-10-12T00:00:00Z' : null })
-    if (path === '/rest/v1/user_roles') return Response.json({ role })
-    if (String(url) === 'https://api.resend.com/emails') { sent++; assert.deepEqual(JSON.parse(String(options?.body)).to, ['approved@example.test']); assert.doesNotMatch(String(options?.body), /evil|injected/); return Response.json({ id: 'provider-test-id' }) }
-    throw new Error('Unexpected network request')
-  })
-  const make = (authorized = true, origin = 'https://preview.test') => new Request('https://preview.test/api/admin/email', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin, ...(authorized ? { Authorization: `Bearer ${'a'.repeat(40)}` } : {}) }, body: JSON.stringify({ ...input, startedAt: Date.now(), to: 'evil@example.test', html: 'injected', role: 'admin' }) })
-  assert.equal((await onRequestPost({ request: make(false), env })).status, 401)
-  assert.equal((await onRequestPost({ request: make(true, 'https://evil.test'), env })).status, 403)
-  assert.equal((await onRequestPost({ request: make(), env })).status, 403)
-  role = 'admin'; verified = false
-  assert.equal((await onRequestPost({ request: make(), env })).status, 401)
-  assert.equal(sent, 0)
-  verified = true
-  assert.equal((await onRequestPost({ request: make(), env })).status, 200)
-  const status = await onRequestGet({ request: make(), env })
-  assert.deepEqual(await status.json(), { testReady: true, automaticDelivery: false, provider: 'Resend' })
-  assert.equal(sent, 1)
 })
