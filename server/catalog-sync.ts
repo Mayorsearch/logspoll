@@ -1,6 +1,6 @@
 import { HttpError } from './auth.ts'
 import { productImages } from '../src/lib/product-images.ts'
-import { categoriesFrom, collection, identifier, listingsFrom, missingDescription, pageIsComplete, record, subcategoriesFrom, SupplierReadError, youngpgGet, youngpgRequestTimeout } from './youngpg.ts'
+import { categoriesFrom, collection, identifier, listingSlug, listingsFrom, missingDescription, pageIsComplete, record, subcategoriesFrom, SupplierReadError, youngpgGet, youngpgRequestTimeout } from './youngpg.ts'
 export async function readCatalog(base: string, key: string, approved: Record<string, string>, options: {
   sleep?: (ms: number) => Promise<void>; now?: () => number; progress?: (status: string) => Promise<void>; categoriesOnly?: boolean
 } = {}) {
@@ -56,7 +56,7 @@ export async function readCatalog(base: string, key: string, approved: Record<st
           detailEnrichmentSkipped++
         } else {
           try {
-            const detail = record((await get(`listings/${identifier(item.slug)}`)).data)
+            const detail = record((await get(`listings/${listingSlug(item.slug)}`)).data)
             if (identifier(detail.id) !== id) throw new HttpError(502, 'Supplier detail identifier mismatch.')
             // Price/stock always come from the complete listing snapshot.
             // Never copy credentials or private detail fields.

@@ -10,14 +10,14 @@ import type { ApiEnv,Database,Statement } from '../workers/api/types.ts'
 const connection='50000000-0000-4000-8000-000000000001'
 async function fixture(t: TestContext) {
   const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON')
-  for(const file of ['0001_staging_foundation.sql','0002_cloudflare_auth.sql','0003_auth_mail_diagnostics.sql','0004_supplier_review.sql','0005_supplier_sync.sql','0006_admin_publication.sql'])sqlite.exec(readFileSync(new URL('../workers/api/migrations/'+file,import.meta.url),'utf8'))
+  for(const file of ['0001_staging_foundation.sql','0002_cloudflare_auth.sql','0003_auth_mail_diagnostics.sql','0004_supplier_review.sql','0005_supplier_sync.sql','0006_admin_publication.sql','0007_supplier_wide_authorization.sql','0008_sync_snapshot_retry.sql'])sqlite.exec(readFileSync(new URL('../workers/api/migrations/'+file,import.meta.url),'utf8'))
   sqlite.exec(readFileSync(new URL('../workers/api/fixtures.sql',import.meta.url),'utf8'))
   const db={prepare(sql:string){let values:unknown[]=[];const stmt={bind(...args:unknown[]){values=args;return stmt},async all(){return{results:sqlite.prepare(sql).all(...values as never[]),success:true}},async first(){return(await stmt.all()).results[0]??null},async run(){return stmt.all()}};return stmt},async batch(statements:Statement[]){sqlite.exec('BEGIN');try{const rows=[];for(const stmt of statements)rows.push(await stmt.all());sqlite.exec('COMMIT');return rows}catch(error){sqlite.exec('ROLLBACK');throw error}},async exec(sql:string){sqlite.exec(sql)}} as Database
   const env:ApiEnv={ENVIRONMENT:'staging',DB:db,CATALOG_SYNC_ENABLED:'true',SUPPLIER_ENCRYPTION_KEY:btoa('s'.repeat(32))}
   const sealed=await sealCredential('ypg_'+'a'.repeat(48),connection,env.SUPPLIER_ENCRYPTION_KEY)
   sqlite.prepare(`INSERT INTO staging_supplier_connections(id,provider,name,enabled,encrypted_key,key_nonce,authorized_products) VALUES(?,'youngpg','Test licensed supplier',1,?,?,?)`).run(connection,sealed.ciphertext,sealed.nonce,JSON.stringify({'1':'LICENSE-EVIDENCE-1','2':'LICENSE-EVIDENCE-2'}))
   let now=Date.now();t.mock.method(Date,'now',()=>now)
-  return{sqlite,env,db,async step(){now+=2000;return syncCatalogBatch(env,connection)},advance(ms:number){now+=ms}}
+  return{sqlite,env,db,async step(){now+=6000;return syncCatalogBatch(env,connection)},advance(ms:number){now+=ms}}
 }
 const listing=(id:string)=>({id,title:'Licensed utility '+id,slug:'utility-'+id,category:{slug:'utilities',title:'Utilities'},price_ngn:'20.05',available_stock:4})
 const categories=()=>Response.json({success:true,data:[{id:1,slug:'utilities',title:'Utilities'}]})
@@ -94,4 +94,89 @@ test('D1 catalog skips optional supplier subcategory calls and resumes older che
   assert.equal(f.sqlite.prepare('SELECT phase FROM supplier_sync_jobs').get()!.phase,'listings')
   assert.equal(paths.length,1) // resumed without a network request
   assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM supplier_sync_jobs').get()!.n,1)
+})
+
+test('listing failures persist redacted phase diagnostics, retain checkpoints and respect Retry-After',async t=>{
+  const f=await fixture(t)
+  t.mock.method(globalThis,'fetch',async input=>String(input).endsWith('/categories')?categories():Response.json({}, {status:429,headers:{'Retry-After':'120'}}))
+  await f.step()
+  await assert.rejects(f.step(),/Listing page 1: supplier rate limit/)
+  const job=f.sqlite.prepare('SELECT phase,page,scanned FROM supplier_sync_jobs').get()!
+  assert.equal(job.phase,'listings');assert.equal(job.page,1);assert.equal(job.scanned,0)
+  const c=f.sqlite.prepare('SELECT last_status,next_attempt,lease_owner FROM staging_supplier_connections').get()!
+  assert.match(String(c.last_status),/listings page 1: HTTP 429/)
+  assert.doesNotMatch(String(c.last_status),/ypg_|encrypted_key/)
+  assert.equal(c.next_attempt,Date.now()+120000);assert.equal(c.lease_owner,null)
+  assert.equal(f.sqlite.prepare('SELECT restart_required FROM supplier_sync_jobs').get()!.restart_required,0)
+  f.advance(60000);assert.equal((await f.step()).skipped,'busy_or_cooling_down')
+})
+
+test('scheduled synchronization resumes four bounded resources with pacing and a D1 heartbeat',async t=>{
+ const f=await fixture(t);const {default:worker}=await import('../workers/api/index.ts')
+ let reads=0
+ t.mock.method(globalThis,'fetch',async input=>{reads++;const u=new URL(String(input));if(u.pathname.endsWith('/categories'))return categories();if(u.pathname.endsWith('/listings'))return page(Number(u.searchParams.get('page')),u.searchParams.get('page')==='1'?['1']:['2']);return Response.json({success:true,data:{id:'1',description:'A licensed resource with public metadata.'}})})
+ t.mock.method(globalThis,'setTimeout',((callback:()=>void,ms:number)=>{assert.equal(ms,5500);f.advance(ms);callback();return 0}) as typeof setTimeout)
+ const tasks:Promise<unknown>[]=[]
+ worker.scheduled(null,f.env,{waitUntil(p){tasks.push(p)}});await Promise.all(tasks)
+ assert.equal(reads,4)
+ const job=f.sqlite.prepare('SELECT phase,scanned FROM supplier_sync_jobs').get()!
+ assert.equal(job.phase,'details');assert.equal(job.scanned,2)
+ assert.ok(f.sqlite.prepare("SELECT value FROM migration_metadata WHERE key='catalog_scheduler_heartbeat'").get())
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM staging_supplier_feed_items').get()!.n,0)
+})
+
+test('changed supplier totals restart only the invalid private snapshot after cooldown; transient failures do not',async t=>{
+ const f=await fixture(t)
+ t.mock.method(globalThis,'fetch',async input=>{const u=new URL(String(input));if(u.pathname.endsWith('/categories'))return categories();const p=Number(u.searchParams.get('page'));return Response.json({success:true,data:[listing(String(p))],meta:{current_page:p,last_page:p===1?2:3,total:p===1?2:3}})})
+ const before=f.sqlite.prepare('SELECT * FROM products').all()
+ await f.step();await f.step()
+ const old=f.sqlite.prepare('SELECT id FROM supplier_sync_jobs').get()!.id
+ await assert.rejects(f.step(),/snapshot changed/)
+ const held=f.sqlite.prepare('SELECT page,scanned,restart_required FROM supplier_sync_jobs').get()!
+ assert.equal(held.page,2);assert.equal(held.scanned,1);assert.equal(held.restart_required,1)
+ assert.equal((await f.step()).skipped,'busy_or_cooling_down')
+ f.advance(60000);await f.step()
+ const fresh=f.sqlite.prepare('SELECT id,page,scanned,restart_required FROM supplier_sync_jobs').get()!
+ assert.notEqual(fresh.id,old);assert.equal(fresh.page,1);assert.equal(fresh.scanned,0);assert.equal(fresh.restart_required,0)
+ assert.deepEqual(f.sqlite.prepare('SELECT * FROM products').all(),before)
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM staging_supplier_feed_items').get()!.n,0)
+})
+
+test('scheduler skips fresh completed snapshots but resumes incomplete checkpoints despite recent success',async t=>{
+ const f=await fixture(t);const {default:worker}=await import('../workers/api/index.ts')
+ const completed=Date.now()
+ f.sqlite.prepare('UPDATE staging_supplier_connections SET last_verified_scan_at=?').run(completed)
+ f.sqlite.prepare("INSERT INTO supplier_sync_jobs(id,connection_id,revision,phase,started_at,completed_at,categories,scanned,total,last_page) VALUES('held',?,1,'complete',?,?,?,0,0,1)").run(connection,completed,completed,JSON.stringify([{id:'1',slug:'utilities',name:'Utilities'}]))
+ let reads=0
+ t.mock.method(globalThis,'fetch',async()=>{reads++;return Response.json({success:true,data:[],meta:{current_page:1,last_page:1,total:0}})})
+ t.mock.method(globalThis,'setTimeout',((callback:()=>void,ms:number)=>{f.advance(ms);callback();return 0}) as typeof setTimeout)
+ const tick=async()=>{const tasks:Promise<unknown>[]=[];worker.scheduled(null,f.env,{waitUntil(p){tasks.push(p)}});await Promise.all(tasks)}
+ const held=f.sqlite.prepare('SELECT * FROM supplier_sync_jobs').get()
+ await tick();f.advance(30*60*1000-1);await tick()
+ assert.equal(reads,0);assert.deepEqual(f.sqlite.prepare('SELECT * FROM supplier_sync_jobs').get(),held)
+ assert.equal(f.sqlite.prepare('SELECT lease_owner FROM staging_supplier_connections').get()!.lease_owner,null)
+ // An incomplete job must resume, rather than wait for the last success interval.
+ f.sqlite.prepare("UPDATE supplier_sync_jobs SET phase='listings',completed_at=NULL").run()
+ await tick()
+ const resumed=f.sqlite.prepare('SELECT id,phase FROM supplier_sync_jobs').get()!
+ assert.equal(reads,1);assert.equal(resumed.id,'held');assert.equal(resumed.phase,'complete')
+})
+
+test('automatic starts allow the exact 30-minute boundary; explicit refresh still honors cooldowns and leases',async t=>{
+ const f=await fixture(t);const completed=Date.now()
+ f.sqlite.prepare('UPDATE staging_supplier_connections SET last_verified_scan_at=?').run(completed)
+ f.sqlite.prepare("INSERT INTO supplier_sync_jobs(id,connection_id,revision,phase,started_at,completed_at) VALUES('held',?,1,'complete',?,?)").run(connection,completed,completed)
+ t.mock.method(globalThis,'fetch',async()=>categories())
+ assert.equal((await syncCatalogBatch(f.env)).skipped,'busy_or_cooling_down')
+ f.sqlite.prepare('UPDATE staging_supplier_connections SET next_attempt=?').run(Date.now()+1000)
+ assert.equal((await syncCatalogBatch(f.env,connection)).skipped,'busy_or_cooling_down')
+ f.sqlite.prepare('UPDATE staging_supplier_connections SET next_attempt=0,lease_owner=?,lease_until=?').run('other-owner',Date.now()+1000)
+ assert.equal((await syncCatalogBatch(f.env,connection)).skipped,'busy_or_cooling_down')
+ f.sqlite.prepare('UPDATE staging_supplier_connections SET lease_owner=NULL,lease_until=NULL').run()
+ assert.equal((await syncCatalogBatch(f.env,connection)).phase,'listings')
+ // Simulate another successful completed scan, retaining the same test checkpoint.
+ f.sqlite.prepare("UPDATE supplier_sync_jobs SET phase='complete'").run()
+ f.sqlite.prepare('UPDATE staging_supplier_connections SET next_attempt=0,last_verified_scan_at=?').run(completed)
+ f.advance(30*60*1000)
+ assert.equal((await syncCatalogBatch(f.env)).phase,'listings')
 })

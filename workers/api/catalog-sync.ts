@@ -1,4 +1,4 @@
-import { categoriesFrom, collection, DESCRIPTION_REQUIRED, identifier, listingsFrom, pageIsComplete, record, resaleAllowlist, SupplierReadError, YOUNGPG_ORIGIN, youngpgGet } from '../../server/youngpg.ts'
+import { categoriesFrom, collection, DESCRIPTION_REQUIRED, identifier, listingSlug, listingsFrom, pageIsComplete, record, resaleAllowlist, SupplierReadError, YOUNGPG_ORIGIN, youngpgGet } from '../../server/youngpg.ts'
 import { openCredential, sealCredential } from '../../server/supplier-crypto.ts'
 import { requireRuntime } from './runtime.ts'
 import { identity } from './auth.ts'
@@ -8,7 +8,16 @@ import type { ApiEnv, Statement } from './types.ts'
 type Category = ReturnType<typeof categoriesFrom>[number]
 type Product = ReturnType<typeof listingsFrom>['products'][number]
 interface Connection { id:string; revision:number; encrypted_key:string; key_nonce:string; authorized_products:string }
-interface Job { id:string; phase:string; revision:number; page:number; subcategory_index:number; categories:string; started_at:number; scanned:number; total:number|null; last_page:number|null }
+interface Job { id:string; phase:string; revision:number; page:number; subcategory_index:number; categories:string; started_at:number; scanned:number; total:number|null; last_page:number|null; restart_required:number }
+class SnapshotChangedError extends HttpError {
+  constructor(){super(409,'Supplier snapshot changed. Checkpoint retained for diagnosis; next retry starts a new snapshot. No publication.')}
+}
+
+async function backgroundReady(env:ApiEnv) {
+  const heartbeat=await env.DB!.prepare("SELECT value FROM migration_metadata WHERE key='catalog_scheduler_heartbeat'").first<{value:string}>()
+  const time=Number(heartbeat?.value)
+  return Number.isFinite(time)&&time<=Date.now()&&time>Date.now()-120000
+}
 
 // Every mutation batch asserts current ownership inside the same transaction.
 async function commit(env:ApiEnv, c:Connection, owner:string, statements:Statement[]) {
@@ -29,15 +38,21 @@ export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
   const c=await db.prepare(`UPDATE staging_supplier_connections SET lease_owner=?,lease_until=?
     WHERE id=(SELECT id FROM staging_supplier_connections WHERE enabled=1 AND (? IS NULL OR id=?)
       AND next_attempt<=? AND (lease_until IS NULL OR lease_until<=?)
+      AND (? IS NOT NULL OR last_verified_scan_at IS NULL OR last_verified_scan_at<=?
+        OR EXISTS(SELECT 1 FROM supplier_sync_jobs j WHERE j.connection_id=staging_supplier_connections.id
+          AND (j.phase<>'complete' OR j.restart_required=1)))
       ORDER BY COALESCE(last_verified_scan_at,0),id LIMIT 1)
     RETURNING id,revision,encrypted_key,key_nonce,authorized_products`)
-    .bind(owner,now+300000,connectionId??null,connectionId??null,now,now).first<Connection>()
+    // Only automatic starts wait 30 minutes after success; incomplete jobs and
+    // explicit refresh requests still obey the existing cooldown and lease checks.
+    .bind(owner,now+300000,connectionId??null,connectionId??null,now,now,connectionId??null,now-30*60*1000).first<Connection>()
   if (!c) return {done:false,skipped:'busy_or_cooling_down'}
+  let location='initialization'
   try {
     const approved=resaleAllowlist(JSON.parse(c.authorized_products))
     if (!Object.keys(approved).length) throw new HttpError(409,'Supplier-wide or product-specific resale authorization reference is required before ingestion.')
     let job=await db.prepare('SELECT * FROM supplier_sync_jobs WHERE connection_id=?').bind(c.id).first<Job>()
-    if (!job || job.phase==='complete' || job.revision!==c.revision || now-job.started_at>3600000) {
+    if (!job || job.phase==='complete' || job.restart_required===1 || job.revision!==c.revision || now-job.started_at>3600000) {
       const id=crypto.randomUUID()
       await commit(env,c,owner,[
         db.prepare('DELETE FROM supplier_sync_jobs WHERE connection_id=?').bind(c.id),
@@ -45,9 +60,10 @@ export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
       ])
       job=(await db.prepare('SELECT * FROM supplier_sync_jobs WHERE id=?').bind(id).first<Job>())!
     }
+    location=job.phase==='listings'?`listings page ${job.page}`:job.phase
     const key=await openCredential(c.encrypted_key,c.key_nonce,c.id,env.SUPPLIER_ENCRYPTION_KEY)
     let categories=JSON.parse(job.categories) as Category[]
-    const statements:Statement[]=[]; let next=job.phase; let page=job.page; let sub=job.subcategory_index; let scanned=job.scanned
+    const statements:Statement[]=[]; let next=job.phase; let page=job.page; const sub=job.subcategory_index; let scanned=job.scanned
     let total=job.total; let last=job.last_page
     const get=(resource:Parameters<typeof youngpgGet>[2],p=1)=>youngpgGet(YOUNGPG_ORIGIN,key,resource,p)
     if (job.phase==='categories') {
@@ -63,12 +79,12 @@ export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
       const response=await get('listings',page); const values=collection(response); const meta=record(values.meta)
       const complete=pageIsComplete(response,page,values.rows.length)
       const declaredTotal=Number(meta.total);const declaredLast=Number(meta.last_page)
-      if (!Number.isSafeInteger(declaredTotal)||declaredTotal<0||declaredTotal>100000||!Number.isSafeInteger(declaredLast)||declaredLast<1||declaredLast>1000 ||
-        (total!==null&&total!==declaredTotal)||(last!==null&&last!==declaredLast)) throw new HttpError(502,'Supplier snapshot pagination changed. Retry a new snapshot.')
+      if (!Number.isSafeInteger(declaredTotal)||declaredTotal<0||declaredTotal>100000||!Number.isSafeInteger(declaredLast)||declaredLast<1||declaredLast>1000) throw new HttpError(502,'Supplier snapshot pagination is invalid. No publication.')
+      if ((total!==null&&total!==declaredTotal)||(last!==null&&last!==declaredLast)) throw new SnapshotChangedError()
       total=declaredTotal;last=declaredLast
       const ids=values.rows.map(v=>identifier(record(v).id)); const mapped=listingsFrom(values.rows,categories,approved)
       categories=mapped.categories;scanned+=ids.length
-      if (complete&&scanned!==total) throw new HttpError(502,'Supplier snapshot count mismatch; nothing published.')
+      if (complete&&scanned!==total) throw new SnapshotChangedError()
       statements.push(db.prepare('INSERT INTO supplier_sync_seen(job_id,external_id) SELECT ?,value FROM json_each(?)').bind(job.id,JSON.stringify(ids)))
       statements.push(db.prepare(`INSERT INTO supplier_sync_items(job_id,external_id,metadata,detail_done)
         SELECT ?,json_extract(value,'$.id'),value,CASE WHEN json_extract(value,'$.slug') IS NULL THEN 1 ELSE 0 END FROM json_each(?)`)
@@ -79,7 +95,7 @@ export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
       if (!pending) next='finalize'
       else {
         const product=JSON.parse(pending.metadata) as Product
-        const detail=record((await get(`listings/${identifier(product.slug)}`)).data)
+        const detail=record((await get(`listings/${listingSlug(product.slug)}`)).data)
         if (identifier(detail.id)!==product.id) throw new HttpError(502,'Supplier detail identifier mismatch.')
         const category=categories.find(v=>v.id===product.category_id)
         if (!category) throw new HttpError(502,'Supplier category checkpoint mismatch.')
@@ -124,14 +140,22 @@ export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
     if (next!=='complete') statements.push(db.prepare('UPDATE supplier_sync_jobs SET phase=?,page=?,subcategory_index=?,categories=?,scanned=?,total=?,last_page=? WHERE id=?')
       .bind(next,page,sub,JSON.stringify(categories),scanned,total,last,job.id))
     statements.push(db.prepare('UPDATE staging_supplier_connections SET lease_owner=NULL,lease_until=NULL,last_status=?,next_attempt=? WHERE id=? AND lease_owner=?')
-      .bind(next==='complete'?'Verified snapshot stored; review required':`Catalog ${next}; ${scanned} scanned`,Date.now()+1500,c.id,owner))
+      .bind(next==='complete'?'Verified snapshot stored; review required':`Catalog ${next}; ${scanned} scanned`,Date.now()+5500,c.id,owner))
     await commit(env,c,owner,statements)
     return {done:next==='complete',connection_id:c.id,job_id:job.id,phase:next,scanned,publicationEnabled:false}
   } catch(error) {
     const delay=error instanceof SupplierReadError?Math.max(30000,error.retryAfterMs):60000
+    // Adapter errors contain fixed diagnostics, never upstream bodies or secrets.
+    const status=error instanceof HttpError?error.status:503
+    const reason=error instanceof HttpError?error.message:'Database or runtime operation failed.'
+    const diagnostic=`Catalog ${location}: HTTP ${status}. ${reason} Checkpoint retained; no publication.`
+    console.warn(JSON.stringify({event:'catalog_sync_failed',location,status,reason}))
     // Expiry does not prevent cleanup, but a changed owner always does.
-    await db.prepare('UPDATE staging_supplier_connections SET lease_owner=NULL,lease_until=NULL,next_attempt=?,last_status=? WHERE id=? AND lease_owner=?')
-      .bind(Date.now()+delay,'Batch failed; checkpoint retained. No publication.',c.id,owner).run()
+    const cleanup:Statement[]=[]
+    if(error instanceof SnapshotChangedError) cleanup.push(db.prepare(`UPDATE supplier_sync_jobs SET restart_required=1 WHERE connection_id=? AND revision=? AND EXISTS(SELECT 1 FROM staging_supplier_connections WHERE id=? AND lease_owner=?)`).bind(c.id,c.revision,c.id,owner))
+    cleanup.push(db.prepare('UPDATE staging_supplier_connections SET lease_owner=NULL,lease_until=NULL,next_attempt=?,last_status=? WHERE id=? AND lease_owner=?')
+      .bind(Date.now()+delay,diagnostic,c.id,owner))
+    await db.batch(cleanup)
     if (error instanceof HttpError) throw error
     if (error instanceof SupplierReadError) throw new HttpError(error.status,error.message)
     throw new HttpError(503,'Catalog batch rejected or unavailable; checkpoint retained. No partial snapshot published.')
@@ -147,7 +171,7 @@ export async function catalogAdmin(request:Request,env:ApiEnv) {
       j.phase,j.page,j.scanned,j.total,
       CASE WHEN json_type(c.authorized_products,'$."*"')='text' THEN 1 ELSE 0 END AS supplier_wide_authorized
       FROM staging_supplier_connections c LEFT JOIN supplier_sync_jobs j ON j.connection_id=c.id ORDER BY c.name`).all()
-    return json({suppliers:result.results,publicationEnabled:false})
+    return json({suppliers:result.results,backgroundReady:await backgroundReady(env),publicationEnabled:false})
   }
   if (request.method!=='POST'||request.headers.get('Origin')!==new URL(request.url).origin) throw new HttpError(403,'Same-origin POST required.')
   if (!request.headers.get('Content-Type')?.startsWith('application/json')) throw new HttpError(415,'JSON required.')
@@ -159,7 +183,21 @@ export async function catalogAdmin(request:Request,env:ApiEnv) {
   try{body=record(JSON.parse(new TextDecoder().decode(bytes)))}catch{throw new HttpError(400,'Invalid JSON.')}
   const id=typeof body.id==='string'?body.id:crypto.randomUUID()
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id)) throw new HttpError(400,'Invalid supplier ID.')
-  if (body.action==='sync') return json(await syncCatalogBatch(env,id))
+  if (body.action==='sync') {
+    if (env.CATALOG_SYNC_ENABLED!=='true'||!env.SUPPLIER_ENCRYPTION_KEY) throw new HttpError(503,'D1 catalog synchronization is not enabled/configured.')
+    // A recent heartbeat proves a scheduler is running against THIS D1 database.
+    // Existing enabled connections are durable jobs; no browser polling is needed.
+    if (await backgroundReady(env)) {
+      const queued=await env.DB.prepare('SELECT enabled,authorized_products FROM staging_supplier_connections WHERE id=?').bind(id).first<{enabled:number;authorized_products:string}>()
+      if (!queued?.enabled) throw new HttpError(409,'Enable the supplier before synchronization.')
+      if (!Object.keys(resaleAllowlist(JSON.parse(queued.authorized_products))).length) throw new HttpError(409,'Resale authorization reference required.')
+      // Persist manual refresh intent for the scheduler without resetting an
+      // incomplete checkpoint or changing its cooldown/lease ownership.
+      await env.DB.prepare("UPDATE supplier_sync_jobs SET restart_required=1 WHERE connection_id=? AND phase='complete'").bind(id).run()
+      return json({queued:true,done:false,phase:'background',message:'Background synchronization active. You may close this page; use Refresh progress to check status.'},202)
+    }
+    return json(await syncCatalogBatch(env,id))
+  }
   if (body.action!=='save'||typeof body.name!=='string'||body.name.trim().length<2||body.name.length>120||!Number.isSafeInteger(body.revision)||typeof body.enabled!=='boolean') throw new HttpError(400,'Invalid supplier configuration.')
   const existing=await env.DB.prepare('SELECT encrypted_key,key_nonce,authorized_products FROM staging_supplier_connections WHERE id=?').bind(id).first<{encrypted_key:string;key_nonce:string;authorized_products:string}>()
   let approved:Record<string,string>

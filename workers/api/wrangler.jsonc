@@ -41,6 +41,29 @@
       "vars": {
         "ENVIRONMENT": "locked"
       }
+    },
+    "catalog-production": {
+      "name": "logspoll-catalog-production",
+      "workers_dev": false,
+      "vars": {
+        "ENVIRONMENT": "production",
+        "PRODUCTION_CUTOVER_ENABLED": "true",
+        "AUTH_ENABLED": "false",
+        "CATALOG_SYNC_ENABLED": "true"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "logspoll-d1-production",
+          "database_id": "f0be42ec-fbae-4134-9eef-19ef26098e33",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "triggers": {
+        "crons": [
+          "* * * * *"
+        ]
+      }
     }
   }
 }

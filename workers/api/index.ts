@@ -93,11 +93,14 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
 export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, context: Execution) => {
   context.waitUntil(requireRuntime(env).then(()=>drainBusinessMail(env)).then(()=>drainMail(env)).catch(()=>{}))
   if (env.CATALOG_SYNC_ENABLED==='true') context.waitUntil((async()=>{
-    // Two resources per minute; bounded D1 queries/subrequests on the Free plan.
-    for(let batch=0;batch<2;batch++) {
+    await requireRuntime(env)
+    await env.DB!.prepare("INSERT INTO migration_metadata(key,value) VALUES('catalog_scheduler_heartbeat',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run()
+    // Four bounded resources per minute keep the observed 103 eligible details
+    // plus 16 listing pages within the existing one-hour snapshot safety window.
+    for(let batch=0;batch<4;batch++) {
       try { const result=await syncCatalogBatch(env); if(result.skipped) break }
       catch { break /* Redacted failure/cooldown is persisted by the batch handler. */ }
-      if(batch===0) await new Promise(resolve=>setTimeout(resolve,1600))
+      if(batch<3) await new Promise(resolve=>setTimeout(resolve,5500))
     }
   })())
 } }

@@ -59,3 +59,23 @@ test('an upstream credential echo is rejected rather than returned as catalog me
 test('checkout remains unavailable and cannot fabricate a charge or order', async () => {
   assert.equal(checkout().status, 503)
 })
+
+test('restricted long supplier titles cannot block eligible inventory; eligible metadata still fails closed', () => {
+  const categories=[{id:'1',slug:'utilities',name:'Utilities'}]
+  const good={id:'good',title:'Licensed utility',description:'Authorized digital resource.',category:{slug:'utilities',title:'Utilities'},price_ngn:'10.00',available_stock:3}
+  const restricted={...good,id:'restricted',title:'Facebook account '+ 'x'.repeat(502),available_stock:-1}
+  assert.deepEqual(listingsFrom([restricted,good],categories,{'*':'LICENSE-WIDE'}).products.map(p=>p.id),['good'])
+  assert.throws(()=>listingsFrom([{...good,title:'x'.repeat(201)}],categories,{'*':'LICENSE-WIDE'}))
+  assert.throws(()=>listingsFrom([restricted,restricted],categories,{'*':'LICENSE-WIDE'}),/Duplicate/)
+})
+
+test('long public YoungPG slugs remain route-safe without relaxing supplier IDs',async t=>{
+ const {listingSlug,identifier,listingMetadata}=await import('../server/youngpg.ts')
+ const slug='licensed-'+ 's'.repeat(111)
+ assert.equal(listingSlug(slug).length,120)
+ assert.equal(listingMetadata({slug}).slug,slug)
+ assert.throws(()=>identifier(slug))
+ for(const value of ['../private','resource?token=secret','resource/path','s'.repeat(256)])assert.throws(()=>listingSlug(value))
+ t.mock.method(globalThis,'fetch',async input=>{assert.equal(new URL(String(input)).pathname,'/api/v1/listings/'+slug);return Response.json({success:true,data:{id:1}})})
+ await youngpgGet('https://youngpgmedia.com.ng',apiKey,`listings/${slug}`)
+})

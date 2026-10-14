@@ -71,8 +71,9 @@ export default function CloudflareCatalog({ onComplete }: { onComplete: () => Pr
     try {
       for (let batch = 0; batch < 2000; batch++) {
         const result = await cloudflareRequest<{
-          done: boolean; skipped?: string; phase: string; scanned: number
+          done: boolean; queued?: boolean; message?: string; skipped?: string; phase: string; scanned: number
         }>('/api/admin/catalog', { action: 'sync', id })
+        if (result.queued) { setStatus(result.message ?? 'Background synchronization active. You may close this page.'); break }
         setStatus(`${result.phase ?? result.skipped}: ${result.scanned ?? 0} listings scanned. Approval and publication remain separate.`)
         if (result.done) { await onComplete(); break }
         if (result.skipped) break

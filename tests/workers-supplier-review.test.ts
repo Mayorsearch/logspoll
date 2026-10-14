@@ -11,7 +11,7 @@ function setup() {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys=ON')
   for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql',
-    'migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql','migrations/0006_admin_publication.sql']) {
+    'migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql','migrations/0006_admin_publication.sql','migrations/0007_supplier_wide_authorization.sql','migrations/0008_sync_snapshot_retry.sql']) {
     sqlite.exec(readFileSync(new URL('../workers/api/'+file, import.meta.url), 'utf8'))
   }
   const db = {
@@ -176,4 +176,35 @@ test('D1 admin CRUD, account restrictions, invitations, audit and durable notifi
  assert.ok(Number(sqlite.prepare('SELECT count(*) n FROM audit_logs').get()!.n)>=5)
  assert.equal((await action({action:'deliver',id:'40000000-0000-4000-8000-000000000001',instructions:'Not paid; must not deliver.'})).status,409)
  assert.equal(sqlite.prepare('PRAGMA foreign_key_check').all().length,0)
+})
+
+test('supplier-wide evidence authorizes review and verified stock; product-specific evidence overrides it',async()=>{
+ const ctx=setup(),{sqlite,request,env}=ctx;const {cookie,id}=await member(ctx)
+ sqlite.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").run(id)
+ sqlite.prepare('INSERT INTO staging_supplier_connections(id,provider,name) VALUES(?,?,?)').run(connect,'youngpg','Licensed supplier')
+ stage(sqlite,'wide-item')
+ sqlite.prepare('UPDATE staging_supplier_connections SET authorized_products=? WHERE id=?').run(JSON.stringify({'*':'DOCUMENTED-LICENSE-REF'}),connect)
+ const body={action:'approve',connection_id:connect,external_id:'wide-item',category_id:category,description:'Reviewed licensed digital resource for authorized resale.',delivery_type:'Redemption code'}
+ const approved=await apiFetch(request('/api/admin/supplier-review',body,cookie),env)
+ assert.equal(approved.status,200,await approved.clone().text());const product=(await approved.json()).product_id
+ assert.equal(sqlite.prepare('SELECT available_quantity FROM verified_product_stock WHERE id=?').get(product)!.available_quantity,4)
+ sqlite.prepare('UPDATE staging_supplier_connections SET authorized_products=? WHERE id=?').run(JSON.stringify({'*':'DOCUMENTED-LICENSE-REF','wide-item':'DIFFERENT-PRODUCT-EVIDENCE'}),connect)
+ assert.equal(sqlite.prepare('SELECT available_quantity FROM verified_product_stock WHERE id=?').get(product)!.available_quantity,0)
+ assert.equal((await apiFetch(request('/api/admin/supplier-review',body,cookie),env)).status,409)
+ sqlite.prepare('UPDATE staging_supplier_connections SET authorized_products=? WHERE id=?').run(JSON.stringify({'*':'WRONG-WIDE','wide-item':'DOCUMENTED-LICENSE-REF'}),connect)
+ assert.equal(sqlite.prepare('SELECT available_quantity FROM verified_product_stock WHERE id=?').get(product)!.available_quantity,4)
+ const before=sqlite.prepare('SELECT * FROM products').all()
+ const queuedBody={action:'sync',id:connect};env.CATALOG_SYNC_ENABLED='true'
+ sqlite.prepare("INSERT INTO migration_metadata(key,value) VALUES('catalog_scheduler_heartbeat',?)").run(String(Date.now()))
+ sqlite.prepare("INSERT INTO supplier_sync_jobs(id,connection_id,revision,phase,started_at,completed_at) VALUES('manual-refresh',?,1,'complete',?,?)").run(connect,Date.now(),Date.now())
+ const queued=await apiFetch(request('/api/admin/catalog',queuedBody,cookie),env)
+ assert.equal(queued.status,202);assert.equal((await queued.json()).queued,true)
+ assert.equal(sqlite.prepare('SELECT restart_required FROM supplier_sync_jobs').get()!.restart_required,1)
+ sqlite.prepare("UPDATE supplier_sync_jobs SET phase='listings',restart_required=0").run()
+ assert.equal((await apiFetch(request('/api/admin/catalog',queuedBody,cookie),env)).status,202)
+ assert.equal(sqlite.prepare('SELECT restart_required FROM supplier_sync_jobs').get()!.restart_required,0)
+ assert.deepEqual(sqlite.prepare('SELECT * FROM products').all(),before)
+ sqlite.prepare("UPDATE migration_metadata SET value=? WHERE key='catalog_scheduler_heartbeat'").run(String(Date.now()-180000))
+ const status=await apiFetch(request('/api/admin/catalog',undefined,cookie),env)
+ assert.equal((await status.json()).backgroundReady,false)
 })

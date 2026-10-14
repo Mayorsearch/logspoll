@@ -37,6 +37,13 @@ export const identifier = (value: unknown) => {
     throw new HttpError(502, "Invalid supplier identifier.");
   return String(value);
 };
+// YoungPG emits public listing slugs longer than its short identifiers. Keep
+// route-safe characters while allowing the provider's observed 120-char slug.
+export const listingSlug = (value: unknown) => {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,254}$/.test(value))
+    throw new HttpError(502, 'Invalid supplier listing slug.');
+  return value;
+};
 const label = (value: unknown, max: number, allowLines = false) => {
   const reason =
     typeof value !== "string"
@@ -86,7 +93,7 @@ export async function youngpgGet(
   page = 1,
 ) {
   supplierOrigin(base);
-  if (!/^(categories|listings|categories\/[a-zA-Z0-9_-]{1,100}\/subcategories|listings\/[a-zA-Z0-9_-]{1,100})$/.test(resource))
+  if (!/^(categories|listings|categories\/[a-zA-Z0-9_-]{1,100}\/subcategories|listings\/[a-zA-Z0-9_-]{1,255})$/.test(resource))
     throw new HttpError(400, 'Only documented catalog read endpoints are permitted.');
   if (!/^ypg_[a-fA-F0-9]{48}$/.test(key))
     throw new HttpError(
@@ -257,6 +264,10 @@ export function listingsFrom(
     const authorization = approved[id] ?? approved['*'];
     if (!authorization) continue;
 
+    // Reject restricted inventory before validating display-field limits. Such
+    // inventory must never block ingestion of independently eligible listings.
+    if (typeof item.title === 'string' &&
+        excluded.test(`${item.title} ${typeof item.description === 'string' ? item.description : ''}`)) continue;
     const name = label(item.title, 200);
     const description = missingDescription(item.description) ? DESCRIPTION_REQUIRED : label(item.description, 10000, true);
     // Never automatically stage credential or compromised-account inventory.
@@ -307,7 +318,7 @@ export class SupplierReadError extends HttpError {
 // Explicit projection only: never store arbitrary detail responses or fulfillment fields.
 export function listingMetadata(item: Metadata) {
   const result: { slug?: string; image_url?: string; image_urls?: string[]; supplier_status?: string; subcategory_id?: string; sold_count?: number } = {}
-  if (item.slug != null) result.slug = identifier(item.slug)
+  if (item.slug != null) result.slug = listingSlug(item.slug)
   const images = productImages(item)
   if (images.length) { result.image_urls = images; result.image_url = images[0] }
   if (typeof item.status === 'string' && ['active', 'inactive', 'available', 'unavailable', 'discontinued', 'sold_out'].includes(item.status)) result.supplier_status = item.status

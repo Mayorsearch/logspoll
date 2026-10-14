@@ -25,3 +25,8 @@ test('redirects stay within allowed account routes',async()=>{
  for(const path of ['https://evil.test','//evil.test','/dashboard/../../admin','/admin/users'])assert.equal(safeReturnTo(path),'/dashboard')
  assert.equal(safeReturnTo('/dashboard/orders'),'/dashboard/orders')
 })
+
+test('HTML gateway failures report HTTP status without displaying upstream HTML',async t=>{
+ t.mock.method(globalThis,'fetch',async()=>new Response('<html>private upstream body</html>',{status:502,headers:{'Content-Type':'text/html'}}))
+ await assert.rejects(cloudflareRequest('/api/admin/catalog',{action:'sync'}),e=>e instanceof Error&&e.message.includes('HTTP 502')&&!e.message.includes('private upstream'))
+})
