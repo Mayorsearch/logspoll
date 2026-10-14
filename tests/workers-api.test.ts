@@ -10,7 +10,7 @@ import type { ApiEnv, Database, Statement } from '../workers/api/types.ts'
 function fixture() {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys=ON')
-  for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql','migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql','migrations/0006_admin_publication.sql']) sqlite.exec(readFileSync(new URL('../workers/api/'+file,import.meta.url),'utf8'))
+  for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql','migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql','migrations/0006_admin_publication.sql','migrations/0009_auth_email_otp.sql']) sqlite.exec(readFileSync(new URL('../workers/api/'+file,import.meta.url),'utf8'))
   const db = {
     prepare(sql: string) {
       let values: unknown[] = []
@@ -55,10 +55,10 @@ test('real auth library: signup, single-use verification, HttpOnly session, owne
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM auth_session').get()!.n,0)
   assert.notEqual(sqlite.prepare('SELECT password FROM auth_account').get()!.password,password)
   const verification=await lastMail(env,db)
-  assert.equal(verification.from,'LOGSPOLL <no-reply@logspoll.com>'); assert.deepEqual(verification.to,[email]); assert.doesNotMatch(verification.text,/SAMPLE EMAIL/)
-  const verificationUrl=verification.text.match(/https:\/\/staging\.test\/api\/auth\/verify-email\?[^\s]+/)![0]
-  assert.equal((await apiFetch(new Request(verificationUrl),env)).status,302)
-  assert.equal((await apiFetch(new Request(verificationUrl),env)).status,400)
+  assert.equal(verification.from,'LogsPoll <no-reply@logspoll.com>'); assert.deepEqual(verification.to,[email]); assert.doesNotMatch(verification.text,/SAMPLE EMAIL/)
+  const code=verification.text.match(/Your code: (\d{6})/)![1]
+  assert.equal((await apiFetch(request('/api/auth/email-otp/verify-email',{email,otp:code}),env)).status,200)
+  assert.equal((await apiFetch(request('/api/auth/email-otp/verify-email',{email,otp:code}),env)).status,400)
   const login=await apiFetch(request('/api/auth/sign-in/email',{email,password}),env)
   assert.equal(login.status,200,await login.clone().text())
   const cookieHeader=login.headers.get('set-cookie')!
@@ -77,12 +77,12 @@ test('real auth library: signup, single-use verification, HttpOnly session, owne
   const orders=await (await apiFetch(request('/api/orders?customer_id=10000000-0000-4000-8000-000000000001&role=admin',undefined,cookie),env)).json()
   assert.deepEqual(orders.records,[])
   assert.equal((await apiFetch(request('/api/auth/sign-out',{},cookie,'https://evil.test'),env)).status,403)
-  await apiFetch(request('/api/auth/request-password-reset',{email,redirectTo:'/reset-password'}),env)
+  await apiFetch(request('/api/auth/email-otp/request-password-reset',{email,redirectTo:'/reset-password'}),env)
   const reset=await lastMail(env,db); assert.match(reset.subject,/Reset/)
-  const token=reset.text.match(/\/reset-password\/([A-Za-z0-9_-]+)\?/)![1]
-  const resetResponse=await apiFetch(request('/api/auth/reset-password',{token,newPassword:'Changed synthetic password 2026!'}),env)
+  const otp=reset.text.match(/Your code: (\d{6})/)![1]
+  const resetResponse=await apiFetch(request('/api/auth/email-otp/reset-password',{email,otp,password:'Changed synthetic password 2026!'}),env)
   assert.equal(resetResponse.status,200,await resetResponse.clone().text())
-  assert.equal((await apiFetch(request('/api/auth/reset-password',{token,newPassword:password}),env)).status,400)
+  assert.equal((await apiFetch(request('/api/auth/email-otp/reset-password',{email,otp,password:password}),env)).status,400)
   assert.equal((await apiFetch(request('/api/account/session',undefined,cookie),env)).status,401)
   const newLogin=await apiFetch(request('/api/auth/sign-in/email',{email,password:'Changed synthetic password 2026!'}),env)
   assert.equal(newLogin.status,200)
@@ -94,8 +94,8 @@ test('real auth library: signup, single-use verification, HttpOnly session, owne
 })
 test('auth rate limits persist in D1; email failures retry without duplicate events',async t=>{
   const {env,db,request}=fixture()
-  for(let i=0;i<3;i++) await apiFetch(request('/api/auth/request-password-reset',{email:'absent@example.test',redirectTo:'/reset-password'}),env)
-  assert.equal((await apiFetch(request('/api/auth/request-password-reset',{email:'absent@example.test'}),env)).status,429)
+  for(let i=0;i<3;i++) await apiFetch(request('/api/auth/email-otp/request-password-reset',{email:'absent@example.test',redirectTo:'/reset-password'}),env)
+  assert.equal((await apiFetch(request('/api/auth/email-otp/request-password-reset',{email:'absent@example.test'}),env)).status,429)
   await apiFetch(request('/api/auth/sign-up/email',{email:'queued@example.test',password:'Synthetic password 2026!',name:'Queue'}),env)
   const row=await db.prepare('SELECT * FROM auth_mail_outbox').first<{id:string;payload:string}>()
   assert.ok(row); assert.doesNotMatch(row.payload,/queued@example|verify-email|token=/)
@@ -146,8 +146,8 @@ test('D1 customer routes enforce ownership, publication, verified stock and paid
   const { env, db, sqlite, request } = fixture()
   const email = 'routes@example.test', password = 'Synthetic password 2026!'
   await apiFetch(request('/api/auth/sign-up/email', { email, password, name: 'Route Customer' }), env)
-  const mail = await lastMail(env, db), verificationUrl = mail.text.match(/https:\/\/staging\.test\/api\/auth\/verify-email\?[^\s]+/)![0]
-  await apiFetch(new Request(verificationUrl), env)
+  const mail=await lastMail(env,db),otp=mail.text.match(/Your code: (\d{6})/)![1]
+  await apiFetch(request('/api/auth/email-otp/verify-email',{email,otp}),env)
   const login = await apiFetch(request('/api/auth/sign-in/email', { email, password }), env)
   const cookie = login.headers.get('set-cookie')!.split(';')[0]
   const me = await (await apiFetch(request('/api/account/session', undefined, cookie), env)).json()
@@ -188,4 +188,87 @@ test('D1 customer routes enforce ownership, publication, verified stock and paid
   assert.equal((await apiFetch(request('/api/support', { subject: 'Test', message: 'Customer support request.' }, cookie, ''), env)).status, 403)
   assert.equal((await apiFetch(request('/api/support', { subject: 'Test', message: 'X'.repeat(20000) }, cookie), env)).status, 413)
   assert.equal(sqlite.prepare('PRAGMA foreign_key_check').all().length, 0)
+})
+
+test('OTP storage, five-attempt limit, purpose binding, expiration and replay fail closed',async()=>{
+ const {env,db,sqlite,request}=fixture(),email='otp-security@example.test'
+ const password='Synthetic secure password 2026!'
+ assert.equal((await apiFetch(request('/api/auth/sign-up/email',{email,password,name:'OTP Customer'}),env)).status,200)
+ const mail=await lastMail(env,db),code=mail.text.match(/Your code: (\d{6})/)![1]
+ assert.doesNotMatch(mail.text,/token=|\/api\/auth\//)
+ const stored=sqlite.prepare('SELECT value,expiresAt,createdAt FROM auth_verification').get()!
+ assert.match(String(stored.value),/^[a-f0-9]{64}:0$/);assert.ok(!String(stored.value).includes(code))
+ assert.ok(Date.parse(String(stored.expiresAt))-Date.parse(String(stored.createdAt))>=599000&&Date.parse(String(stored.expiresAt))-Date.parse(String(stored.createdAt))<=601000)
+ assert.equal((await apiFetch(request('/api/auth/email-otp/reset-password',{email,otp:code,password}),env)).status,400)
+ assert.equal((await apiFetch(request('/api/auth/email-otp/verify-email',{email:'other@example.test',otp:code}),env)).status,400)
+ const wrong=code==='000000'?'111111':'000000'
+ for(let i=0;i<5;i++)assert.equal((await apiFetch(request('/api/auth/email-otp/verify-email',{email,otp:wrong}),env)).status,400)
+ assert.equal((await apiFetch(request('/api/auth/email-otp/verify-email',{email,otp:code}),env)).status,403)
+ assert.equal(sqlite.prepare('SELECT emailVerified FROM auth_user').get()!.emailVerified,0)
+ // A new issuance after cooldown invalidates the exhausted code.
+ sqlite.prepare('UPDATE auth_otp_cooldowns SET next_send_at=0').run()
+ assert.equal((await apiFetch(request('/api/auth/email-otp/send-verification-otp',{email,type:'email-verification'}),env)).status,200)
+ const fresh=(await lastMail(env,db)).text.match(/Your code: (\d{6})/)![1]
+ sqlite.prepare('UPDATE auth_verification SET expiresAt=?').run(new Date(Date.now()-1000).toISOString())
+ assert.equal((await apiFetch(request('/api/auth/email-otp/verify-email',{email,otp:fresh}),env)).status,400)
+ assert.equal(sqlite.prepare('SELECT emailVerified FROM auth_user').get()!.emailVerified,0)
+})
+
+test('resend cooldown is persistent, rotates codes, expires superseded mail and does not enumerate recovery accounts',async()=>{
+ const {env,db,sqlite,request}=fixture(),email='otp-resend@example.test',password='Synthetic secure password 2026!'
+ await apiFetch(request('/api/auth/sign-up/email',{email,password,name:'Resend Customer'}),env)
+ const old=(await lastMail(env,db)).text.match(/Your code: (\d{6})/)![1]
+ const oldMail=sqlite.prepare('SELECT id FROM auth_mail_outbox').get()!.id
+ const resend=()=>apiFetch(request('/api/auth/email-otp/send-verification-otp',{email,type:'email-verification'}),env)
+ assert.equal((await resend()).status,429)
+ assert.equal(sqlite.prepare('SELECT count(*) n FROM auth_mail_outbox').get()!.n,1)
+ sqlite.prepare('UPDATE auth_otp_cooldowns SET next_send_at=?').run(Date.now()-1)
+ assert.equal((await resend()).status,200)
+ assert.equal(sqlite.prepare('SELECT count(*) n FROM auth_verification').get()!.n,1)
+ assert.ok(Number(sqlite.prepare('SELECT expires_at FROM auth_mail_outbox WHERE id=?').get(oldMail)!.expires_at)<=Date.now())
+ const current=(await lastMail(env,db)).text.match(/Your code: (\d{6})/)![1]
+ if(current!==old)assert.equal((await apiFetch(request('/api/auth/email-otp/verify-email',{email,otp:old}),env)).status,400)
+ const results=await Promise.all([1,2].map(()=>apiFetch(request('/api/auth/email-otp/verify-email',{email,otp:current}),env)))
+ assert.equal(results.filter(r=>r.status===200).length,1)
+ const known=await apiFetch(request('/api/auth/email-otp/request-password-reset',{email}),env)
+ const absent=await apiFetch(request('/api/auth/email-otp/request-password-reset',{email:'unknown@example.test'}),env)
+ assert.equal(known.status,200);assert.equal(absent.status,200);assert.deepEqual(await known.json(),await absent.json())
+ for(const target of [email,'unknown@example.test'])assert.equal((await apiFetch(request('/api/auth/email-otp/request-password-reset',{email:target}),env)).status,429)
+ for(const path of ['/verify-email?token=old','/reset-password','/send-verification-email','/request-password-reset','/sign-in/email-otp','/email-otp/check-verification-otp','/email-otp/get-verification-otp'])assert.equal((await apiFetch(request('/api/auth'+path,{email,otp:current}),env)).status,400)
+})
+
+test('expired OTP emails are never handed to Resend',async t=>{
+ const {env,db,sqlite,request}=fixture()
+ await apiFetch(request('/api/auth/sign-up/email',{email:'expiry@example.test',password:'Synthetic secure password 2026!',name:'Expiry'}),env)
+ sqlite.prepare('UPDATE auth_mail_outbox SET expires_at=?').run(Date.now()-1)
+ t.mock.method(globalThis,'fetch',async()=>assert.fail('Expired OTP must not reach Resend'))
+ await drainMail(env)
+ assert.equal(sqlite.prepare('SELECT attempts FROM auth_mail_outbox').get()!.attempts,0)
+ assert.equal((await db.prepare('SELECT count(*) n FROM auth_user').first())!.n,1)
+})
+
+test('OTP migration preserves existing users, passwords, roles, sessions and legacy verification records',()=>{
+ const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON')
+ for(const file of ['0001_staging_foundation.sql','0002_cloudflare_auth.sql','0003_auth_mail_diagnostics.sql'])sqlite.exec(readFileSync(new URL('../workers/api/migrations/'+file,import.meta.url),'utf8'))
+ sqlite.exec(readFileSync(new URL('../workers/api/fixtures.sql',import.meta.url),'utf8'))
+ sqlite.exec("INSERT INTO auth_user(id,name,email,emailVerified,createdAt,updatedAt) VALUES('existing','Existing','existing@example.test',1,'2026-10-14','2026-10-14'); INSERT INTO auth_account(id,accountId,providerId,userId,password,createdAt,updatedAt) VALUES('account','existing','credential','existing','synthetic-existing-hash','2026-10-14','2026-10-14'); INSERT INTO auth_session(id,expiresAt,token,createdAt,updatedAt,userId) VALUES('session','2026-10-21','synthetic-session','2026-10-14','2026-10-14','existing'); INSERT INTO auth_verification(id,identifier,value,expiresAt,createdAt,updatedAt) VALUES('legacy','reset-password:legacy','existing','2026-10-15','2026-10-14','2026-10-14');")
+ const tables=['users','profiles','user_roles','auth_user','auth_account','auth_session','auth_verification','products','inventory','orders']
+ const before=new Map(tables.map(name=>[name,sqlite.prepare('SELECT * FROM '+name).all()]))
+ sqlite.exec(readFileSync(new URL('../workers/api/migrations/0009_auth_email_otp.sql',import.meta.url),'utf8'))
+ for(const name of tables)assert.deepEqual(sqlite.prepare('SELECT * FROM '+name).all(),before.get(name))
+ assert.equal(sqlite.prepare('PRAGMA foreign_key_check').all().length,0)
+})
+
+test('queued legacy authentication links are retired without sending; password-reset responses never expose codes',async t=>{
+ const {env,sqlite,request}=fixture(),email='legacy-queue@example.test'
+ await apiFetch(request('/api/auth/sign-up/email',{email,password:'Synthetic secure password 2026!',name:'Legacy'}),env)
+ const iv=crypto.getRandomValues(new Uint8Array(12)),key=await crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',new TextEncoder().encode(env.AUTH_SECRET)),'AES-GCM',false,['encrypt'])
+ const old=JSON.stringify({text:'Old link https://staging.test/api/auth/verify-email?token=synthetic-retired',html:'',from:'LogsPoll <no-reply@logspoll.com>',to:[email]})
+ const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode(old))
+ sqlite.prepare("UPDATE auth_mail_outbox SET payload=?,iv=?,expires_at=NULL,otp_subject=NULL").run(Buffer.from(cipher).toString('base64'),Buffer.from(iv).toString('base64'))
+ t.mock.method(globalThis,'fetch',async()=>assert.fail('Legacy links must not be sent'))
+ await drainMail(env)
+ assert.equal(sqlite.prepare('SELECT last_error FROM auth_mail_outbox').get()!.last_error,'legacy_auth_link_retired')
+ assert.equal((await apiFetch(request('/api/auth/%76erify-email?token=synthetic',{}),env)).status,400)
+ assert.equal((await apiFetch(request('/api/auth/email-otp/request-password-reset',{email},undefined,'https://evil.test'),env)).status,403)
 })

@@ -11,7 +11,7 @@ function setup() {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys=ON')
   for (const file of ['migrations/0001_staging_foundation.sql','fixtures.sql','migrations/0002_cloudflare_auth.sql',
-    'migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql','migrations/0006_admin_publication.sql','migrations/0007_supplier_wide_authorization.sql','migrations/0008_sync_snapshot_retry.sql']) {
+    'migrations/0003_auth_mail_diagnostics.sql','migrations/0004_supplier_review.sql','migrations/0005_supplier_sync.sql','migrations/0006_admin_publication.sql','migrations/0007_supplier_wide_authorization.sql','migrations/0008_sync_snapshot_retry.sql','migrations/0009_auth_email_otp.sql']) {
     sqlite.exec(readFileSync(new URL('../workers/api/'+file, import.meta.url), 'utf8'))
   }
   const db = {

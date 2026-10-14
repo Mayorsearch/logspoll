@@ -20,7 +20,7 @@ export async function sendTestEmail(env: EmailEnv, input: { template?: unknown; 
   // Refuse retry past 23h: Resend retains idempotency keys for 24h.
   if (startedAt > now + 60000 || now - startedAt >= 23 * 60 * 60 * 1000) throw new HttpError(409, 'Test retry window expired. Check provider logs before starting a new test.')
   const email = sampleEmail(input.template, new Date(startedAt).getUTCFullYear())
-  const payload = JSON.stringify({ from: `LOGSPOLL <${env.EMAIL_FROM}>`, to: [env.EMAIL_TEST_TO], subject: `[TEST] ${email.subject}`, html: email.html, text: email.text })
+  const payload = JSON.stringify({ from: `LogsPoll <${env.EMAIL_FROM}>`, to: [env.EMAIL_TEST_TO], ...email, subject: `[TEST] ${email.subject}` })
   // Same key on every retry. A changed template/recipient produces provider conflict,
   // rather than silently sending a second message after a configuration change.
   const key = `logspoll-test/${input.requestId}`

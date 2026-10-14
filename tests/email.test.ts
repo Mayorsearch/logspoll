@@ -11,9 +11,9 @@ test('all 22 templates have HTML, text, synthetic labels and safe account links'
   assert.equal(Object.keys(emailTemplates).length, 22)
   for (const kind of Object.keys(emailTemplates) as EmailKind[]) {
     const email = sampleEmail(kind)
-    assert.match(email.html, /Nunito Sans/)
+    assert.match(email.html, /Nunito Sans|Arial/)
     assert.match(email.html, /SAMPLE EMAIL/)
-    assert.match(email.html, /max-width:600px/)
+    assert.match(email.html, /max-width:6[02]0px/)
     assert.match(email.text, /SAMPLE EMAIL/)
     assert.match(email.text, /Support: https:\/\/logspoll.com\/support/)
     assert.doesNotMatch(email.text, /<html|<table/)
@@ -32,7 +32,7 @@ test('customer fields are escaped; invalid financial facts and auth origins are 
   assert.throws(() => renderEmail('security_alert', { occurredAt: 'not-a-date' }))
   assert.throws(() => renderEmail('verification'))
   for (const confirmationUrl of ['javascript:alert(1)', 'https://evil.test/auth/v1/verify', 'https://staging.test/wrong-path', 'https://user:pass@staging.test/auth/v1/verify']) assert.throws(() => renderEmail('password_reset', { confirmationUrl, confirmationOrigin: env.AUTH_ORIGIN }))
-  assert.match(renderEmail('verification', { confirmationUrl: `${env.AUTH_ORIGIN}/api/auth/verify-email?token=synthetic&type=signup`, confirmationOrigin: env.AUTH_ORIGIN }).html, /token=synthetic&amp;type=signup/)
+  assert.match(renderEmail('verification', { verificationCode:'123456' }).html, /123456/)
 })
 test('failure notifications distinguish payment from fulfillment and do not promise refunds', () => {
   const email = renderEmail('transaction_failed', { failureStage: 'fulfillment', refundStatus: 'not_confirmed' })
@@ -73,4 +73,16 @@ test('provider errors and network failures remain redacted, with no success assu
   await assert.rejects(sendTestEmail(env, input, now), /Acceptance is unknown/)
   t.mock.method(globalThis, 'fetch', async () => Response.json({ unexpected: 'private' }))
   await assert.rejects(sendTestEmail(env, input, now), /could not be confirmed/)
+})
+
+test('premium OTP and security templates reuse supplied design and inline logo without authentication links',()=>{
+ for(const kind of ['verification','password_reset','welcome','password_changed'] as const){
+  const email=renderEmail(kind,{verificationCode:'123456',firstName:'<script>alert(1)</script>'})
+  assert.match(email.html,/cid:logspoll-premium-logo/);assert.match(email.html,/#FFF9F6|#F3F3FB/)
+  assert.match(email.text,/LogsPoll/);assert.doesNotMatch(email.html,/<script>/)
+  assert.doesNotMatch(email.html,/LOGSPOLL|token=|\{\{|reset_url|verification_code/)
+  assert.ok('attachments' in email&&email.attachments[0].content.length>10000)
+  if(kind==='verification'||kind==='password_reset'){assert.match(email.text,/123456/);assert.match(email.text,/10 minutes/);assert.doesNotMatch(email.html,/href="[^"]*(verify-email|reset-password)/)}
+ }
+ for(const code of ['12345','abcdef','<img src=x>'])assert.throws(()=>renderEmail('verification',{verificationCode:code}))
 })

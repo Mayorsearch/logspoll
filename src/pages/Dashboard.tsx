@@ -103,6 +103,7 @@ export function AccountSettings({ embedded = false }: {
     embedded?: boolean;
 }) {
     const { session } = useAuth();
+    const navigate=useNavigate();
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
@@ -113,10 +114,10 @@ export function AccountSettings({ embedded = false }: {
         setError('');
         setMessage('');
         try {
-            const { error: problem } = (await cloudflareAuth('request-password-reset', { email: session.user.email, redirectTo: '/reset-password' }), { error: null });
+            const { error: problem } = (await cloudflareAuth('email-otp/request-password-reset', { email: session.user.email }), { error: null });
             if (problem)
                 throw problem;
-            setMessage('A password reset link has been requested. Check your inbox and open it in this browser.');
+            navigate('/reset-password',{state:{email:session.user.email,sentAt:Date.now()}});
         }
         catch (problem) {
             setError(problem instanceof Error ? problem.message : 'Unable to request a password reset.');
@@ -126,5 +127,5 @@ export function AccountSettings({ embedded = false }: {
         }
     }
     async function acceptAdmin(){setBusy(true);setError('');try{await cloudflareRequest('/api/account/admin-enrollment',{});window.location.assign('/admin')}catch(e){setError(e instanceof Error?e.message:'Enrollment unavailable.')}finally{setBusy(false)}}
-    return <section className={embedded ? 'profile-security' : 'customer-page-panel'}>{!embedded && <><h1>Account Settings</h1><p className="dashboard-intro">Manage access to your LOGSPOLL account.</p><Link className="text-link" to="/dashboard/profile">Edit personal details →</Link></>}<div className="settings-panel"><h2><Settings size={22}/>Security & Password</h2><p>Request a secure email link to change your password. Open the link in this browser to choose your new password.</p><button className="button button-navy" onClick={reset} disabled={busy}>{busy ? 'Sending…' : 'Send Password Reset Link'}</button><button className="button button-outline" onClick={()=>void acceptAdmin()} disabled={busy}>Accept administrator invitation</button></div>{message && <p role="status" className="form-success">{message}</p>}{error && <p role="alert" className="form-error">{error}</p>}</section>;
+    return <section className={embedded ? 'profile-security' : 'customer-page-panel'}>{!embedded && <><h1>Account Settings</h1><p className="dashboard-intro">Manage access to your LOGSPOLL account.</p><Link className="text-link" to="/dashboard/profile">Edit personal details →</Link></>}<div className="settings-panel"><h2><Settings size={22}/>Security & Password</h2><p>Use a secure six-digit email code to choose your new password.</p><button className="button button-navy" onClick={reset} disabled={busy}>{busy ? 'Sending…' : 'Send Password Reset Code'}</button><button className="button button-outline" onClick={()=>void acceptAdmin()} disabled={busy}>Accept administrator invitation</button></div>{message && <p role="status" className="form-success">{message}</p>}{error && <p role="alert" className="form-error">{error}</p>}</section>;
 }
