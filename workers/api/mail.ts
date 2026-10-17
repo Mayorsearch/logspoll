@@ -1,13 +1,13 @@
 import { renderEmail } from '../../src/lib/email-templates.ts'
-import type { EmailKind } from '../../src/lib/email-templates.ts'
+import type { EmailKind, EmailData } from '../../src/lib/email-templates.ts'
 import type { ApiEnv } from './types.ts'
 
 export const digest = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), b => b.toString(16).padStart(2, '0')).join('')
 async function key(env: ApiEnv) {
   return crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new TextEncoder().encode(env.AUTH_SECRET)), 'AES-GCM', false, ['encrypt', 'decrypt'])
 }
-export async function enqueueMail(env: ApiEnv, event: string, kind: EmailKind, user: { email: string; name: string }, otp?: string, otpSubject?: string) {
-  const message = renderEmail(kind, { firstName:user.name, appOrigin:env.APP_ORIGIN??env.AUTH_ORIGIN, ...(otp?{verificationCode:otp}:{}) })
+export async function enqueueMail(env: ApiEnv, event: string, kind: EmailKind, user: { email: string; name: string }, otp?: string, otpSubject?: string, extraData?: Partial<EmailData>) {
+  const message = renderEmail(kind, { firstName:user.name, appOrigin:env.APP_ORIGIN??env.AUTH_ORIGIN, ...(otp?{verificationCode:otp}:{}), ...(extraData??{}) })
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await key(env), new TextEncoder().encode(JSON.stringify({ from: 'LogsPoll <no-reply@logspoll.com>', to: [user.email], ...message })))
   const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))
@@ -81,5 +81,29 @@ export async function drainBusinessMail(env:ApiEnv) {
  if(!env.DB||!env.AUTH_SECRET)return
  let rows:{results:{id:string;kind:EmailKind;email:string;name:string}[]}
  try{rows=await env.DB.prepare("SELECT e.id,e.kind,a.email,a.name FROM business_mail_events e JOIN auth_user a ON a.id=e.user_id WHERE e.queued_at IS NULL AND a.emailVerified=1 ORDER BY e.created_at LIMIT 2").all()}catch{return}
- for(const row of rows.results){await enqueueMail(env,'business:'+row.id,row.kind,row);await env.DB.prepare('UPDATE business_mail_events SET queued_at=? WHERE id=? AND queued_at IS NULL').bind(Date.now(),row.id).run()}
+ for(const row of rows.results){
+  let orderId = row.id.includes(':') ? row.id.split(':')[0] : null
+  if(!orderId){
+   const audit = await env.DB.prepare("SELECT record_id FROM audit_logs WHERE id=? AND table_name='orders'").bind(row.id).first<{record_id:string}>().catch(()=>null)
+   if(audit) orderId = audit.record_id
+  }
+  let extraData: Partial<EmailData> | undefined
+  if(orderId){
+   const order = await env.DB.prepare("SELECT id,reference,total_minor,currency,payment_status,fulfillment_status FROM orders WHERE id=?").bind(orderId).first<{id:string;reference:string;total_minor:number;currency:string;payment_status:string;fulfillment_status:string}>().catch(()=>null)
+   if(order){
+    const items = await env.DB.prepare("SELECT product_name,quantity,unit_price_minor FROM order_items WHERE order_id=?").bind(order.id).all<{product_name:string;quantity:number;unit_price_minor:number}>().catch(()=>({results:[]}))
+    extraData = {
+     orderId: order.id,
+     reference: order.reference,
+     amountMinor: order.total_minor,
+     paymentStatus: order.payment_status,
+     fulfillmentStatus: order.fulfillment_status,
+     orderItems: items.results.map(i => ({ name: i.product_name, quantity: i.quantity, priceMinor: i.unit_price_minor })),
+     orderDetailsUrl: `${env.APP_ORIGIN ?? env.AUTH_ORIGIN ?? 'https://logspoll.com'}/dashboard?tab=orders`
+    }
+   }
+  }
+  await enqueueMail(env,'business:'+row.id,row.kind,row,undefined,undefined,extraData)
+  await env.DB.prepare('UPDATE business_mail_events SET queued_at=? WHERE id=? AND queued_at IS NULL').bind(Date.now(),row.id).run()
+ }
 }

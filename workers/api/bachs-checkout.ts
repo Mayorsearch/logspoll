@@ -31,7 +31,9 @@ export async function initiateCheckout(env:ApiEnv,buyer:Buyer,requestId:string,i
   const total=items.reduce((sum,i)=>sum+rows.results.find(p=>p.id===i.id)!.price_minor*i.quantity,0)
   if(!Number.isSafeInteger(total)||total<1||total>99999999900||rows.results.some(p=>p.currency!=='NGN'||p.price_minor<1))throw new HttpError(409,'Invalid product pricing.')
   const id=crypto.randomUUID(),order=crypto.randomUUID(),now=Date.now(),key='bachs_'+id
+  const hasMail=Boolean(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_mail_events'").first().catch(()=>null))
   const statements=[db.prepare('INSERT INTO orders(id,customer_id,reference,total_minor) VALUES(?,?,?,?)').bind(order,buyer.id,'LP-'+order,total),db.prepare('INSERT INTO bachs_payment_attempts(id,order_id,customer_id,client_request_id,idempotency_key,provider_mode,amount_minor,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,order,buyer.id,requestId,key,mode,total,now,now)]
+  if(hasMail)statements.push(db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) VALUES(?,'order_placed',?,?) ON CONFLICT(id) DO NOTHING").bind(order+':order_placed',buyer.id,now))
   for(const item of items){const p=rows.results.find(p=>p.id===item.id)!
    statements.push(db.prepare('INSERT INTO order_items(id,order_id,product_id,product_name,category_name,quantity,unit_price_minor) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),order,p.id,p.name,p.category_name,item.quantity,p.price_minor))
    // Expiry alone never frees a hold: only verified terminal provider status does.

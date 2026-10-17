@@ -7,8 +7,8 @@ import { emailTestReady, sendTestEmail } from '../server/email.ts'
 const now = Date.parse('2026-10-12T12:00:00Z')
 const env = { AUTH_ORIGIN: 'https://staging.test', RESEND_API_KEY: 're_synthetic_only', EMAIL_FROM: 'no-reply@logspoll.com', EMAIL_TEST_TO: 'approved@example.test', EMAIL_TEST_ENABLED: 'true' }
 const input = { template: 'verification', requestId: '11111111-1111-4111-8111-111111111111', startedAt: now }
-test('all 22 templates have HTML, text, synthetic labels and safe account links', () => {
-  assert.equal(Object.keys(emailTemplates).length, 22)
+test('all 23 templates have HTML, text, synthetic labels and safe account links', () => {
+  assert.equal(Object.keys(emailTemplates).length, 23)
   for (const kind of Object.keys(emailTemplates) as EmailKind[]) {
     const email = sampleEmail(kind)
     assert.match(email.html, /Nunito Sans|Arial/)
@@ -85,4 +85,32 @@ test('premium OTP and security templates reuse supplied design and inline logo w
   if(kind==='verification'||kind==='password_reset'){assert.match(email.text,/123456/);assert.match(email.text,/10 minutes/);assert.doesNotMatch(email.html,/href="[^"]*(verify-email|reset-password)/)}
  }
  for(const code of ['12345','abcdef','<img src=x>'])assert.throws(()=>renderEmail('verification',{verificationCode:code}))
+})
+
+test('transactional order emails include customer, order ID, items, status, link and SwiftNova Labs attribution', () => {
+  const kinds = ['order_placed', 'purchase_success', 'order_delivered', 'purchase_failed', 'refund_completed'] as const
+  for (const kind of kinds) {
+    const email = renderEmail(kind, {
+      firstName: 'Tunde Adebayo',
+      orderId: 'LP-ORD-987654',
+      amountMinor: 250000,
+      paymentStatus: kind === 'purchase_failed' ? 'failed' : kind === 'refund_completed' ? 'refunded' : 'paid',
+      fulfillmentStatus: kind === 'order_delivered' ? 'delivered' : 'pending',
+      orderItems: [
+        { name: 'US Gmail Aged Account', quantity: 2, priceMinor: 100000 },
+        { name: 'NordVPN 1-Month Plan', quantity: 1, priceMinor: 50000 },
+      ],
+      orderDetailsUrl: 'https://logspoll.com/dashboard/orders',
+    })
+    assert.match(email.html, /Tunde Adebayo/)
+    assert.match(email.html, /LP-ORD-987654/)
+    assert.match(email.html, /US Gmail Aged Account/)
+    assert.match(email.html, /NordVPN 1-Month Plan/)
+    assert.match(email.html, /Total amount/)
+    assert.match(email.html, /Built by SwiftNova Labs/)
+    assert.match(email.text, /Built by SwiftNova Labs/)
+    assert.match(email.text, /LP-ORD-987654/)
+    assert.match(email.text, /US Gmail Aged Account/)
+    assert.doesNotMatch(email.html, /account_password|secret_key|private_token|credential_secret/)
+  }
 })

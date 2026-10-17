@@ -14,7 +14,7 @@ import AdminRecords from './AdminRecords'
 import { ProductArtwork } from '../components/ProductArtwork'
 import { storedProductImages } from '../lib/product-images'
 
-type Counts = { customers: number; products: number; orders: number }
+type Counts = { customers: number; products: number; orders: number; revenue_minor?: number; paid_orders?: number }
 type FeedItem = {
   connection_id: string; external_id: string; name: string; source_category: string
   supplier_cost_minor: number; stock_quantity: number; authorization_verified: number
@@ -325,6 +325,8 @@ export default function CloudflareAdmin() {
           <div><span>CUSTOMERS</span><strong>{overview?.customers ?? '—'}</strong></div>
           <div><span>PRODUCTS</span><strong>{overview?.products ?? '—'}</strong></div>
           <div><span>ORDERS</span><strong>{overview?.orders ?? '—'}</strong></div>
+          <div><span>PAID ORDERS</span><strong>{overview?.paid_orders ?? 0}</strong></div>
+          <div><span>TOTAL REVENUE</span><strong>{overview?.revenue_minor !== undefined ? ngn(overview.revenue_minor) : '₦0.00'}</strong></div>
           <div><span>PENDING REVIEWS</span><strong>{review ? pending : '—'}</strong></div>
           <div><span>APPROVED REVIEWS</span><strong>{review ? approved : '—'}</strong></div>
           <div><span>REJECTED REVIEWS</span><strong>{review ? rejected : '—'}</strong></div>

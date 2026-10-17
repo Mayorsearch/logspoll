@@ -117,7 +117,7 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
       case '/api/notifications': sql = 'SELECT id,title,message,order_id,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100'; values = [user.id]; break
       case '/api/admin/overview':
         if (user.role !== 'admin') throw new HttpError(403, 'Administrator access required.')
-        sql = 'SELECT (SELECT count(*) FROM users) AS customers,(SELECT count(*) FROM products) AS products,(SELECT count(*) FROM orders) AS orders'; break
+        sql = "SELECT (SELECT count(*) FROM users) AS customers,(SELECT count(*) FROM products) AS products,(SELECT count(*) FROM orders) AS orders,(SELECT COALESCE(sum(total_minor),0) FROM orders WHERE payment_status='paid') AS revenue_minor,(SELECT count(*) FROM orders WHERE payment_status='paid') AS paid_orders"; break
       default: throw new HttpError(404, 'Route not implemented in this migration milestone.')
     }
     const result = await env.DB.prepare(sql).bind(...values).all()

@@ -13,6 +13,7 @@ export const emailTemplates = {
   funding_failed: ['Wallet funding failed', 'Your funding did not complete.', 'Your funding attempt failed. This attempt has not credited your wallet. Contact support if your bank shows a debit.', 'Contact support', '/support', 'Confirmed failed funding event; wallet not implemented', true],
   refund_completed: ['Refund completed', 'Your refund has been confirmed.', 'Your refund was confirmed by the payment provider. Bank processing times may apply. See your account for the refund destination.', 'View transactions', '/dashboard/transactions', 'Verified, committed refund completion; not yet connected', true],
   purchase_success: ['Purchase confirmed', 'Thank you for your purchase.', 'Your payment was verified and your order is confirmed. Delivery status is available in your account.', 'View order', '/dashboard/orders', 'Verified payment AND committed order', true],
+  order_placed: ['Order placed', 'Your order was placed.', 'Your order has been recorded. Complete payment to begin digital fulfillment.', 'View order', '/dashboard/orders', 'Committed order placement', true],
   order_processing: ['Your order is processing', 'We’re working on your order.', 'Your confirmed order is being processed. We will notify you when fulfillment is confirmed.', 'View order', '/dashboard/orders', 'Confirmed order transitioned to processing', true],
   order_delivered: ['Your order was delivered', 'Your order is ready.', 'Fulfillment has been confirmed. Sign in to view your purchase securely. Sensitive access details are never included in this email.', 'View purchase securely', '/dashboard/purchases', 'Confirmed fulfillment AND persisted delivered state', true],
   purchase_failed: ['Purchase could not be completed', 'Your order needs attention.', 'Your purchase did not complete. Check the order’s payment and fulfillment status before retrying.', 'Review order', '/dashboard/orders', 'Persisted purchase failure with payment and refund state', true],
@@ -26,11 +27,21 @@ export const emailTemplates = {
   service_announcement: ['LogsPoll service update', 'An update from LogsPoll.', 'There is a service update for your account. Visit LogsPoll or contact support for details.', 'Visit LogsPoll', '/', 'Reviewed announcement with explicit recipients; not implemented', false],
 } as const
 export type EmailKind = keyof typeof emailTemplates
+export interface OrderItemEmailData {
+  name: string
+  quantity: number
+  priceMinor: number
+}
 export interface EmailData {
   verificationCode?: string
   firstName?: string
   reference?: string
   amountMinor?: number
+  orderId?: string
+  orderItems?: OrderItemEmailData[]
+  paymentStatus?: string
+  fulfillmentStatus?: string
+  orderDetailsUrl?: string
   // Supply only reliable server-recorded facts; omit unavailable fields.
   occurredAt?: string
   device?: string
@@ -62,13 +73,31 @@ export function renderEmail(kind: EmailKind, data: EmailData = {}) {
   if (['verification','password_reset','welcome','password_changed'].includes(kind)) return renderPremiumEmail(kind, data)
   const [subject, title, message, action, path] = emailTemplates[kind]
   const app=new URL(data.appOrigin??site);if(app.protocol!=='https:'||app.username||app.password||app.pathname!=='/'||app.search||app.hash)throw new Error('Invalid application origin.')
-  const url = authKinds.has(kind) ? confirmationLink(data) : app.origin + path
+  let url = authKinds.has(kind) ? confirmationLink(data) : app.origin + path
+  if (data.orderDetailsUrl) {
+    try {
+      const parsed = new URL(data.orderDetailsUrl)
+      if (parsed.origin === app.origin) url = parsed.href
+    } catch { /* retain default url */ }
+  }
   const name = clean(data.firstName?.trim() || 'there')
   const facts: [string, string][] = []
+  if (data.orderId) facts.push(['Order ID', clean(data.orderId)])
   if (data.reference) facts.push(['Reference', clean(data.reference)])
+  if (data.paymentStatus) facts.push(['Payment status', clean(data.paymentStatus).toUpperCase()])
+  if (data.fulfillmentStatus) facts.push(['Fulfillment status', clean(data.fulfillmentStatus).toUpperCase()])
   if (data.amountMinor !== undefined) {
     if (!Number.isSafeInteger(data.amountMinor) || data.amountMinor < 0) throw new Error('Invalid payment amount.')
-    facts.push(['Amount', new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(data.amountMinor / 100)])
+    facts.push(['Total amount', new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(data.amountMinor / 100)])
+  }
+  if (data.orderItems && Array.isArray(data.orderItems)) {
+    for (const item of data.orderItems) {
+      if (item && typeof item.name === 'string') {
+        const qty = Number(item.quantity) || 1
+        const price = typeof item.priceMinor === 'number' && item.priceMinor >= 0 ? new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(item.priceMinor / 100) : ''
+        facts.push(['Item', `${clean(item.name)} (${qty}x${price ? ' @ ' + price : ''})`])
+      }
+    }
   }
   if (data.occurredAt) {
     const time = new Date(data.occurredAt)
@@ -84,10 +113,23 @@ export function renderEmail(kind: EmailKind, data: EmailData = {}) {
   if (!Number.isInteger(year) || year < 2026 || year > 9999) throw new Error('Invalid year.')
   const preview = data.preview ? 'SAMPLE EMAIL — synthetic data; no transaction or account action occurred.' : ''
   const rows = facts.map(([label, value]) => `<tr><td style="padding:9px 0;color:#667085;font-size:13px;vertical-align:top">${escape(label)}</td><td align="right" style="padding:9px 0 9px 16px;color:#101828;font-size:13px;font-weight:600;overflow-wrap:anywhere;word-break:break-word">${escape(value)}</td></tr>`).join('')
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>${escape(subject)} | LogsPoll</title><style>@media(max-width:620px){.pad{padding-left:24px!important;padding-right:24px!important}.heading{font-size:30px!important}.label{display:none!important}.outer{padding:24px 10px!important}}a:focus{outline:2px solid #101828}</style></head><body style="margin:0;padding:0;background:#f4f5f3;color:#101828;font-family:'Nunito Sans',Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%"><div style="display:none;max-height:0;overflow:hidden;opacity:0">${escape(subject)} — LogsPoll</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f3;border-collapse:collapse"><tr><td class="outer" align="center" style="padding:45px 14px"><!--[if mso]><table role="presentation" width="600" align="center"><tr><td><![endif]--><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;table-layout:fixed;background:#fff;border:1px solid #e4e7e7;border-radius:13px;border-spacing:0"><tr><td style="height:5px;line-height:5px;background:#c44b08;border-radius:13px 13px 0 0;font-size:1px">&nbsp;</td></tr><tr><td class="pad" style="padding:34px 48px 30px;border-bottom:1px solid #edf0f0"><table role="presentation" width="100%"><tr><td><a href="${site}" style="font-size:28px;font-weight:900;letter-spacing:-1.6px;text-decoration:none;white-space:nowrap;color:#152033"><img src="${site}/email/logspoll-email-logo.png" width="180" alt="LogsPoll" style="display:block;width:180px;max-width:100%;height:auto;border:0" /></a></td><td class="label" align="right" style="font-size:10px;color:#667085;letter-spacing:1.4px;font-weight:bold">${authKinds.has(kind) || kind.includes('password') || kind.includes('security') ? 'ACCOUNT SECURITY' : 'YOUR LogsPoll ACCOUNT'}</td></tr></table></td></tr><tr><td class="pad" style="padding:40px 48px 32px">${preview ? `<p style="margin:0 0 24px;padding:12px;background:#fff3e9;color:#91400e;font-size:12px;line-height:1.6">${preview}</p>` : ''}<h1 class="heading" style="margin:0 0 24px;font-size:36px;line-height:1.15;letter-spacing:-1px;color:#152033;font-weight:800">${escape(title)}</h1><p style="font-size:17px;line-height:36px;margin:0 0 12px;color:#667085">Hi <strong style="font-size:26px;font-weight:800;line-height:36px;color:#152033;overflow-wrap:anywhere;word-break:break-word">${escape(name)}</strong>,</p><p style="font-size:15px;line-height:1.85;color:#667085;margin:0 0 23px">${escape(message)}</p>${rows ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;border-top:1px solid #edf0f0;border-bottom:1px solid #edf0f0;margin-bottom:24px">${rows}</table>` : ''}<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0"><tr><td bgcolor="#c44b08" style="border-radius:8px;mso-padding-alt:16px 28px"><a href="${escape(url)}" style="display:inline-block;padding:16px 28px;font-size:14px;font-weight:bold;border-radius:8px;color:#fff;text-decoration:none">${escape(action)} &nbsp;→</a></td></tr></table><p style="font-size:12px;line-height:1.8;color:#667085;margin:0 0 22px;overflow-wrap:anywhere;word-break:break-all">Button not working? Open this link:<br><a href="${escape(url)}" style="color:#a3440b">${escape(url)}</a></p><div style="border-top:1px solid #edf0f0;padding-top:22px;font-size:12px;line-height:1.8;color:#667085">${escape(security)}</div></td></tr></table><!--[if mso]></td></tr></table><![endif]--><table role="presentation" width="100%" style="max-width:600px"><tr><td align="center" style="padding:26px 18px;font-size:12px;line-height:1.9;color:#667085"><strong>LogsPoll</strong><br>Digital products &amp; services, made simple.<br><a href="${site}" style="color:#a3440b;text-decoration:none">logspoll.com</a> &nbsp;·&nbsp; <a href="${site}/support" style="color:#a3440b;text-decoration:none">Contact support</a> &nbsp;·&nbsp; <a href="${site}/privacy" style="color:#a3440b;text-decoration:none">Privacy</a><br>© ${year} LogsPoll. All rights reserved.</td></tr></table></td></tr></table></body></html>`
-  const text = [preview, `LogsPoll | ${subject}`, `Hi ${name},`, title, message, ...facts.map(([label, value]) => `${label}: ${value}`), `${action}: ${url}`, security, 'Support: https://logspoll.com/support', 'Privacy: https://logspoll.com/privacy', `© ${year} LogsPoll. https://logspoll.com`].filter(Boolean).join('\n\n')
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>${escape(subject)} | LogsPoll</title><style>@media(max-width:620px){.pad{padding-left:24px!important;padding-right:24px!important}.heading{font-size:30px!important}.label{display:none!important}.outer{padding:24px 10px!important}}a:focus{outline:2px solid #101828}</style></head><body style="margin:0;padding:0;background:#f4f5f3;color:#101828;font-family:'Nunito Sans',Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%"><div style="display:none;max-height:0;overflow:hidden;opacity:0">${escape(subject)} — LogsPoll</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f3;border-collapse:collapse"><tr><td class="outer" align="center" style="padding:45px 14px"><!--[if mso]><table role="presentation" width="600" align="center"><tr><td><![endif]--><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;table-layout:fixed;background:#fff;border:1px solid #e4e7e7;border-radius:13px;border-spacing:0"><tr><td style="height:5px;line-height:5px;background:#c44b08;border-radius:13px 13px 0 0;font-size:1px">&nbsp;</td></tr><tr><td class="pad" style="padding:34px 48px 30px;border-bottom:1px solid #edf0f0"><table role="presentation" width="100%"><tr><td><a href="${site}" style="font-size:28px;font-weight:900;letter-spacing:-1.6px;text-decoration:none;white-space:nowrap;color:#152033"><img src="${site}/email/logspoll-email-logo.png" width="180" alt="LogsPoll" style="display:block;width:180px;max-width:100%;height:auto;border:0" /></a></td><td class="label" align="right" style="font-size:10px;color:#667085;letter-spacing:1.4px;font-weight:bold">${authKinds.has(kind) || kind.includes('password') || kind.includes('security') ? 'ACCOUNT SECURITY' : 'YOUR LogsPoll ACCOUNT'}</td></tr></table></td></tr><tr><td class="pad" style="padding:40px 48px 32px">${preview ? `<p style="margin:0 0 24px;padding:12px;background:#fff3e9;color:#91400e;font-size:12px;line-height:1.6">${preview}</p>` : ''}<h1 class="heading" style="margin:0 0 24px;font-size:36px;line-height:1.15;letter-spacing:-1px;color:#152033;font-weight:800">${escape(title)}</h1><p style="font-size:17px;line-height:36px;margin:0 0 12px;color:#667085">Hi <strong style="font-size:26px;font-weight:800;line-height:36px;color:#152033;overflow-wrap:anywhere;word-break:break-word">${escape(name)}</strong>,</p><p style="font-size:15px;line-height:1.85;color:#667085;margin:0 0 23px">${escape(message)}</p>${rows ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;border-top:1px solid #edf0f0;border-bottom:1px solid #edf0f0;margin-bottom:24px">${rows}</table>` : ''}<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0"><tr><td bgcolor="#c44b08" style="border-radius:8px;mso-padding-alt:16px 28px"><a href="${escape(url)}" style="display:inline-block;padding:16px 28px;font-size:14px;font-weight:bold;border-radius:8px;color:#fff;text-decoration:none">${escape(action)} &nbsp;→</a></td></tr></table><p style="font-size:12px;line-height:1.8;color:#667085;margin:0 0 22px;overflow-wrap:anywhere;word-break:break-all">Button not working? Open this link:<br><a href="${escape(url)}" style="color:#a3440b">${escape(url)}</a></p><div style="border-top:1px solid #edf0f0;padding-top:22px;font-size:12px;line-height:1.8;color:#667085">${escape(security)}</div></td></tr></table><!--[if mso]></td></tr></table><![endif]--><table role="presentation" width="100%" style="max-width:600px"><tr><td align="center" style="padding:26px 18px;font-size:12px;line-height:1.9;color:#667085"><strong>LogsPoll</strong><br>Digital products &amp; services, made simple.<br><a href="${site}" style="color:#a3440b;text-decoration:none">logspoll.com</a> &nbsp;·&nbsp; <a href="${site}/support" style="color:#a3440b;text-decoration:none">Contact support</a> &nbsp;·&nbsp; <a href="${site}/privacy" style="color:#a3440b;text-decoration:none">Privacy</a><br>© ${year} LogsPoll. All rights reserved.<br><span style="font-size:11px;color:#98a2b3">Built by SwiftNova Labs</span></td></tr></table></td></tr></table></body></html>`
+  const text = [preview, `LogsPoll | ${subject}`, `Hi ${name},`, title, message, ...facts.map(([label, value]) => `${label}: ${value}`), `${action}: ${url}`, security, 'Support: https://logspoll.com/support', 'Privacy: https://logspoll.com/privacy', `© ${year} LogsPoll. https://logspoll.com`, 'Built by SwiftNova Labs'].filter(Boolean).join('\n\n')
   return { subject, html, text }
 }
 export function sampleEmail(kind: EmailKind, year?: number) {
-  return renderEmail(kind, { preview: true, firstName: 'Alex', reference: 'SAMPLE-0001', year, ...(['wallet_funded', 'purchase_success', 'payment_receipt', 'refund_completed'].includes(kind) ? { amountMinor: 125000 } : {}) })
+  const isOrderKind = ['order_placed', 'purchase_success', 'order_delivered', 'purchase_failed', 'refund_completed', 'payment_receipt', 'wallet_funded'].includes(kind)
+  return renderEmail(kind, {
+    preview: true,
+    firstName: 'Alex',
+    reference: 'SAMPLE-0001',
+    year,
+    ...(isOrderKind ? {
+      orderId: 'LP-SAMPLE-ORD1',
+      amountMinor: 125000,
+      paymentStatus: kind === 'purchase_failed' ? 'failed' : kind === 'refund_completed' ? 'refunded' : 'paid',
+      fulfillmentStatus: kind === 'order_delivered' ? 'delivered' : 'processing',
+      orderItems: [{ name: 'Sample Digital Account', quantity: 1, priceMinor: 125000 }]
+    } : {})
+  })
 }
