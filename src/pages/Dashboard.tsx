@@ -193,29 +193,21 @@ export function CustomerRecords({
     (r) => r.payment_status === 'paid' && r.fulfillment_status === 'delivered'
   ).length
 
+  const [expandedPurchases, setExpandedPurchases] = useState<Record<string, boolean>>({})
+
   return (
     <div className={mode === 'overview' ? 'customer-overview' : 'customer-page-panel'}>
       <div className="dashboard-page-header">
-        <h1>{titles[mode]}</h1>
+        <h1>{mode === 'purchases' ? 'All Purchases' : titles[mode]}</h1>
         <p className="dashboard-intro">{descriptions[mode]}</p>
       </div>
 
-      {/* 3 Top Cards (PadiLogs Design Architecture) */}
+      {/* Top 3 Genuine Metric Cards (PadiLogs Reference without fake wallet) */}
       {mode === 'overview' && (
         <div className="dashboard-top-cards">
-          {/* Card 1: MAIN WALLET / Shopping Balance */}
-          <article className="dashboard-stat-card wallet-card">
-            <span className="stat-card-badge">SHOPPING BALANCE</span>
-            <strong className="stat-card-value">₦0.00</strong>
-            <p className="stat-card-subtext">Ready for purchases &amp; instant checkout</p>
-            <Link to="/marketplace" className="stat-card-action">
-              Explore Store <ArrowRight size={14} />
-            </Link>
-          </article>
-
-          {/* Card 2: DIGITAL ASSETS / Delivered Purchases */}
+          {/* Card 1: DELIVERED PURCHASES / DIGITAL ASSETS */}
           <article className="dashboard-stat-card">
-            <span className="stat-card-badge">DELIVERED PURCHASES</span>
+            <span className="stat-card-badge">DIGITAL ASSETS</span>
             <strong className="stat-card-value">{completedPurchases} Assets</strong>
             <p className="stat-card-subtext">Access credentials &amp; instant delivery vault</p>
             <Link to="/dashboard/purchases" className="stat-card-action">
@@ -223,7 +215,17 @@ export function CustomerRecords({
             </Link>
           </article>
 
-          {/* Card 3: SAVED FAVORITES / Wishlist */}
+          {/* Card 2: TOTAL ORDERS */}
+          <article className="dashboard-stat-card">
+            <span className="stat-card-badge">TOTAL ORDERS</span>
+            <strong className="stat-card-value">{records.length} Orders</strong>
+            <p className="stat-card-subtext">Authoritative payment &amp; fulfillment status</p>
+            <Link to="/dashboard/orders" className="stat-card-action">
+              View Orders <ArrowRight size={14} />
+            </Link>
+          </article>
+
+          {/* Card 3: SAVED FAVORITES */}
           <article className="dashboard-stat-card">
             <span className="stat-card-badge">WISHLIST</span>
             <strong className="stat-card-value">{favorites.length} Saved</strong>
@@ -238,7 +240,7 @@ export function CustomerRecords({
       {/* Trending Now 🔥 Ranked Section */}
       {mode === 'overview' && <TrendingSection />}
 
-      {/* Recent Activity / Records */}
+      {/* Records Activity / Purchases */}
       <div className={mode === 'overview' ? 'customer-activity' : undefined}>
         {mode === 'overview' && (
           <div className="activity-heading">
@@ -272,7 +274,104 @@ export function CustomerRecords({
                 : 'Browse our marketplace to find verified digital products, tools, and accounts.'
             }
           />
+        ) : mode === 'purchases' ? (
+          /* Purchases View matching Target Reference 84_customer_purchases.jpg */
+          <div className="purchases-target-list">
+            {records.map((order) => {
+              const items = order.order_items || [];
+              const isExpanded = !!expandedPurchases[order.id];
+
+              return (
+                <article className="target-purchase-card" key={order.id}>
+                  {/* Top: Brand Squircle Icon on left + DELIVERED badge on right */}
+                  <div className="target-purchase-top">
+                    <div className="target-purchase-icon-box">
+                      <ShoppingBag size={20} />
+                    </div>
+                    <span className="target-purchase-status-badge">
+                      DELIVERED
+                    </span>
+                  </div>
+
+                  {/* Category Pill */}
+                  <div className="target-purchase-meta">
+                    <span className="target-purchase-cat-pill">
+                      {items[0]?.product_name ? items[0].product_name.split(' ')[0].toUpperCase() : 'DIGITAL ASSET'}
+                    </span>
+                  </div>
+
+                  {/* Title */}
+                  <h3 className="target-purchase-title">
+                    {items.map((i) => i.product_name).join(', ') || `Order ${order.reference}`}
+                  </h3>
+
+                  {/* Date */}
+                  <span className="target-purchase-date">
+                    {new Date(order.created_at).toLocaleDateString(undefined, {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                    })}
+                  </span>
+
+                  {/* Paid Amount Row */}
+                  <div className="target-purchase-pricing">
+                    <div className="pricing-left">
+                      <span className="paid-amount-label">PAID AMOUNT</span>
+                      <strong className="paid-amount-val">{formatPrice(order.total_minor)}</strong>
+                    </div>
+                    <span className="target-order-ref-pill">
+                      Ord: {order.reference}
+                    </span>
+                  </div>
+
+                  {/* Alert banner */}
+                  <div className="target-purchase-notice">
+                    <span className="notice-icon">ⓘ</span>
+                    <span>See product description for Credentials Format</span>
+                  </div>
+
+                  {/* Action Button: View Details > */}
+                  <button
+                    type="button"
+                    className="target-purchase-btn"
+                    onClick={() =>
+                      setExpandedPurchases((prev) => ({
+                        ...prev,
+                        [order.id]: !prev[order.id],
+                      }))
+                    }
+                  >
+                    <span>{isExpanded ? 'Hide Details' : 'View Details'}</span>
+                    <ArrowRight size={15} />
+                  </button>
+
+                  {/* Expanded Vault Details */}
+                  {isExpanded && (
+                    <div className="target-purchase-expanded-vault">
+                      {items.map((item) => (
+                        <div key={item.id} className="vault-item-block">
+                          <h4 className="vault-item-name">
+                            {item.product_name} <span className="item-qty">× {item.quantity}</span>
+                          </h4>
+                          {item.product_entitlements?.instructions ? (
+                            <CopyableInstruction text={item.product_entitlements.instructions} />
+                          ) : (
+                            <p className="delivery-pending-note">
+                              Access details are being processed or delivered via secure email. Contact support if needed.
+                            </p>
+                          )}
+                          <ReviewForm itemId={item.id} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
         ) : (
+          /* General Orders List */
           <>
             <div className="order-list">
               {records.slice(0, mode === 'overview' ? 5 : 50).map((order) => (
@@ -299,31 +398,6 @@ export function CustomerRecords({
                       Fulfillment: {order.fulfillment_status}
                     </span>
                   </div>
-
-                  {/* Purchased Items & Delivery Credentials (Vaulted) */}
-                  {mode === 'purchases' && order.order_items && (
-                    <div className="purchase-items-container">
-                      {order.order_items.map((item) => (
-                        <div className="purchase-item-card" key={item.id}>
-                          <div className="purchase-item-header">
-                            <h4>
-                              {item.product_name} <span className="item-qty">× {item.quantity}</span>
-                            </h4>
-                          </div>
-
-                          {item.product_entitlements?.instructions ? (
-                            <CopyableInstruction text={item.product_entitlements.instructions} />
-                          ) : (
-                            <p className="delivery-pending-note">
-                              Access details are being processed or delivered via secure email. Contact support if needed.
-                            </p>
-                          )}
-
-                          <ReviewForm itemId={item.id} />
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </article>
               ))}
             </div>

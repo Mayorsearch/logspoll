@@ -1,6 +1,7 @@
 import { 
   ArrowRight, ShieldCheck, ShoppingBag, PackageCheck, Zap, 
-  Layers, Search, CheckCircle2, ChevronDown, Lock, Sparkles
+  Layers, Search, ChevronDown, Lock,
+  Globe, Users, Phone, Mail, LifeBuoy
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Reviews } from '../components/Reviews'
@@ -10,73 +11,108 @@ import '../homepage.css'
 export function Home() {
   return (
     <div className="reference-home">
-      {/* Hero Section */}
+      {/* Hero Section (Screen 1 Reference) */}
       <section className="private-access-hero" aria-labelledby="home-title">
         <div className="private-access-copy">
           <span className="private-access-badge">
-            <Sparkles size={16} /> VERIFIED DIGITAL MARKETPLACE
+            <Lock size={13} />
+            <span>PRIVATE ACCESS</span>
           </span>
           <h1 id="home-title">
-            Your Marketplace for<br />
-            <span>Digital Essentials</span>
+            Access a Private<br />
+            Digital Services<br />
+            <span className="hero-orange-accent">Marketplace</span>
           </h1>
           <p>
-            Explore a growing collection of digital products, services, and tools in one convenient marketplace. 
-            Organized across verified server tiers for seamless discovery, reliable purchasing, and private fulfillment.
+            Sign up for an account to access our full catalog of digital products and services including VPN services, social media services, virtual numbers, US emails and more.
           </p>
           <div className="hero-button-group">
-            <Link className="button private-access-button" to="/marketplace">
-              Explore Marketplace <ArrowRight size={19} />
+            <Link className="button private-access-button" to="/signup">
+              Create Account to Access Catalog <ArrowRight size={17} />
             </Link>
-            <Link className="button button-outline home-explore" to="/signup">
-              Get Started
-            </Link>
-          </div>
-          <div className="hero-trust-indicators">
-            <span><CheckCircle2 size={15} /> Real-time Stock</span>
-            <span><CheckCircle2 size={15} /> Secure Bachs Settlement</span>
-            <span><CheckCircle2 size={15} /> Authenticated Access</span>
           </div>
         </div>
 
         <div className="private-access-art" aria-hidden="true">
           <img 
-            src="/images/private-services.webp" 
+            src="/images/private-services.png" 
             alt="LogsPoll digital marketplace" 
             width={900} 
             height={1125} 
             fetchPriority="high" 
             decoding="async" 
           />
-          <span className="service-float service-float-vpn">
-            <ShieldCheck size={26} />
-            <small>VPN</small>
-          </span>
-          <span className="service-float service-float-instagram">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <rect x="3" y="3" width="18" height="18" rx="5" />
-              <circle cx="12" cy="12" r="4" />
-              <circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
-            </svg>
-          </span>
-          <span className="service-float service-float-facebook">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M14 21v-8h3l.5-4H14V7c0-1 .3-2 2-2h2V1.5A24 24 0 0 0 15 1c-3 0-5 2-5 5v3H7v4h3v8z" />
-            </svg>
-          </span>
         </div>
       </section>
 
-      {/* Product Categories Section (Unified across all 3 servers) */}
+      {/* Popular Service Categories Section (Screen 1 Reference) */}
       <section className="container section home-categories" id="categories-section">
-        <div className="reference-section-heading">
-          <div>
-            <span className="eyebrow">UNIFIED PRODUCT DIRECTORY</span>
-            <h2>Browse by Category</h2>
+        <div className="popular-categories-heading">
+          <h2>Popular Service Categories</h2>
+          <p>Create an account to explore our complete catalog.</p>
+        </div>
+
+        <div className="popular-categories-grid">
+          <Link to="/marketplace?category=vpn" className="popular-cat-card">
+            <span className="popular-cat-icon vpn">
+              <Globe size={24} />
+            </span>
+            <h3>VPN Services</h3>
+            <p>Secure &amp; anonymous access</p>
+          </Link>
+
+          <Link to="/marketplace?category=social-media" className="popular-cat-card">
+            <span className="popular-cat-icon social">
+              <Users size={24} />
+            </span>
+            <h3>Social Media Services</h3>
+            <p>Growth &amp; engagement tools</p>
+          </Link>
+
+          <Link to="/marketplace?category=virtual-numbers" className="popular-cat-card">
+            <span className="popular-cat-icon numbers">
+              <Phone size={24} />
+            </span>
+            <h3>Virtual Numbers</h3>
+            <p>Global phone numbers</p>
+          </Link>
+
+          <Link to="/marketplace?category=gmail" className="popular-cat-card">
+            <span className="popular-cat-icon emails">
+              <Mail size={24} />
+            </span>
+            <h3>US Emails</h3>
+            <p>Verified email accounts</p>
+          </Link>
+        </div>
+
+        {/* Trust strip matching reference design */}
+        <div className="auth-trust-strip" style={{ margin: '32px auto 0' }}>
+          <div className="auth-trust-box">
+            <div className="auth-trust-icon-circle"><Zap size={18} /></div>
+            <div className="auth-trust-texts">
+              <strong>Fast Access</strong>
+              <small>Get started quickly</small>
+            </div>
           </div>
-          <p>
-            All products belonging to the same category appear together regardless of server origin.
-          </p>
+          <div className="auth-trust-box">
+            <div className="auth-trust-icon-circle"><ShieldCheck size={18} /></div>
+            <div className="auth-trust-texts">
+              <strong>Secure &amp; Private</strong>
+              <small>Your data is safe</small>
+            </div>
+          </div>
+          <div className="auth-trust-box">
+            <div className="auth-trust-icon-circle"><LifeBuoy size={18} /></div>
+            <div className="auth-trust-texts">
+              <strong>24/7 Support</strong>
+              <small>We're here to help</small>
+            </div>
+          </div>
+        </div>
+
+        <div className="category-directory-divider">
+          <span className="eyebrow">ALL DIRECTORY CATEGORIES</span>
         </div>
         <Categories />
       </section>
@@ -94,28 +130,25 @@ export function Home() {
         <div className="reference-features">
           <article className="feature-wide feature-dark">
             <span className="feature-icon"><Zap size={24} /></span>
-            <h3>Unified Multi-Server Architecture</h3>
+            <h3>Fast Access</h3>
             <p>
-              Browse digital essentials organized into logical server tiers (Server 1, Server 2, and Server 3). 
-              Compare prices and inventory across servers within the exact same category.
+              Immediate account credentials and digital access delivered automatically with transparent inventory across Server 1, Server 2, and Server 3.
             </p>
           </article>
 
           <article>
             <span className="feature-icon status-green"><ShieldCheck size={24} /></span>
-            <h3>Verified Inventory Only</h3>
+            <h3>Secure &amp; Private</h3>
             <p>
-              Stock counts reflect authoritative real-time availability. Out-of-stock items are clearly marked 
-              to prevent failed orders.
+              Server-isolated architecture with end-to-end encryption on all customer orders and private fulfillment.
             </p>
           </article>
 
           <article>
             <span className="feature-icon"><Lock size={24} /></span>
-            <h3>Private Fulfillment Vault</h3>
+            <h3>24/7 Support</h3>
             <p>
-              Account credentials and delivery instructions are stored securely and revealed only to authenticated 
-              buyers after payment confirmation.
+              Dedicated technical assistance and prompt resolution for any order inquiries and account questions.
             </p>
           </article>
 

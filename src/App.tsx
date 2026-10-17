@@ -39,6 +39,9 @@ export default function App() {
                 <Route index element={<Home />} />
 
                 <Route path="marketplace" element={<Marketplace />} />
+                <Route path="products" element={<Navigate to="/marketplace" replace />} />
+                <Route path="catalog" element={<Navigate to="/marketplace" replace />} />
+                <Route path="private-catalog" element={<Navigate to="/marketplace" replace />} />
                 <Route path="products/:slug" element={<ProductDetails />} />
                 <Route path="docs" element={<ApiDocs />} />
                 <Route path="api-docs" element={<Navigate to="/docs" replace />} />

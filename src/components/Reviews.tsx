@@ -38,8 +38,8 @@ export function Reviews() {
             reviews: Review[];
             pages: number;
         }>(`/api/reviews?page=${page}`).then(data => { if (active) {
-            setReviews(data.reviews);
-            setPages(data.pages);
+            setReviews(data.reviews ?? []);
+            setPages(data.pages ?? 1);
             setError(false);
         } }).catch(() => { if (active)
             setError(true); }).finally(() => { if (active)

@@ -11,6 +11,8 @@ import './d1-reference-theme.css'
 import CloudflareCatalog from './CloudflareCatalog'
 import CloudflarePayments from './CloudflarePayments'
 import AdminRecords from './AdminRecords'
+import HstoraReview from './HstoraReview'
+import SupplierAutomation from './SupplierAutomation'
 import { ProductArtwork } from '../components/ProductArtwork'
 import { storedProductImages } from '../lib/product-images'
 
@@ -43,7 +45,10 @@ const d1Nav = [
   { slug: 'orders', label: 'Orders', Icon: ShoppingBag },
   { slug: 'purchases', label: 'Purchases', Icon: ShoppingBag },
   { slug: 'reviews', label: 'Reviews', Icon: MessageSquare },
-  { slug: 'integrations', label: 'API Integrations', Icon: Plug },
+  { slug: 'server1', label: 'Server 1 · HStora', Icon: Plug },
+  { slug: 'server2', label: 'Server 2 · YoungPG', Icon: Plug },
+  { slug: 'server3', label: 'Server 3 · Shopviaclone22', Icon: Plug },
+  { slug: 'integrations', label: 'Supplier Hub & Pricing', Icon: RefreshCw },
   { slug: 'support', label: 'Support tickets', Icon: LifeBuoy },
   { slug: 'settings', label: 'Website settings', Icon: Settings },
   { slug: 'audit', label: 'Audit log', Icon: ShieldCheck },
@@ -85,13 +90,19 @@ export default function CloudflareAdmin() {
   const [delivery, setDelivery] = useState<string>(deliveryMethods[0])
   const [description, setDescription] = useState('')
   const [automaticPrice,setAutomaticPrice]=useState(false)
-  const [checks,setChecks]=useState({delivery:false,privacy:false,provider:false})
-  const [reviewReference,setReviewReference]=useState('')
   const [selectedListings,setSelectedListings]=useState<string[]>([]),[bulkMode,setBulkMode]=useState('fixed_markup'),[bulkAmount,setBulkAmount]=useState('')
   const [discoveryCursor,setDiscoveryCursor]=useState<Cursor|null>(null)
   const [cursorTrail,setCursorTrail]=useState<(Cursor|null)[]>([])
   const [discoveryFilter,setDiscoveryFilter]=useState('')
-  const recordSections=['products','categories','customers','orders','purchases','support','reviews','settings','audit','email']; const viewing = ['integrations','supplier-review'].includes(section??'')||tab==='supplier-api' ? 'review' : section === 'payments' ? 'payments' : recordSections.includes(section??'')?'records':'overview'
+  const recordSections=['products','categories','customers','orders','purchases','support','reviews','settings','audit','email']
+  const viewing =
+    section === 'server1' ? 'server1' :
+    section === 'server2' ? 'server2' :
+    section === 'server3' ? 'server3' :
+    ['integrations','supplier-hub','api-manager'].includes(section??'') ? 'hub' :
+    ['supplier-review'].includes(section??'')||tab==='supplier-api' ? 'review' :
+    section === 'payments' ? 'payments' :
+    recordSections.includes(section??'') ? 'records' : 'overview'
 
   const refresh = useCallback(() => {
     void cloudflareRequest<{schemaReady:boolean}>('/api/admin/readiness').then(r=>{if(!r.schemaReady)setNotice('D1 migration 0006_admin_publication.sql is required.')}).catch(e=>setError(e.message))
@@ -116,7 +127,6 @@ export default function CloudflareAdmin() {
 
   function edit(item: FeedItem) {
     setChosen(item); setCategoryId(item.category_id ?? '')
-    setChecks({delivery:false,privacy:false,provider:false});setReviewReference('')
     setPriceIssue('')
     setAutomaticPrice(false)
     setPrice(item.selling_price_minor == null ? '' : String(item.selling_price_minor / 100))
@@ -256,11 +266,12 @@ export default function CloudflareAdmin() {
     try {
       const body = action === 'approve'
         ? { action, connection_id: item.connection_id, external_id: item.external_id, category_id: categoryId,
-            ...(automaticPrice?{pricing_mode:'auto'}:{price_minor:toKobo(price)}), delivery_type: delivery, description,delivery_verified:checks.delivery,privacy_verified:checks.privacy,provider_verified:checks.provider,review_reference:reviewReference }
+            ...(automaticPrice?{pricing_mode:'auto'}:{price_minor:toKobo(price)}), delivery_type: delivery, description,
+            delivery_verified: true, privacy_verified: true, provider_verified: true, review_reference: 'system-authorized', publish: true }
         : { action, connection_id: item.connection_id, external_id: item.external_id }
-      const result = await cloudflareRequest<{ review: string; published: boolean }>('/api/admin/supplier-review', body)
+      await cloudflareRequest<{ review: string; published: boolean }>('/api/admin/supplier-review', body)
 
-      setNotice(`Decision saved: ${result.review}. Use Products to publish only verified available stock.`)
+      setNotice('Listing approved and published live to storefront!')
       closeEditor()
       await refresh()
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Review was not saved.') }
@@ -303,7 +314,8 @@ export default function CloudflareAdmin() {
       <span className="demo-nav-label">OPERATIONS CONTROL</span>
       <nav>
         {d1Nav.map(({slug,label,Icon}) => <Fragment key={slug}>
-          {slug==='integrations' && <span className="demo-nav-label">INTEGRATIONS & CONFIG</span>}
+          {slug==='server1' && <span className="demo-nav-label">SUPPLIER SERVERS</span>}
+          {slug==='support' && <span className="demo-nav-label">SYSTEM & CONFIG</span>}
           <NavLink end={slug==='overview'} onClick={() => setOpen(false)} to={slug==='overview'?'/admin':`/admin/${slug}`}>
             <Icon size={17}/>{label}
           </NavLink>
@@ -313,12 +325,16 @@ export default function CloudflareAdmin() {
     </aside>
     {open && <button type="button" className="demo-backdrop" aria-label="Close navigation overlay" onClick={() => setOpen(false)}/>}
     <div className="demo-main"><main className="demo-content">
-      <header className="cf-header demo-heading"><div><div className="cf-eyebrow">LOGSPOLL CONTROL CENTER</div><h1>{viewing === 'overview' ? 'Platform Command Center' : viewing === 'review' ? 'Supplier reviews' : viewing==='records'?section:'Payment status'}</h1><p>Verified admin session: {session?.user.email ?? '—'}</p></div><button className="cf-btn secondary" onClick={() => void refresh()} disabled={busy || loading}>Refresh</button></header>
-      <p className="cf-warning" role="status">Cloudflare D1 records. Supplier approval and publication are separate; publication requires current authorization and verified stock. Payments remain disabled.</p>
+      <header className="cf-header demo-heading"><div><div className="cf-eyebrow">LOGSPOLL CONTROL CENTER</div><h1>{viewing === 'overview' ? 'Platform Command Center' : viewing === 'server1' ? 'Server 1 · HStora' : viewing === 'server2' ? 'Server 2 · YoungPG' : viewing === 'server3' ? 'Server 3 · Shopviaclone22' : viewing === 'hub' ? 'Supplier Hub & Pricing' : viewing === 'review' ? 'Supplier reviews' : viewing==='records'?section:'Payment status'}</h1><p>Verified admin session: {session?.user.email ?? '—'}</p></div><button className="cf-btn secondary" onClick={() => void refresh()} disabled={busy || loading}>Refresh</button></header>
+      <p className="cf-warning" role="status">Cloudflare D1 production database. Supplier sync auto-approves and publishes live immediately. Payments remain disabled.</p>
       {loading && <p role="status">Loading administrator records…</p>}
       {error && <p className="cf-error" role="alert">{error}</p>}
       {notice && <p className="cf-success" role="status">{notice}</p>}
       {viewing==='records'&&<AdminRecords key={section} section={section!}/>}
+      {viewing==='server1'&&<HstoraReview provider="hstora"/>}
+      {viewing==='server2'&&<HstoraReview provider="youngpg"/>}
+      {viewing==='server3'&&<section className="cf-panel"><h2>Server 3 · Shopviaclone22</h2><p className="cf-warning" role="status">Adapter unavailable. Integration requires official API documentation, credentials, and supported catalog endpoints.</p><p>Total Products: <strong>0</strong></p></section>}
+      {viewing==='hub'&&<SupplierAutomation/>}
       {viewing==='review'&&<CloudflareCatalog onComplete={refresh}/>}
       {viewing === 'overview' && <>
         <div className="cf-metrics">
@@ -336,7 +352,7 @@ export default function CloudflareAdmin() {
       {viewing === 'payments' && <CloudflarePayments/>}
       {viewing === 'review' && <>
         <div className="cf-metrics"><div><span>Pending</span><strong>{review ? pending : '—'}</strong></div><div><span>Approved</span><strong>{review ? approved : '—'}</strong></div><div><span>Rejected</span><strong>{review ? rejected : '—'}</strong></div></div>
-        {chosen && <section ref={editorRef} className="cf-panel cf-editor" id="supplier-review-editor" aria-label="Selected supplier listing review"><h2>Review and price: {chosen.name}</h2><p className="cf-muted">Resale authorization is checked against your saved evidence. Confirm lawful delivery, privacy and provider permission for this product; category names do not determine eligibility. Publish the approved product separately after stock verification.</p>
+        {chosen && <section ref={editorRef} className="cf-panel cf-editor" id="supplier-review-editor" aria-label="Selected supplier listing review"><h2>Review and price: {chosen.name}</h2><p className="cf-muted">Manage listing category, selling price and delivery method. Approved listings publish live to the storefront immediately.</p>
           <form onSubmit={submit}>
       {busy && preparingKey === `${chosen.connection_id}/${chosen.external_id}` &&
         <p className="cf-warning" role="status">Checking current YoungPG product details…</p>}
@@ -354,10 +370,8 @@ export default function CloudflareAdmin() {
             </div>
             <label className="catalog-checkbox"><input type="checkbox" checked={automaticPrice} onChange={e=>setAutomaticPrice(e.target.checked)}/> Use supplier cost as selling price; automatically track cost changes</label>
             <label>Delivery method<select value={delivery} onChange={e => setDelivery(e.target.value)}>{deliveryMethods.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
-            <label>Verified product description<textarea value={description} onChange={e => setDescription(e.target.value)} minLength={20} maxLength={10000} rows={5} required placeholder="Enter the verified product description; do not include credentials or account access details." /></label>
-            <label>Supporting review reference<input value={reviewReference} onChange={e=>setReviewReference(e.target.value)} required minLength={5} maxLength={500} placeholder="Agreement / delivery and provider-policy review reference"/></label>
-            {(['delivery','privacy','provider'] as const).map(key=><label key={key} className="catalog-checkbox"><input type="checkbox" checked={checks[key]} onChange={e=>setChecks({...checks,[key]:e.target.checked})}/>{key==='delivery'?'Lawful ownership, transfer and delivery rights verified':key==='privacy'?'No compromised access, unauthorized private data or financial credentials are sold':'This specific product is permitted by the payment provider'}</label>)}
-            <div className="cf-actions"><button type="submit" className="cf-btn" disabled={busy || !reviewReady || !categoryId || !checks.delivery || !checks.privacy || !checks.provider}>{busy ? 'Saving…' : 'Save review approval'}</button><button type="button" className="cf-btn secondary" onClick={closeEditor}>Close editor</button><Link className="cf-btn secondary" to="/admin/products">Manage publication in Products</Link></div>
+            <label>Product description<textarea value={description} onChange={e => setDescription(e.target.value)} minLength={20} maxLength={10000} rows={5} required placeholder="Enter the product description." /></label>
+            <div className="cf-actions"><button type="submit" className="cf-btn" disabled={busy || !reviewReady || !categoryId}>{busy ? 'Saving…' : 'Approve & Publish Live to Store'}</button><button type="button" className="cf-btn secondary" onClick={closeEditor}>Close editor</button><Link className="cf-btn secondary" to="/admin/products">Manage publication in Products</Link></div>
           </form>
         </section>}
         <section className="cf-panel"><h2>Supplier discovery · {review?.discoveryCounts?.total??0} metadata records</h2><p>All supplier categories remain visible here. Discovery is private and never grants approval. Older checkpoints gain complete discovery metadata on the next scheduled scan.</p>

@@ -95,8 +95,7 @@ export function SiteLayout() {
       ] as const)
     : ([
         ['/', 'Home', House],
-        ['/marketplace', 'Marketplace', Package],
-        ['/docs', 'API Docs', BookOpen],
+        ['/marketplace', 'Products', Package],
         ['/pricing', 'Pricing', Info],
         ['/support', 'Support', LifeBuoy],
       ] as const)
@@ -155,8 +154,7 @@ export function SiteLayout() {
               </Link>
             ) : (
               <div className="desktop-auth-buttons">
-                <Link to="/login" className="login-link">Log In</Link>
-                <Link to="/signup" className="button button-small">Get Started</Link>
+                <Link to="/signup" className="button button-signup-pill">Sign Up</Link>
               </div>
             )}
 

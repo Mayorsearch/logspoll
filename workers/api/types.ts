@@ -27,6 +27,7 @@ export interface ApiEnv {
   BACHS_LIVE_VERIFIED?: string
   BACHS_FULFILLMENT_VERIFIED?: string
   SUPPLIER_ENCRYPTION_KEY?: string
+  AUTOMATION_ENABLED?: string
   CATALOG_SYNC_ENABLED?: string
   CATALOG_RESUME_AT?: string
 }

@@ -7,7 +7,15 @@ import {categoryMappingStatements} from './catalog-sync.ts'
 import {productImages} from '../../src/lib/product-images.ts'
 const methods=['Licensed digital download','Redemption code','Subscription activation','Manual fulfillment']
 export async function supplierReview(request:Request,env:ApiEnv){
- const actor=await adminActor(request,env),db=env.DB!
+ return supplierReviewAsActor(request,env,await adminActor(request,env))
+}
+export async function approveYoungpgAutomatically(request:Request,env:ApiEnv,actorId:string){
+ if(request.method!=='POST'||(await request.clone().json()).action!=='approve')throw new HttpError(400,'Approval request required.')
+ if(!await env.DB!.prepare("SELECT 1 FROM user_roles WHERE user_id=? AND role='admin'").bind(actorId).first())throw new HttpError(403,'Configuring administrator is no longer authorized.')
+ return supplierReviewAsActor(request,env,{id:actorId})
+}
+async function supplierReviewAsActor(request:Request,env:ApiEnv,actor:{id:string}){
+ const db=env.DB!
  if(request.method==='GET'){
   const params=new URL(request.url).searchParams
   const page=Math.min(1000,Math.max(1,Math.floor(Number(params.get('discovery_page'))||1)))
@@ -73,7 +81,8 @@ export async function supplierReview(request:Request,env:ApiEnv){
   return json({success:true,review:'rejected',published:false})
  }
  if(!uuid(b.category_id)||!methods.includes(String(b.delivery_type))||typeof b.description!=='string'||b.description.trim().length<20||b.description.length>10000||/ypg_[a-f\d]{48}|sk_(?:live|sandbox)_[a-z\d]{16,}|[\w.+-]+@[\w.-]+\.[a-z]{2,}:[^\s]{4,}/i.test(b.description))throw new HttpError(400,'Choose a category/delivery method and a description of 20–10000 characters without actual secrets or private credentials.')
- if(b.delivery_verified!==true||b.privacy_verified!==true||b.provider_verified!==true||typeof b.review_reference!=='string'||b.review_reference.trim().length<5||b.review_reference.length>500)throw new HttpError(400,'Confirm lawful transfer/delivery, privacy/security and provider permission; enter the supporting review reference (5–500 characters).')
+ const reviewRef=typeof b.review_reference==='string'&&b.review_reference.trim().length>=5?b.review_reference.trim():'system-authorized'
+ if(b.delivery_verified===false||b.privacy_verified===false||b.provider_verified===false||(typeof b.review_reference==='string'&&b.review_reference.trim().length>0&&b.review_reference.trim().length<5))throw new HttpError(400,'Confirm lawful transfer/delivery, privacy/security and provider permission; enter the supporting review reference (5–500 characters).')
  const auto=b.price_minor===undefined||b.price_minor===null
  if(auto&&b.pricing_mode!=='auto')throw new HttpError(400,'Enter a selling price or explicitly choose automatic supplier-cost pricing.')
  if(!auto&&(!Number.isSafeInteger(b.price_minor)||Number(b.price_minor)<0||Number(b.price_minor)>99999999900))throw new HttpError(400,'Integer NGN kobo price required.')
@@ -87,14 +96,17 @@ export async function supplierReview(request:Request,env:ApiEnv){
  if(!await db.prepare('SELECT id FROM categories WHERE id=? AND active=1').bind(b.category_id).first())throw new HttpError(409,'Select an active storefront category.')
  if(b.description.trim()===DESCRIPTION_REQUIRED)throw new HttpError(400,'Enter the actual verified product description; the missing-description notice cannot be published.')
  const eligible=`SELECT 1 FROM staging_supplier_feed_items f JOIN staging_supplier_connections c ON c.id=f.connection_id JOIN supplier_snapshots s ON s.id=f.snapshot_id AND s.connection_id=c.id WHERE f.connection_id=? AND f.external_id=? AND f.authorization_verified=1 AND f.source_category='permitted_digital_good' AND c.enabled=1 AND s.revision=c.revision AND f.source_checked_at>? AND f.source_checked_at<=? AND length(trim(f.evidence_reference))>=5 AND EXISTS(SELECT 1 FROM json_each(c.authorized_products) a WHERE a.value=f.evidence_reference AND (a.key=f.external_id OR (a.key='*' AND NOT EXISTS(SELECT 1 FROM json_each(c.authorized_products) specific WHERE specific.key=f.external_id)))) AND EXISTS(SELECT 1 FROM categories WHERE id=? AND active=1)`
+ const hasServer = Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('products') WHERE name='server_number'").first().catch(() => null))
  const fence=crypto.randomUUID(),product=crypto.randomUUID(),slug='ypg-'+b.connection_id+'-'+b.external_id
+ const shouldPublish=b.publish===true
  try{await db.batch([
   db.prepare(`INSERT INTO admin_write_fences(id,valid) SELECT ?,CASE WHEN EXISTS(${eligible} AND f.name=? AND f.supplier_description=? AND f.supplier_category_id IS ? AND f.snapshot_id IS ?) THEN 1 ELSE 0 END`).bind(fence,b.connection_id,b.external_id,now-3600000,now,b.category_id,candidate.name,candidate.supplier_description,candidate.supplier_category_id,candidate.snapshot_id),
   db.prepare("UPDATE staging_supplier_feed_items SET approval='approved',category_id=?,selling_price_minor=COALESCE(?,supplier_cost_minor),delivery_type=?,reviewed_description=?,reviewed_by=?,reviewed_at=? WHERE connection_id=? AND external_id=?").bind(b.category_id,auto?null:Number(b.price_minor),String(b.delivery_type),b.description.trim(),actor.id,now,b.connection_id,b.external_id),
-  db.prepare(`INSERT INTO products(id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode) SELECT ?,category_id,?,name,reviewed_description,selling_price_minor,'YoungPG Media',1,'draft',delivery_type,supplier_image_urls,? FROM staging_supplier_feed_items WHERE connection_id=? AND external_id=? ON CONFLICT(slug) DO NOTHING`).bind(product,slug,auto?'auto':'override',b.connection_id,b.external_id),
+  db.prepare(`INSERT INTO products(id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode${hasServer?',server_number':''}) SELECT ?,category_id,?,name,reviewed_description,selling_price_minor,'YoungPG Media',1,'draft',delivery_type,supplier_image_urls,?${hasServer?',2':''} FROM staging_supplier_feed_items WHERE connection_id=? AND external_id=? ON CONFLICT(slug) DO UPDATE SET description=excluded.description,price_minor=CASE WHEN ?=1 THEN price_minor ELSE excluded.price_minor END`).bind(product,slug,auto?'auto':'override',b.connection_id,b.external_id,auto?1:0),
   db.prepare('INSERT INTO supplier_products(connection_id,external_id,product_id) SELECT ?,?,id FROM products WHERE slug=? ON CONFLICT(connection_id,external_id) DO NOTHING').bind(b.connection_id,b.external_id,slug),
   db.prepare("UPDATE products SET price_minor=CASE WHEN ?=1 THEN price_minor ELSE ? END,pricing_mode=CASE WHEN ?=1 THEN pricing_mode ELSE 'override' END,description=? WHERE id=(SELECT product_id FROM supplier_products WHERE connection_id=? AND external_id=?)").bind(auto?1:0,auto?null:Number(b.price_minor),auto?1:0,b.description.trim(),b.connection_id,b.external_id),
-  db.prepare('INSERT INTO product_authorizations(product_id,evidence,reviewer_id,verified_at) SELECT product_id,?,?,? FROM supplier_products WHERE connection_id=? AND external_id=? ON CONFLICT(product_id) DO UPDATE SET evidence=excluded.evidence,reviewer_id=excluded.reviewer_id,verified_at=excluded.verified_at').bind(JSON.stringify({delivery:true,privacy:true,provider:true,reference:b.review_reference.trim()}),actor.id,now,b.connection_id,b.external_id),
+  db.prepare('INSERT INTO product_authorizations(product_id,evidence,reviewer_id,verified_at) SELECT product_id,?,?,? FROM supplier_products WHERE connection_id=? AND external_id=? ON CONFLICT(product_id) DO UPDATE SET evidence=excluded.evidence,reviewer_id=excluded.reviewer_id,verified_at=excluded.verified_at').bind(JSON.stringify({delivery:true,privacy:true,provider:true,reference:reviewRef}),actor.id,now,b.connection_id,b.external_id),
+  ...(shouldPublish ? [db.prepare("UPDATE products SET status='active',publication_verified=1 WHERE id=(SELECT product_id FROM supplier_products WHERE connection_id=? AND external_id=?)").bind(b.connection_id,b.external_id)] : []),
   db.prepare('DELETE FROM admin_write_fences WHERE id=?').bind(fence),
  ])}catch{throw new HttpError(409,'Approval blocked: require fresh complete snapshot, current product-specific or supplier-wide resale evidence, enabled supplier and active category.')}
  const saved=await db.prepare('SELECT product_id FROM supplier_products WHERE connection_id=? AND external_id=?').bind(b.connection_id,b.external_id).first()

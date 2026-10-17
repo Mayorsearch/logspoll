@@ -31,7 +31,8 @@
 				{
 					"binding": "DB",
 					"database_name": "logspoll-d1-staging-20261012",
-					"database_id": "d337160c-36e3-4a1d-9908-76a6873b4188"
+					"database_id": "d337160c-36e3-4a1d-9908-76a6873b4188",
+					"migrations_dir": "workers/api/migrations"
 				}
 			]
 		}

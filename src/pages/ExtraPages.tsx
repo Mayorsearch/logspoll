@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowRight, PackageOpen, ShieldCheck, Zap, Heart, ShoppingBag } from 'lucide-react';
+import { ArrowRight, PackageOpen, ShieldCheck, Heart, ShoppingBag } from 'lucide-react';
 import { ProductOverview } from '../components/ProductOverview';
 import { ProductArtwork } from '../components/ProductArtwork';
 import { Categories } from '../components/Categories';
@@ -105,28 +105,9 @@ export function ProductDetails() {
                     <Link className="button" to="/login">Sign in to your account</Link>
                 </div>
             ) : (
-                <div className="product-detail-container">
-                    {/* Left Column: Branded Artwork Card with Badges and Favorite Heart */}
-                    <div className="detail-artwork-card">
-                        <div className="detail-card-badges">
-                            <span className="product-category-badge">{product.category_name}</span>
-                            {product.server_number ? (
-                                <span className={`server-badge server-badge-${product.server_number}`}>
-                                    Server {product.server_number}
-                                </span>
-                            ) : null}
-                        </div>
-
-                        <button
-                            type="button"
-                            className="favorite-button"
-                            aria-label={`${favorites.includes(product.id) ? 'Remove' : 'Add'} ${product.name} ${favorites.includes(product.id) ? 'from' : 'to'} favorites`}
-                            aria-pressed={favorites.includes(product.id)}
-                            onClick={() => toggleFavorite(product.id)}
-                        >
-                            <Heart size={18} fill={favorites.includes(product.id) ? 'currentColor' : 'none'} />
-                        </button>
-
+                <div className="product-detail-layout">
+                    {/* Branded Product Artwork Banner matching References 02/04/06 */}
+                    <div className="detail-media-banner">
                         <ProductArtwork
                             path={product.image_path}
                             name={product.name}
@@ -135,45 +116,48 @@ export function ProductDetails() {
                         />
                     </div>
 
-                    {/* Right Column: Title, Price, Dual Highlight Cards, Stepper, Actions */}
-                    <div className="detail-info-column">
-                        <h1 className="detail-title">{product.name}</h1>
-
-                        <div className="detail-price-row">
-                            <strong className="detail-price">{formatPrice(product.price_minor)}</strong>
-                            <span className="detail-unit-label">/ unit</span>
-                            <span className={`stock-badge ${product.available_quantity < 1 ? 'out-of-stock' : ''}`}>
-                                {product.available_quantity > 0 ? `${product.available_quantity} available` : 'Unavailable to order'}
+                    {/* Compact Purchase Panel */}
+                    <div className="detail-purchase-panel">
+                        {/* Top Badges Row */}
+                        <div className="detail-badges-row">
+                            <span className="detail-category-pill">{product.category_name}</span>
+                            <span className="detail-server-pill">
+                                SERVER {product.server_number ?? 1}
                             </span>
                         </div>
 
-                        {/* Side-by-Side Highlight Cards (PadiLogs Blueprint) */}
-                        <div className="detail-highlights-grid">
-                            <div className="detail-highlight-card">
-                                <div className="detail-highlight-icon zap">
-                                    <Zap size={20} />
-                                </div>
-                                <div className="detail-highlight-text">
-                                    <strong>Instant Delivery</strong>
-                                    <p>Automated credential vault dispatch immediately after payment</p>
-                                </div>
-                            </div>
+                        {/* Title */}
+                        <h1 className="detail-title">{product.name}</h1>
 
-                            <div className="detail-highlight-card">
-                                <div className="detail-highlight-icon shield">
-                                    <ShieldCheck size={20} />
-                                </div>
-                                <div className="detail-highlight-text">
-                                    <strong>Verified Product</strong>
-                                    <p>Guaranteed authentic digital asset with full server support</p>
-                                </div>
+                        {/* Price & Stock Row */}
+                        <div className="detail-price-row">
+                            <strong className="detail-price">{formatPrice(product.price_minor)}</strong>
+                            <span className={`detail-stock-pill ${product.available_quantity < 1 ? 'out' : ''}`}>
+                                <span className="stock-dot-indicator" />
+                                {product.available_quantity > 0 ? `${product.available_quantity} available` : 'Out of stock'}
+                            </span>
+                        </div>
+
+                        {/* Accurate Product Specifications */}
+                        <div className="detail-specs-box">
+                            <div className="detail-spec-row">
+                                <span className="spec-label">Availability</span>
+                                <span className="spec-value">{product.available_quantity > 0 ? `${product.available_quantity} in stock` : 'Out of stock'}</span>
+                            </div>
+                            <div className="detail-spec-row">
+                                <span className="spec-label">Duration</span>
+                                <span className="spec-value">{product.term || 'See product description'}</span>
+                            </div>
+                            <div className="detail-spec-row">
+                                <span className="spec-label">Delivery</span>
+                                <span className="spec-value">Licensed digital download</span>
                             </div>
                         </div>
 
-                        {/* Quantity Stepper */}
-                        <div className="product-detail-quantity">
-                            <label htmlFor="detail-quantity"><strong>Quantity</strong></label>
-                            <div className="quantity-stepper">
+                        {/* Select Quantity Stepper Box */}
+                        <div className="detail-quantity-card">
+                            <span className="quantity-card-label">Select Quantity</span>
+                            <div className="quantity-stepper-clean">
                                 <button
                                     type="button"
                                     aria-label="Decrease quantity"
@@ -182,9 +166,9 @@ export function ProductDetails() {
                                 >
                                     −
                                 </button>
-                                <output id="detail-quantity" aria-label="Quantity">
+                                <span className="quantity-value-display">
                                     {quantity}
-                                </output>
+                                </span>
                                 <button
                                     type="button"
                                     aria-label="Increase quantity"
@@ -196,26 +180,27 @@ export function ProductDetails() {
                             </div>
                         </div>
 
-                        {/* Action Buttons */}
-                        <div className="detail-actions-row">
+                        {/* Action Buttons Row */}
+                        <div className="detail-cta-row">
                             <button
                                 type="button"
-                                className="detail-purchase-btn"
+                                className="detail-purchase-cta"
                                 disabled={product.available_quantity < 1}
                                 onClick={() => {
                                     add(product.id, quantity, product.available_quantity);
                                     setNotice(`${product.name} added to cart.`);
                                 }}
                             >
-                                <ShoppingBag size={18} /> Purchase Product
+                                <ShoppingBag size={18} /> Add to Cart
                             </button>
 
                             <button
                                 type="button"
-                                className={`detail-fav-btn ${favorites.includes(product.id) ? 'active' : ''}`}
+                                className={`detail-fav-square-btn ${favorites.includes(product.id) ? 'active' : ''}`}
+                                aria-label={`${favorites.includes(product.id) ? 'Remove' : 'Add'} ${product.name} ${favorites.includes(product.id) ? 'from' : 'to'} favorites`}
                                 onClick={() => toggleFavorite(product.id)}
                             >
-                                <Heart size={18} fill={favorites.includes(product.id) ? 'currentColor' : 'none'} /> Favourite
+                                <Heart size={20} fill={favorites.includes(product.id) ? '#ef4444' : 'none'} color={favorites.includes(product.id) ? '#ef4444' : '#64748b'} />
                             </button>
                         </div>
 
@@ -225,8 +210,8 @@ export function ProductDetails() {
                             </p>
                         )}
 
-                        <p className="preview-note">
-                            <ShieldCheck size={15} /> All transactions are protected by LogsPoll verified escrow &amp; live reconciliation.
+                        <p className="detail-secure-notice">
+                            <ShieldCheck size={14} /> Secure payment processing must be connected before orders can be placed.
                         </p>
                     </div>
 

@@ -1,15 +1,16 @@
 import { resolveMainCategory } from '../lib/main-storefront-categories';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { PackageOpen, Search, SlidersHorizontal, ArrowRight, Heart, Grid2X2, ShoppingBag } from 'lucide-react';
+import { PackageOpen, Search, ArrowRight, Heart, ShoppingBag } from 'lucide-react';
 import { useCatalogCategories } from '../components/useHomeCategories';
 import { ProductArtwork } from '../components/ProductArtwork';
 import { BrandIcon } from '../components/BrandIcon';
-import { HomeCategories } from '../components/HomeCategories';
 import { cloudflareRequest } from '../lib/cloudflare-auth';
 import { useFavorites } from '../lib/favorites';
-import { useCart } from '../lib/cart';
 import { useCurrency } from '../lib/currency';
+import { useCart } from '../lib/cart';
+import { useAuth } from '../auth/AuthProvider';
+import { PrivateCatalogGate } from '../components/PrivateCatalogGate';
 
 interface Product {
   id: string;
@@ -26,11 +27,16 @@ interface Product {
 }
 
 export function Marketplace() {
+  const { session } = useAuth();
   const [params, setParams] = useSearchParams();
   const { favorites, toggleFavorite } = useFavorites();
   const { formatPrice } = useCurrency();
+  const { add } = useCart();
+  const [cardQuantities, setCardQuantities] = useState<Record<string, number>>({});
+  const [addedId, setAddedId] = useState<string | null>(null);
   const favoritesOnly = params.get('favorites') === '1';
   const [statistics, setStatistics] = useState<{ total: number; stock: number; outOfStock: number } | null>(null);
+  const [showGuestCatalog, setShowGuestCatalog] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === '1');
 
   useEffect(() => {
     let active = true;
@@ -54,14 +60,11 @@ export function Marketplace() {
   }, []);
 
   const [products, setProducts] = useState<Product[]>([]);
-  const { categories, categoryError } = useCatalogCategories();
+  const { categories } = useCatalogCategories();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
-  const [notice, setNotice] = useState('');
-  const { add } = useCart();
-  const [quantities, setQuantities] = useState<Record<string, number>>({});
 
   const query = params.get('q') ?? '';
   const category = params.get('category') ?? '';
@@ -111,12 +114,12 @@ export function Marketplace() {
         pages: number;
       }>(`/api/products?${search}`)
         .then(async (data) => {
-          let items = data.products;
+          let items = data.products ?? [];
           if (!favoritesOnly && pageSize === 40 && data.total > (page - 1) * pageSize + 20) {
             const next = new URLSearchParams(search);
             next.set('page', String(Number(next.get('page')) + 1));
             const more = await cloudflareRequest<{ products: Product[] }>(`/api/products?${next}`);
-            items = [...items, ...more.products];
+            items = [...items, ...(more.products ?? [])];
           }
           if (active) {
             setProducts(favoritesOnly ? items.slice((page - 1) * pageSize, page * pageSize) : items);
@@ -150,94 +153,108 @@ export function Marketplace() {
   }
 
   return (
-    <div className="container section catalog-page premium-marketplace">
-      {/* Intro Header */}
-      <div className="marketplace-intro">
-        <span className="marketplace-eyebrow">DIGITAL ESSENTIALS MARKETPLACE</span>
-        <h1>Explore Products</h1>
-        <p>Discover verified digital products, services, and accounts across all server tiers.</p>
-      </div>
-
-      {/* Statistics Bar (Requirement 3: Total products, available stock, out-of-stock counts) */}
-      {statistics && (
-        <div className="catalog-statistics" role="region" aria-label="Catalog Overview Statistics">
-          <div className="stat-card">
-            <span className="stat-label">Total Listed Products</span>
-            <strong className="stat-value">{statistics.total}</strong>
-          </div>
-          <div className="stat-card in-stock">
-            <span className="stat-label">In-Stock Verified</span>
-            <strong className="stat-value">{statistics.stock}</strong>
-          </div>
-          <div className="stat-card out-of-stock">
-            <span className="stat-label">Currently Out of Stock</span>
-            <strong className="stat-value">{statistics.outOfStock}</strong>
-          </div>
-        </div>
+    <div className="container section store-page-wrapper">
+      {/* Screen 3 Reference: Private Catalog Gate for Guests */}
+      {!session && !showGuestCatalog && (
+        <PrivateCatalogGate 
+          onUnlockPreview={() => setShowGuestCatalog(true)} 
+          showExploreOption={true} 
+        />
       )}
 
-      {/* Search Input */}
-      <div className="catalog-toolbar marketplace-search">
-        <label className="search-input">
-          <Search size={20} />
-          <span className="sr-only">Search products</span>
+      {/* Products Store Header matching Target Reference */}
+      {(session || showGuestCatalog) && (
+        <>
+          <div className="store-header">
+          <div className="store-header-title-box">
+            <div className="store-header-icon" aria-hidden="true">
+              <ShoppingBag size={24} />
+            </div>
+            <div>
+              <h1 className="store-title">Products Store</h1>
+              <p className="store-subtitle">Browse our extensive catalog of verified digital accounts and tools.</p>
+            </div>
+          </div>
+
+        {/* Real Status Metrics Row */}
+        <div className="catalog-status-pills" role="region" aria-label="Catalog Overview Statistics">
+          <span className="status-pill-item total">
+            TOTAL <strong>{statistics?.total ?? total}</strong>
+          </span>
+          <span className="status-pill-item in-stock">
+            <span className="pill-dot green" /> IN STOCK <strong>{statistics?.stock ?? (total > 0 ? total : 0)}</strong>
+          </span>
+          <span className="status-pill-item out-of-stock">
+            <span className="pill-dot red" /> OUT OF STOCK <strong>{statistics?.outOfStock ?? 0}</strong>
+          </span>
+          <span className="status-pill-item page">
+            PAGE <strong>{page} OF {pages}</strong>
+          </span>
+        </div>
+      </div>
+
+      {/* Filter Card: Search + 3 Dropdowns */}
+      <div className="store-filter-card">
+        <div className="store-search-bar">
+          <Search size={18} className="store-search-icon" aria-hidden="true" />
           <input
             type="search"
             value={query}
             onChange={(event) => change('q', event.target.value)}
-            placeholder="Search products by title, platform or service..."
+            placeholder="Search by title, keyword, or service..."
             maxLength={120}
+            aria-label="Search by title, keyword, or service"
           />
-        </label>
-      </div>
-
-      {/* Quick Explore Features */}
-      <div className="marketplace-featured">
-        <button
-          className="marketplace-feature"
-          onClick={() => {
-            setParams({});
-            document.getElementById('shop-results')?.scrollIntoView({ block: 'start' });
-          }}
-        >
-          <span className="feature-icon"><ShoppingBag size={22} /></span>
-          <span>
-            <strong>Explore All Products</strong>
-            <small>{statistics ? `${statistics.total} verified products available` : 'Find your digital essentials'}</small>
-          </span>
-          <ArrowRight size={18} />
-        </button>
-        <a className="marketplace-feature" href="#shop-categories">
-          <span className="feature-icon"><Grid2X2 size={22} /></span>
-          <span>
-            <strong>Unified Categories</strong>
-            <small>Browse Facebook, Instagram, Gmail &amp; VPN</small>
-          </span>
-          <ArrowRight size={18} />
-        </a>
-      </div>
-
-      {/* Category Section */}
-      <section id="shop-categories" className="shop-categories" aria-label="Browse categories">
-        <div className="shop-section-heading">
-          <h2>Find your essentials</h2>
-          <span>Unified across all servers</span>
         </div>
-        <HomeCategories
-          items={categories}
-          error={categoryError}
-          selected={resolveMainCategory(category)}
-          onSelect={(slug) => change('category', resolveMainCategory(category) === slug ? '' : slug)}
-        />
-      </section>
 
-      {/* Two-Tier Filter Pills (PadiLogs Design Architecture) */}
-      <div className="marketplace-filters-wrapper" role="region" aria-label="Catalog Filter Pills">
+        <div className="store-dropdowns-row">
+          <div className="store-select-wrap">
+            <select
+              value={category}
+              onChange={(e) => change('category', e.target.value)}
+              aria-label="Filter by category"
+            >
+              <option value="">All Categories</option>
+              {categories.map((cat) => (
+                <option key={cat.slug} value={cat.slug}>
+                  {cat.name} {cat.product_count !== undefined ? `(${cat.product_count})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="store-select-wrap">
+            <select
+              value={availability}
+              onChange={(e) => change('availability', e.target.value)}
+              aria-label="Filter by availability"
+            >
+              <option value="">All Availability</option>
+              <option value="in-stock">In Stock</option>
+              <option value="out-of-stock">Out of Stock</option>
+            </select>
+          </div>
+
+          <div className="store-select-wrap">
+            <select
+              value={String(pageSize)}
+              onChange={(e) => change('size', e.target.value)}
+              aria-label="Results per page"
+            >
+              <option value="20">20 / page</option>
+              <option value="40">40 / page</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Two-Tier Filter Pills (PadiLogs Reference Architecture) */}
+      <div className="store-pills-container" role="region" aria-label="Catalog Filter Pills">
         {/* Row 1: Source & Server Filter Pills */}
-        <div className="filter-pills-row" role="tablist" aria-label="Source and Server filters">
+        <div className="store-pills-row" role="tablist" aria-label="Source and Server filters">
           <button
             type="button"
-            className={`filter-pill ${!server && !favoritesOnly ? 'active' : ''}`}
+            className={`store-filter-pill ${!server && !favoritesOnly ? 'active' : ''}`}
             onClick={() => {
               const next = new URLSearchParams(params);
               next.delete('server');
@@ -247,12 +264,12 @@ export function Marketplace() {
             }}
           >
             <span>All Sources &amp; Tools</span>
-            {statistics && <span className="pill-badge">{statistics.total}</span>}
+            {statistics && <span className="pill-count-badge">{statistics.total}</span>}
           </button>
 
           <button
             type="button"
-            className={`filter-pill ${favoritesOnly ? 'active' : ''}`}
+            className={`store-filter-pill store-pill-fav ${favoritesOnly ? 'active' : ''}`}
             onClick={() => {
               const next = new URLSearchParams(params);
               if (favoritesOnly) {
@@ -267,12 +284,12 @@ export function Marketplace() {
           >
             <Heart size={14} fill={favoritesOnly ? 'currentColor' : 'none'} />
             <span>Favourites</span>
-            <span className="pill-badge">{favorites.length}</span>
+            <span className="pill-count-badge">{favorites.length}</span>
           </button>
 
           <button
             type="button"
-            className={`filter-pill ${server === '1' ? 'active' : ''}`}
+            className={`store-filter-pill ${server === '1' ? 'active' : ''}`}
             onClick={() => {
               const next = new URLSearchParams(params);
               if (server === '1') next.delete('server');
@@ -287,7 +304,7 @@ export function Marketplace() {
 
           <button
             type="button"
-            className={`filter-pill ${server === '2' ? 'active' : ''}`}
+            className={`store-filter-pill ${server === '2' ? 'active' : ''}`}
             onClick={() => {
               const next = new URLSearchParams(params);
               if (server === '2') next.delete('server');
@@ -302,7 +319,7 @@ export function Marketplace() {
 
           <button
             type="button"
-            className={`filter-pill ${server === '3' ? 'active' : ''}`}
+            className={`store-filter-pill ${server === '3' ? 'active' : ''}`}
             onClick={() => {
               const next = new URLSearchParams(params);
               if (server === '3') next.delete('server');
@@ -317,13 +334,14 @@ export function Marketplace() {
         </div>
 
         {/* Row 2: Category Filter Pills with Brand Icons */}
-        <div className="filter-pills-row" role="tablist" aria-label="Category filters">
+        <div className="store-pills-row" role="tablist" aria-label="Category filters">
           <button
             type="button"
-            className={`filter-pill filter-pill-category ${!category ? 'active' : ''}`}
+            className={`store-filter-pill store-pill-cat ${!category ? 'active-blue' : ''}`}
             onClick={() => change('category', '')}
           >
             <span>All Categories</span>
+            {statistics && <span className="pill-count-badge">{statistics.total}</span>}
           </button>
           {categories.map((cat) => {
             const isSelected = resolveMainCategory(category) === cat.slug;
@@ -331,13 +349,13 @@ export function Marketplace() {
               <button
                 key={cat.slug}
                 type="button"
-                className={`filter-pill filter-pill-category ${isSelected ? 'active' : ''}`}
+                className={`store-filter-pill store-pill-cat ${isSelected ? 'active-blue' : ''}`}
                 onClick={() => change('category', isSelected ? '' : cat.slug)}
               >
                 <BrandIcon name={cat.name} size={15} />
                 <span>{cat.name}</span>
                 {cat.product_count !== undefined && (
-                  <span className="pill-badge">{cat.product_count}</span>
+                  <span className="pill-count-badge">{cat.product_count}</span>
                 )}
               </button>
             );
@@ -345,183 +363,142 @@ export function Marketplace() {
         </div>
       </div>
 
-      {/* Filter and Sort Toolbar */}
-      <div className="catalog-toolbar catalog-sort">
-        <label className="filter-label">
-          <SlidersHorizontal size={17} />
-          Sort
-          <select value={sort} onChange={(event) => change('sort', event.target.value)}>
-            <option value="featured">Featured</option>
-            <option value="price-asc">Price: low to high</option>
-            <option value="price-desc">Price: high to low</option>
-            <option value="newest">Newest</option>
-            <option value="name">Name</option>
-          </select>
-        </label>
-
-        <label className="filter-label">
-          Availability
-          <select value={availability} onChange={(event) => change('availability', event.target.value)}>
-            <option value="">All Availability</option>
-            <option value="in-stock">In stock only</option>
-            <option value="out-of-stock">Out of stock</option>
-          </select>
-        </label>
-
-        {/* Server Filter: Strict Anonymity Requirement */}
-        <label className="filter-label">
-          Server
-          <select
-            value={server}
-            onChange={(e) =>
-              setParams((p) => {
-                const n = new URLSearchParams(p);
-                if (e.target.value) n.set('server', e.target.value);
-                else n.delete('server');
-                n.delete('page');
-                return n;
-              })
-            }
-          >
-            <option value="">All Servers</option>
-            <option value="1">Server 1</option>
-            <option value="2">Server 2</option>
-            <option value="3">Server 3</option>
-          </select>
-        </label>
-
-        <label className="filter-label page-size-filter">
-          Show
-          <select
-            value={String(pageSize)}
-            onChange={(event) => change('size', event.target.value)}
-            aria-label="Results per page"
-          >
-            <option value="20">20 per page</option>
-            <option value="40">40 per page</option>
-          </select>
-        </label>
-      </div>
-
       {/* Results Header */}
-      <div className="results-heading" id="shop-results">
+      <div className="store-results-heading" id="shop-results">
         <h2>
           {server ? `Server ${server} · ` : ''}
-          {categories.find((item) => item.slug === category)?.name ?? 'All products'}
+          {categories.find((item) => item.slug === category)?.name ?? 'All Products'}
         </h2>
         <span>{loading ? 'Loading…' : error ? 'Unavailable' : `${total} products found`}</span>
       </div>
 
-      {notice && (
-        <p className="form-success" role="status">
-          {notice} <Link to="/cart">Open cart →</Link>
-        </p>
-      )}
-
-      {/* Product Grid */}
+      {/* High-Density Compact Product Grid matching Target 48_product-cards.jpg */}
       {loading ? (
-        <div className="live-product-grid product-skeleton-grid" role="status" aria-label="Loading products">
+        <div className="compact-product-grid skeleton-mode" role="status" aria-label="Loading products">
           <span className="sr-only">Loading products…</span>
           {Array.from({ length: 8 }, (_, index) => (
-            <div key={index} className="product-skeleton" aria-hidden="true">
-              <div />
-              <span />
-              <span />
-              <span />
+            <div key={index} className="compact-product-card skeleton-card" aria-hidden="true">
+              <div className="skeleton-thumb" />
+              <div className="skeleton-line" />
+              <div className="skeleton-line short" />
             </div>
           ))}
         </div>
       ) : error ? (
         <p className="form-error" role="alert">{error}</p>
       ) : products.length ? (
-        <div className="live-product-grid">
+        <div className="compact-product-grid">
           {products.map((product) => {
             const maximum = Math.min(1000, product.available_quantity);
-            const quantity = Math.min(Math.max(1, maximum), quantities[product.id] ?? 1);
+            const isFav = favorites.includes(product.id);
 
             return (
-              <article className="live-product-card" key={product.id}>
-                {/* Favorite Button */}
-                <button
-                  className="favorite-button"
-                  aria-label={`${
-                    favorites.includes(product.id) ? 'Remove' : 'Add'
-                  } ${product.name} ${favorites.includes(product.id) ? 'from' : 'to'} favorites`}
-                  aria-pressed={favorites.includes(product.id)}
-                  onClick={() => toggleFavorite(product.id)}
-                >
-                  <Heart size={18} fill={favorites.includes(product.id) ? 'currentColor' : 'none'} />
-                </button>
+              <article className="compact-product-card" key={product.id}>
+                {/* Media Thumbnail Container with absolute Heart button */}
+                <div className="compact-card-media-wrapper">
+                  <button
+                    type="button"
+                    className={`compact-fav-btn ${isFav ? 'is-fav' : ''}`}
+                    aria-label={`${isFav ? 'Remove' : 'Add'} ${product.name} ${isFav ? 'from' : 'to'} favorites`}
+                    aria-pressed={isFav}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      toggleFavorite(product.id);
+                    }}
+                  >
+                    <Heart size={15} fill={isFav ? '#ef4444' : 'none'} color={isFav ? '#ef4444' : '#64748b'} />
+                  </button>
 
-                {/* Artwork */}
-                <Link className="live-product-icon" to={`/products/${product.slug}`} aria-label={`View ${product.name}`}>
-                  <ProductArtwork
-                    path={product.image_path}
-                    name={product.name}
-                    category={product.category_name}
-                    images={product.supplier_image_urls}
-                  />
-                </Link>
-
-                {/* Body */}
-                <div className="live-product-body">
-                  <div className="product-badges-row">
-                    <span className="product-category-badge">{product.category_name}</span>
-                    {product.server_number ? (
-                      <span className={`server-badge server-badge-${product.server_number}`}>
-                        Server {product.server_number}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <h3>
-                    <Link to={`/products/${product.slug}`}>{product.name}</Link>
-                  </h3>
-                  <p className="product-summary">{product.description.slice(0, 150)}</p>
-
-                  <small className={`stock-badge ${maximum < 1 ? 'out-of-stock' : ''}`}>
-                    {maximum > 0 ? `${product.available_quantity} available` : 'Out of stock'}
-                  </small>
-
-                  {/* Multi-Currency Price Formatting */}
-                  <div className="product-card-pricing">
-                    <strong className="product-price">{formatPrice(product.price_minor)}</strong>
-                    <span className="price-unit-tag">/ unit</span>
-                  </div>
-
-                  <Link className="card-details-btn" to={`/products/${product.slug}`}>
-                    View Details <ArrowRight size={14} />
+                  <Link to={`/products/${product.slug}`} className="compact-card-media-link" tabIndex={-1} aria-hidden="true">
+                    <ProductArtwork
+                      path={product.image_path}
+                      name={product.name}
+                      category={product.category_name}
+                      images={product.supplier_image_urls}
+                    />
                   </Link>
+                </div>
 
-                  <div className="product-purchase-row">
-                    <div className="quantity-stepper" role="group" aria-label={`Quantity for ${product.name}`}>
+                {/* Card Body */}
+                <div className="compact-card-body">
+                  <h3 className="compact-card-title">
+                    <Link to={`/products/${product.slug}`} title={product.name}>
+                      {product.name}
+                    </Link>
+                  </h3>
+
+                  {/* Badges: SERVER X + Stock */}
+                  <div className="compact-badges-row">
+                    <span className="compact-server-badge">
+                      SERVER {product.server_number ?? 1}
+                    </span>
+                    <span className={`compact-stock-badge ${maximum < 1 ? 'out' : ''}`}>
+                      <span className="stock-dot-indicator" />
+                      {maximum > 0 ? `${product.available_quantity} left` : 'Out of stock'}
+                    </span>
+                  </div>
+
+                  {/* Price */}
+                  <div className="compact-pricing-row">
+                    <strong className="compact-price-amount">{formatPrice(product.price_minor)}</strong>
+                    <span className="compact-price-unit">per unit</span>
+                  </div>
+
+                  {/* Quantity Stepper & Add to Cart */}
+                  <div className="compact-stepper-row">
+                    <div className="compact-stepper">
                       <button
+                        type="button"
+                        disabled={(cardQuantities[product.id] ?? 1) <= 1 || maximum < 1}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          const current = cardQuantities[product.id] ?? 1;
+                          setCardQuantities((prev) => ({ ...prev, [product.id]: Math.max(1, current - 1) }));
+                        }}
                         aria-label={`Decrease quantity for ${product.name}`}
-                        disabled={quantity <= 1 || maximum < 1}
-                        onClick={() => setQuantities((values) => ({ ...values, [product.id]: quantity - 1 }))}
                       >
                         −
                       </button>
-                      <output aria-label="Quantity">{quantity}</output>
+                      <span className="compact-stepper-qty">{cardQuantities[product.id] ?? 1}</span>
                       <button
+                        type="button"
+                        disabled={(cardQuantities[product.id] ?? 1) >= maximum || maximum < 1}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          const current = cardQuantities[product.id] ?? 1;
+                          setCardQuantities((prev) => ({ ...prev, [product.id]: Math.min(maximum, current + 1) }));
+                        }}
                         aria-label={`Increase quantity for ${product.name}`}
-                        disabled={quantity >= maximum}
-                        onClick={() => setQuantities((values) => ({ ...values, [product.id]: quantity + 1 }))}
                       >
                         +
                       </button>
                     </div>
+
                     <button
-                      className="button button-navy"
+                      type="button"
+                      className="compact-add-cart-btn"
                       disabled={maximum < 1}
-                      onClick={() => {
-                        add(product.id, quantity, product.available_quantity);
-                        setNotice(`${product.name} added to cart (subject to available quantity).`);
+                      onClick={(e) => {
+                        e.preventDefault();
+                        const qty = cardQuantities[product.id] ?? 1;
+                        add(product.id, qty, maximum);
+                        setAddedId(product.id);
+                        setTimeout(() => setAddedId(null), 1800);
                       }}
                     >
-                      Add to cart
+                      {addedId === product.id ? 'Added!' : (
+                        <>
+                          <ShoppingBag size={13} /> Add
+                        </>
+                      )}
                     </button>
                   </div>
+
+                  {/* View Details Action */}
+                  <Link to={`/products/${product.slug}`} className="compact-view-btn">
+                    View Details <ArrowRight size={13} />
+                  </Link>
                 </div>
               </article>
             );
@@ -563,6 +540,8 @@ export function Marketplace() {
             Next
           </button>
         </div>
+      )}
+        </>
       )}
     </div>
   );

@@ -38,6 +38,7 @@ const brands:[RegExp,Brand][]=[
  [/\bwindows\b|\bmicrosoft\b/i,{label:'Microsoft',slug:'microsoft',color:'#0078D4',kind:'service'}],
  [/\bchat\s?gpt\b|\bopenai\b/i,{label:'OpenAI',slug:'openai',color:'#10A37F',kind:'service'}],
  [/\bcap\s?cut\b/i,{label:'CapCut',color:'#101828',kind:'service'}],
+ [/\bcash\s?app\b/i,{label:'Cash App',symbol:'cashapp-icon',color:'#00D632',kind:'service'}],
 ]
 const fallback=(text:string):Brand=>/\bvpn\b|\bprox(?:y|ies)\b/i.test(text)?{label:'VPN & privacy',color:'#FF5A0A',kind:'vpn'}:/\be-?mails?\b|\binbox\b/i.test(text)?{label:'Email services',color:'#FF5A0A',kind:'mail'}:/\bdating\b|\bmatchmaking\b/i.test(text)?{label:'Dating services',color:'#FF5A0A',kind:'dating'}:/\bsocial\b/i.test(text)?{label:'Social services',color:'#FF5A0A',kind:'social'}:{label:'Digital services',color:'#FF5A0A',kind:'service'}
 const cache=new Map<string,Brand>()

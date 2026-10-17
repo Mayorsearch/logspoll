@@ -1,3 +1,4 @@
+import {assertAutomationQuotes} from './supplier-automation.ts'
 import {createBachsSession} from '../../server/bachs.ts'
 import {HttpError,json} from './http.ts'
 import {identity} from './auth.ts'
@@ -30,6 +31,7 @@ export async function initiateCheckout(env:ApiEnv,buyer:Buyer,requestId:string,i
   if(rows.results.length!==items.length)throw new HttpError(409,'A product is unavailable.')
   const total=items.reduce((sum,i)=>sum+rows.results.find(p=>p.id===i.id)!.price_minor*i.quantity,0)
   if(!Number.isSafeInteger(total)||total<1||total>99999999900||rows.results.some(p=>p.currency!=='NGN'||p.price_minor<1))throw new HttpError(409,'Invalid product pricing.')
+  await assertAutomationQuotes(env,items.map(item=>item.id))
   const id=crypto.randomUUID(),order=crypto.randomUUID(),now=Date.now(),key='bachs_'+id
   const hasMail=Boolean(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_mail_events'").first().catch(()=>null))
   const statements=[db.prepare('INSERT INTO orders(id,customer_id,reference,total_minor) VALUES(?,?,?,?)').bind(order,buyer.id,'LP-'+order,total),db.prepare('INSERT INTO bachs_payment_attempts(id,order_id,customer_id,client_request_id,idempotency_key,provider_mode,amount_minor,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,order,buyer.id,requestId,key,mode,total,now,now)]

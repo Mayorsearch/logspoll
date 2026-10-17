@@ -1,6 +1,7 @@
+import {supplierAutomation,runSupplierAutomation} from './supplier-automation.ts'
 import {stagingBachsWebhook} from './bachs-staging.ts'
 import {bachsCheckout} from './bachs-checkout.ts'
-import {reconcileBachsAttempt} from './bachs-webhook.ts'
+import {bachsWebhook,reconcileBachsAttempt} from './bachs-webhook.ts'
 import {storefrontCategories} from './storefront-categories.ts'
 import {hstoraWebhook,hstoraWebhookAdmin} from './hstora-webhook.ts'
 import {supplierManager} from './supplier-manager.ts'
@@ -18,10 +19,11 @@ import { customerRead, customerWrite, publicReviews } from './customer.ts'
 import type { ApiEnv, Execution } from './types.ts'
 export async function apiFetch(request: Request, env: ApiEnv, context?: Execution) {
   try {
-    if(new URL(request.url).pathname==='/api/webhooks/bachs')return await stagingBachsWebhook(request,env)
+    if(new URL(request.url).pathname==='/api/webhooks/bachs')return await (env.ENVIRONMENT==='staging'?stagingBachsWebhook(request,env):bachsWebhook(request,env))
     if(new URL(request.url).pathname==='/api/webhooks/hstora')return await hstoraWebhook(request,env)
     await requireRuntime(env)
     const url = new URL(request.url)
+    if(url.pathname==='/api/admin/supplier-automation')return await supplierAutomation(request,env)
     const origin = request.headers.get('Origin')
     if (origin && origin !== url.origin) throw new HttpError(403, 'Origin not permitted.')
     if (!env.DB) throw new HttpError(503, 'Staging database is not configured.')
@@ -135,6 +137,7 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
 }
 export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, context: Execution) => {
   context.waitUntil(requireRuntime(env).then(()=>drainBusinessMail(env)).then(()=>drainMail(env)).catch(()=>{}))
+  context.waitUntil(requireRuntime(env).then(()=>runSupplierAutomation(env)).catch(()=>{}))
   if (catalogWritesReady(env)) context.waitUntil((async()=>{
     await requireRuntime(env)
     await syncHstoraBatch(env).catch(()=>{})

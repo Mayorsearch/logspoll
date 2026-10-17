@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import type { SubmitEvent } from 'react'
 import { Link, Navigate, useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import { 
-  ShieldCheck, Eye, EyeOff, Mail, Lock, User, ArrowRight, Loader2, CheckCircle2 
+  ShieldCheck, Eye, EyeOff, Mail, Lock, User, ArrowRight, Loader2, CheckCircle2,
+  Zap, LifeBuoy
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { cloudflareAuth } from '../lib/cloudflare-auth'
@@ -22,8 +23,8 @@ const titles: Record<Mode, string> = {
 }
 
 const subtitles: Record<Mode, string> = {
-  login: 'Sign in to access your digital marketplace and orders.',
-  signup: 'Join LogsPoll to browse verified products and manage your digital orders.',
+  login: 'Sign in to access the private catalog and start ordering digital services.',
+  signup: 'Sign up to access the private catalog and start ordering digital services.',
   forgot: 'Enter your email address and we will send a 6-digit recovery code.',
   reset: 'Enter your 6-digit code and choose a new secure password.',
   verify: 'Enter the 6-digit verification code sent to your email address.',
@@ -43,6 +44,7 @@ export function AuthPage({ mode }: { mode: Mode }) {
   const [readyAt, setReadyAt] = useState(state?.sentAt ? state.sentAt + 60000 : 0)
   const [seconds, setSeconds] = useState(() => Math.max(0, Math.ceil((readyAt - Date.now()) / 1000)))
   const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [agreedToTerms, setAgreedToTerms] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -167,18 +169,33 @@ export function AuthPage({ mode }: { mode: Mode }) {
       <div className="auth-card">
         {/* Brand Header */}
         <div className="auth-card-heading">
-          <Link to="/" className="auth-brand" aria-label="LogsPoll Home">
-            <span className="auth-shield">
-              <ShieldCheck size={28} />
-            </span>
-            <span className="auth-logo-text">Logs<span>Poll</span></span>
-          </Link>
-          <h1>{codeFlow && mode !== 'reset' ? 'Enter Verification Code' : titles[mode]}</h1>
+          <h1 className="auth-page-title">{codeFlow && mode !== 'reset' ? 'Enter Verification Code' : titles[mode]}</h1>
           <p className="auth-intro">
             {codeFlow
               ? 'Enter the six-digit code sent to your email. Codes expire in 10 minutes.'
               : subtitles[mode]}
           </p>
+
+          {(mode === 'signup' || mode === 'login') && (
+            <div className="auth-mode-tabs" role="tablist" aria-label="Account access modes">
+              <Link
+                to={params.get('next') ? `/signup?next=${encodeURIComponent(params.get('next')!)}` : '/signup'}
+                className={`auth-mode-tab ${mode === 'signup' ? 'active' : ''}`}
+                role="tab"
+                aria-selected={mode === 'signup'}
+              >
+                Sign Up
+              </Link>
+              <Link
+                to={params.get('next') ? `/login?next=${encodeURIComponent(params.get('next')!)}` : '/login'}
+                className={`auth-mode-tab ${mode === 'login' ? 'active' : ''}`}
+                role="tab"
+                aria-selected={mode === 'login'}
+              >
+                Login
+              </Link>
+            </div>
+          )}
         </div>
 
         <div className="auth-card-body">
@@ -199,7 +216,7 @@ export function AuthPage({ mode }: { mode: Mode }) {
                       <User size={18} className="field-icon" />
                       <input
                         name="full_name"
-                        placeholder="John Doe"
+                        placeholder="Enter your full name"
                         autoComplete="name"
                         required
                         minLength={2}
@@ -255,7 +272,7 @@ export function AuthPage({ mode }: { mode: Mode }) {
                       <input
                         type={showPassword ? 'text' : 'password'}
                         name="password"
-                        placeholder="••••••••••••"
+                        placeholder={mode === 'signup' ? 'Create a password' : 'Enter your password'}
                         autoComplete={mode === 'signup' || mode === 'reset' ? 'new-password' : 'current-password'}
                         required
                         minLength={mode === 'login' || mode === 'admin' ? 1 : 12}
@@ -283,14 +300,22 @@ export function AuthPage({ mode }: { mode: Mode }) {
                     <div className="input-with-icon">
                       <Lock size={18} className="field-icon" />
                       <input
-                        type={showPassword ? 'text' : 'password'}
+                        type={showConfirmPassword ? 'text' : 'password'}
                         name="confirm"
-                        placeholder="Repeat password"
+                        placeholder="Confirm your password"
                         autoComplete="new-password"
                         required
                         minLength={12}
                         maxLength={128}
                       />
+                      <button
+                        type="button"
+                        className="password-toggle-btn"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                      >
+                        {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
                     </div>
                   </label>
                 )}
@@ -321,11 +346,11 @@ export function AuthPage({ mode }: { mode: Mode }) {
                   ) : codeFlow ? (
                     mode === 'reset' ? 'Update Password' : 'Verify Email'
                   ) : mode === 'signup' ? (
-                    'Create Account'
+                    'Sign Up'
                   ) : ['forgot', 'verify'].includes(mode) ? (
                     'Send Verification Code'
                   ) : (
-                    'Sign In Securely'
+                    'Login'
                   )}
                 </button>
               </fieldset>
@@ -360,26 +385,63 @@ export function AuthPage({ mode }: { mode: Mode }) {
             </Link>
           )}
 
-          {/* Bottom Links */}
-          <div className="auth-footer-links">
-            {mode === 'login' ? (
-              <>
-                <p>
-                  Don’t have an account? <Link to="/signup">Create an account</Link>
-                </p>
-                <Link to="/verify-email" className="secondary-auth-link">
-                  Need to verify your email?
-                </Link>
-              </>
-            ) : mode === 'signup' ? (
-              <p>
-                Already have an account? <Link to="/login">Sign in here</Link>
-              </p>
-            ) : (
+          {/* OR Divider and Bottom Link (Screen 2 Reference) */}
+          {(mode === 'signup' || mode === 'login') && (
+            <>
+              <div className="auth-or-divider">
+                <span>OR</span>
+              </div>
+              <div className="auth-footer-prompt">
+                {mode === 'signup' ? (
+                  <p>
+                    Already have an account? <Link to="/login" className="auth-accent-link">Login</Link>
+                  </p>
+                ) : (
+                  <p>
+                    Don't have an account? <Link to="/signup" className="auth-accent-link">Sign Up</Link>
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+
+          {mode !== 'signup' && mode !== 'login' && (
+            <div className="auth-footer-links">
               <Link to="/login" className="secondary-auth-link">
-                ← Back to Sign In
+                ← Back to Login
               </Link>
-            )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Screen 2 Reference: Bottom Trust Indicators */}
+      <div className="auth-trust-strip">
+        <div className="auth-trust-box">
+          <span className="auth-trust-icon-circle">
+            <Zap size={18} />
+          </span>
+          <div className="auth-trust-texts">
+            <strong>Fast Access</strong>
+            <small>Get started quickly</small>
+          </div>
+        </div>
+        <div className="auth-trust-box">
+          <span className="auth-trust-icon-circle">
+            <ShieldCheck size={18} />
+          </span>
+          <div className="auth-trust-texts">
+            <strong>Secure &amp; Private</strong>
+            <small>Your data is safe</small>
+          </div>
+        </div>
+        <div className="auth-trust-box">
+          <span className="auth-trust-icon-circle">
+            <LifeBuoy size={18} />
+          </span>
+          <div className="auth-trust-texts">
+            <strong>24/7 Support</strong>
+            <small>We're here to help</small>
           </div>
         </div>
       </div>
