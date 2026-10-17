@@ -1,145 +1,614 @@
-import { useEffect, useState } from 'react';
-import type { SubmitEvent } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LogOut, PackageOpen, House, History, List, Settings, UserRound, ShoppingBag, ShieldCheck, ArrowRight } from 'lucide-react';
-import { useAuth } from '../auth/AuthProvider';
-import { cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth';
-import { ProductArtwork } from '../components/ProductArtwork';
-import { ReviewForm } from '../components/Reviews';
-import type { Order } from '../lib/customer-data';
-const links = [['', 'Overview', House], ['/purchases', 'Purchase History', History], ['/orders', 'Orders', ShoppingBag], ['/transactions', 'Transactions', List], ['/profile', 'Profile', UserRound], ['/settings', 'Settings', Settings]] as const;
+import { useEffect, useState } from 'react'
+import type { SubmitEvent } from 'react'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { 
+  LogOut, PackageOpen, House, History, Settings, UserRound, 
+  ShoppingBag, ShieldCheck, ArrowRight, Heart, BookOpen, CheckCircle2, 
+  Clock, Key, Copy, Check
+} from 'lucide-react'
+import { useAuth } from '../auth/AuthProvider'
+import { cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth'
+import { ProductArtwork } from '../components/ProductArtwork'
+import { ReviewForm } from '../components/Reviews'
+import { useCurrency } from '../lib/currency'
+import { useFavorites } from '../lib/favorites'
+import type { Order } from '../lib/customer-data'
+
+const links = [
+  ['', 'Overview', House],
+  ['/purchases', 'Purchase History', History],
+  ['/orders', 'Orders', ShoppingBag],
+  ['/profile', 'Profile', UserRound],
+  ['/settings', 'Settings', Settings],
+] as const
+
 export function DashboardLayout() {
-    const { session } = useAuth();
-    const navigate = useNavigate();
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState('');
-    const displayName = String(session?.user.user_metadata.full_name || session?.user.email?.split('@')[0] || 'Your account');
-    async function logout() {
-        if (busy)
-            return;
-        setBusy(true);
-        setError('');
-        try {
-            const { error: problem } = (await cloudflareAuth('sign-out', {}), { error: null });
-            if (problem)
-                throw problem;
-            navigate('/login', { replace: true });
-        }
-        catch {
-            setError('Unable to sign out. Please try again.');
-        }
-        finally {
-            setBusy(false);
-        }
+  const { session } = useAuth()
+  const navigate = useNavigate()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const displayName = String(
+    session?.user.user_metadata?.full_name || 
+    session?.user.user_metadata?.name || 
+    session?.user.email?.split('@')[0] || 
+    'Your Account'
+  )
+
+  async function logout() {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await cloudflareAuth('sign-out', {})
+      navigate('/login', { replace: true })
+    } catch {
+      setError('Unable to sign out. Please try again.')
+    } finally {
+      setBusy(false)
     }
-    return <div className="container dashboard-shell"><aside className="dashboard-sidebar"><div className="customer-identity"><span className="customer-avatar">{displayName.charAt(0).toUpperCase()}</span><div><strong>{displayName}</strong><span className="member-label">MEMBER</span></div></div><nav aria-label="Customer dashboard">{links.map(([suffix, label, Icon]) => <NavLink key={label} to={`/dashboard${suffix}`} end><Icon size={21}/>{label}</NavLink>)}</nav><button className="text-link logout-button" disabled={busy} onClick={logout}><LogOut size={21}/>{busy ? 'Signing out…' : 'Sign Out'}</button>{error && <p className="form-error" role="alert">{error}</p>}</aside><section className="dashboard-content"><Outlet /></section></div>;
+  }
+
+  return (
+    <div className="container dashboard-shell">
+      <aside className="dashboard-sidebar">
+        <div className="customer-identity">
+          <span className="customer-avatar">
+            {displayName.charAt(0).toUpperCase()}
+          </span>
+          <div className="customer-meta">
+            <strong>{displayName}</strong>
+            <span className="member-label">VERIFIED MEMBER</span>
+            <small className="account-email">{session?.user.email}</small>
+          </div>
+        </div>
+
+        <nav aria-label="Customer dashboard navigation">
+          {links.map(([suffix, label, Icon]) => (
+            <NavLink key={label} to={`/dashboard${suffix}`} end={suffix === ''}>
+              <Icon size={19} />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+          <Link to="/marketplace?favorites=1" className="dashboard-nav-extra">
+            <Heart size={19} />
+            <span>Saved Favorites</span>
+          </Link>
+          <Link to="/docs" className="dashboard-nav-extra">
+            <BookOpen size={19} />
+            <span>API Documentation</span>
+          </Link>
+        </nav>
+
+        <button 
+          className="text-link logout-button" 
+          disabled={busy} 
+          onClick={logout}
+          aria-label="Sign out of account"
+        >
+          <LogOut size={18} />
+          <span>{busy ? 'Signing out…' : 'Sign Out'}</span>
+        </button>
+
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </aside>
+
+      <section className="dashboard-content">
+        <Outlet />
+      </section>
+    </div>
+  )
 }
-export function CustomerRecords({ mode }: {
-    mode: 'overview' | 'orders' | 'purchases' | 'transactions';
+
+function CopyableInstruction({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    void navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="credential-box">
+      <div className="credential-header">
+        <span>Delivery Credentials &amp; Access Details</span>
+        <button onClick={handleCopy} className="credential-copy-btn">
+          {copied ? <Check size={13} className="text-green-500" /> : <Copy size={13} />}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <pre className="delivery-instructions">{text}</pre>
+    </div>
+  )
+}
+
+export function CustomerRecords({
+  mode,
+}: {
+  mode: 'overview' | 'orders' | 'purchases' | 'transactions'
 }) {
-    const { session } = useAuth();
-    const [records, setRecords] = useState<Order[]>([]);
-    const [loading, setLoading] = useState(mode !== 'transactions');
-    const [error, setError] = useState('');
-    const [attempt, setAttempt] = useState(0);
-    useEffect(() => {
-        if (session && mode !== 'transactions') {
-            let active = true;
-            void cloudflareRequest<{
-                records: Order[];
-            }>(mode === 'purchases' ? '/api/orders?purchases=true' : '/api/orders').then(({ records }) => { if (active)
-                setRecords(mode === 'purchases' ? records.filter(order => order.payment_status === 'paid' && order.fulfillment_status === 'delivered') : records); }).catch(problem => { if (active)
-                setError(problem.message); }).finally(() => { if (active)
-                setLoading(false); });
-            return () => { active = false; };
-        }
-        return;
-    }, [session, mode, attempt]);
-    const title = { overview: `Welcome back, ${String(session?.user.user_metadata.full_name || session?.user.email?.split('@')[0] || 'there')}! 👋`, orders: 'Your Orders', purchases: 'Purchase History', transactions: 'Transaction History' }[mode];
-    return <div className={mode === 'overview' ? 'customer-overview' : 'customer-page-panel'}><h1>{title}</h1><p className="dashboard-intro">{mode === 'overview' ? 'Here’s what’s happening with your account today.' : mode === 'purchases' ? 'Access products from your paid, delivered orders.' : mode === 'transactions' ? 'View payment activity when transaction records are connected to this view.' : 'Track payment and fulfillment status for your orders.'}</p>
-    {mode === 'overview' && <div className="customer-summary"><article className="customer-account-card"><span className="summary-label"><ShieldCheck size={18}/> YOUR ACCOUNT</span><div><p>Signed in as</p><strong>{session?.user.email}</strong></div><Link className="button" to="/dashboard/profile">Manage Profile <ArrowRight size={18}/></Link></article><article className="customer-assets-card"><span className="summary-label"><PackageOpen size={18}/> DIGITAL ASSETS</span><h2>Your Purchases</h2><p>Access your purchased tools and available delivery instructions.</p><Link className="button" to="/dashboard/purchases">View Purchases <ArrowRight size={18}/></Link><PackageOpen className="asset-watermark" size={150} aria-hidden="true"/></article></div>}
-    {mode === 'overview' && <CatalogSuggestions/>}
-    <div className={mode === 'overview' ? 'customer-activity' : undefined}>{mode === 'overview' && <div className="activity-heading"><h2>Recent Activity</h2><Link className="text-link" to="/dashboard/orders">View All</Link></div>}
-    {mode === 'transactions' ? <Empty title="Transaction history unavailable" text="Payment records are not connected to this account view yet. Check your orders for their current payment status."/> : loading ? <p role="status">Loading your records…</p> : error ? <div role="alert"><p className="form-error">{error}</p><button className="button button-outline" onClick={() => setAttempt(attempt + 1)}>Retry</button></div> : records.length === 0 ? <Empty title={mode === 'purchases' ? 'No purchases yet' : 'No orders yet'} text={mode === 'purchases' ? 'Your paid, delivered products will appear here.' : 'When you place an order, you can track it here.'}/> : <><h2 className="records-title">{mode === 'overview' ? 'Recent orders' : 'Most recent records'}</h2><div className="order-list">{records.slice(0, mode === 'overview' ? 5 : 50).map(order => <article className="order-card" key={order.id}><div className="order-heading"><h3>{order.reference}</h3><strong>{new Intl.NumberFormat('en-NG', { style: 'currency', currency: order.currency }).format(order.total_minor / 100)}</strong></div><p>{new Date(order.created_at).toLocaleDateString()} · Payment: {order.payment_status} · Delivery: {order.fulfillment_status}</p>{mode === 'purchases' && order.order_items?.map(item => <div className="purchase-item" key={item.id}><h4>{item.product_name} × {item.quantity}</h4>{item.product_entitlements ? <details><summary>View delivery instructions</summary><p className="delivery-instructions">{item.product_entitlements.instructions}</p></details> : <p>Delivery instructions are not available. Please contact support.</p>}<ReviewForm itemId={item.id}/></div>)}</article>)}</div><p className="preview-note">Showing up to {mode === 'overview' ? 5 : 50} recent records.</p></>}
-    </div>{mode === 'overview' && <div className="customer-quick-actions"><h2>Quick Actions</h2><Link to="/marketplace"><PackageOpen size={22}/>Browse Products <ArrowRight size={18}/></Link><Link to="/dashboard/settings"><Settings size={22}/>Account Settings <ArrowRight size={18}/></Link><Link to="/support">Contact Support <ArrowRight size={18}/></Link></div>}
-  </div>;
+  const { session } = useAuth()
+  const { formatPrice } = useCurrency()
+  const { favorites } = useFavorites()
+  const [records, setRecords] = useState<Order[]>([])
+  const [loading, setLoading] = useState(mode !== 'transactions')
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    if (session && mode !== 'transactions') {
+      let active = true
+      void cloudflareRequest<{
+        records: Order[]
+      }>(mode === 'purchases' ? '/api/orders?purchases=true' : '/api/orders')
+        .then(({ records }) => {
+          if (active) {
+            setRecords(
+              mode === 'purchases'
+                ? records.filter(
+                    (order) =>
+                      order.payment_status === 'paid' &&
+                      order.fulfillment_status === 'delivered'
+                  )
+                : records
+            )
+          }
+        })
+        .catch((problem) => {
+          if (active) setError(problem.message)
+        })
+        .finally(() => {
+          if (active) setLoading(false)
+        })
+      return () => {
+        active = false
+      }
+    }
+  }, [session, mode, attempt])
+
+  const username = String(
+    session?.user.user_metadata?.full_name ||
+    session?.user.user_metadata?.name ||
+    session?.user.email?.split('@')[0] ||
+    'there'
+  )
+
+  const titles = {
+    overview: `Welcome back, ${username}! 👋`,
+    orders: 'Your Orders',
+    purchases: 'Purchased Products & Delivery Vault',
+    transactions: 'Transaction History',
+  }
+
+  const descriptions = {
+    overview: 'Manage your verified digital essentials, active purchases, and recent order history.',
+    purchases: 'Access your paid, delivered product credentials and access instructions.',
+    orders: 'Track authoritative payment reconciliation and order fulfillment status.',
+    transactions: 'Payment records and reconciliation ledger for your account.',
+  }
+
+  // Calculate Overview Metric Cards
+  const totalOrders = records.length
+  const completedPurchases = records.filter(
+    (r) => r.payment_status === 'paid' && r.fulfillment_status === 'delivered'
+  ).length
+  const pendingOrders = records.filter((r) => r.payment_status !== 'paid').length
+
+  return (
+    <div className={mode === 'overview' ? 'customer-overview' : 'customer-page-panel'}>
+      <div className="dashboard-page-header">
+        <h1>{titles[mode]}</h1>
+        <p className="dashboard-intro">{descriptions[mode]}</p>
+      </div>
+
+      {/* Overview Metric Cards (Requirement 6) */}
+      {mode === 'overview' && (
+        <div className="customer-metrics-grid">
+          <div className="metric-card">
+            <div className="metric-icon blue"><ShoppingBag size={20} /></div>
+            <div className="metric-data">
+              <span className="metric-label">Total Orders</span>
+              <strong className="metric-value">{totalOrders}</strong>
+            </div>
+          </div>
+
+          <div className="metric-card">
+            <div className="metric-icon green"><CheckCircle2 size={20} /></div>
+            <div className="metric-data">
+              <span className="metric-label">Delivered Purchases</span>
+              <strong className="metric-value">{completedPurchases}</strong>
+            </div>
+          </div>
+
+          <div className="metric-card">
+            <div className="metric-icon orange"><Clock size={20} /></div>
+            <div className="metric-data">
+              <span className="metric-label">Pending Payment</span>
+              <strong className="metric-value">{pendingOrders}</strong>
+            </div>
+          </div>
+
+          <div className="metric-card">
+            <div className="metric-icon red"><Heart size={20} /></div>
+            <div className="metric-data">
+              <span className="metric-label">Saved Favorites</span>
+              <strong className="metric-value">{favorites.length}</strong>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Account Cards for Overview */}
+      {mode === 'overview' && (
+        <div className="customer-summary">
+          <article className="customer-account-card">
+            <span className="summary-label">
+              <ShieldCheck size={18} /> AUTHENTICATED ACCOUNT
+            </span>
+            <div>
+              <p>Signed in as</p>
+              <strong>{session?.user.email}</strong>
+            </div>
+            <Link className="button button-outline" to="/dashboard/profile">
+              Manage Profile <ArrowRight size={16} />
+            </Link>
+          </article>
+
+          <article className="customer-assets-card">
+            <span className="summary-label">
+              <PackageOpen size={18} /> DIGITAL ASSETS VAULT
+            </span>
+            <h2>Your Purchases</h2>
+            <p>Access your purchased tools, accounts, and secure delivery instructions.</p>
+            <Link className="button" to="/dashboard/purchases">
+              View Purchases <ArrowRight size={16} />
+            </Link>
+          </article>
+        </div>
+      )}
+
+      {/* Catalog Suggestions on Overview */}
+      {mode === 'overview' && <CatalogSuggestions />}
+
+      {/* Recent Activity / Records */}
+      <div className={mode === 'overview' ? 'customer-activity' : undefined}>
+        {mode === 'overview' && (
+          <div className="activity-heading">
+            <h2>Recent Orders</h2>
+            <Link className="text-link" to="/dashboard/orders">
+              View All Orders →
+            </Link>
+          </div>
+        )}
+
+        {mode === 'transactions' ? (
+          <Empty
+            title="Transaction History"
+            text="All past transactions are reconciled with your orders. View current payment statuses under your orders tab."
+          />
+        ) : loading ? (
+          <p role="status">Loading your records…</p>
+        ) : error ? (
+          <div role="alert" className="error-retry-card">
+            <p className="form-error">{error}</p>
+            <button className="button button-outline" onClick={() => setAttempt(attempt + 1)}>
+              Retry
+            </button>
+          </div>
+        ) : records.length === 0 ? (
+          <Empty
+            title={mode === 'purchases' ? 'No purchases yet' : 'No orders placed yet'}
+            text={
+              mode === 'purchases'
+                ? 'Your verified paid and delivered products will appear here with complete access instructions.'
+                : 'Browse our marketplace to find verified digital products, tools, and accounts.'
+            }
+          />
+        ) : (
+          <>
+            <div className="order-list">
+              {records.slice(0, mode === 'overview' ? 5 : 50).map((order) => (
+                <article className="order-card" key={order.id}>
+                  <div className="order-heading">
+                    <div>
+                      <span className="order-ref-badge">{order.reference}</span>
+                      <small className="order-date">
+                        {new Date(order.created_at).toLocaleDateString(undefined, {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </small>
+                    </div>
+                    <strong className="order-total">{formatPrice(order.total_minor)}</strong>
+                  </div>
+
+                  <div className="order-status-row">
+                    <span className={`status-pill payment-${order.payment_status}`}>
+                      Payment: {order.payment_status}
+                    </span>
+                    <span className={`status-pill delivery-${order.fulfillment_status}`}>
+                      Fulfillment: {order.fulfillment_status}
+                    </span>
+                  </div>
+
+                  {/* Purchased Items & Delivery Credentials (Vaulted) */}
+                  {mode === 'purchases' && order.order_items && (
+                    <div className="purchase-items-container">
+                      {order.order_items.map((item) => (
+                        <div className="purchase-item-card" key={item.id}>
+                          <div className="purchase-item-header">
+                            <h4>
+                              {item.product_name} <span className="item-qty">× {item.quantity}</span>
+                            </h4>
+                          </div>
+
+                          {item.product_entitlements?.instructions ? (
+                            <CopyableInstruction text={item.product_entitlements.instructions} />
+                          ) : (
+                            <p className="delivery-pending-note">
+                              Access details are being processed or delivered via secure email. Contact support if needed.
+                            </p>
+                          )}
+
+                          <ReviewForm itemId={item.id} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+            {mode === 'overview' && records.length > 5 && (
+              <p className="preview-note">Showing 5 most recent records. View Orders for full history.</p>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Quick Actions on Overview */}
+      {mode === 'overview' && (
+        <div className="customer-quick-actions">
+          <h2>Quick Actions</h2>
+          <div className="quick-actions-row">
+            <Link to="/marketplace" className="quick-action-link">
+              <PackageOpen size={20} />
+              <span>Browse Marketplace</span>
+              <ArrowRight size={16} />
+            </Link>
+            <Link to="/docs" className="quick-action-link">
+              <BookOpen size={20} />
+              <span>API Documentation</span>
+              <ArrowRight size={16} />
+            </Link>
+            <Link to="/dashboard/settings" className="quick-action-link">
+              <Settings size={20} />
+              <span>Security Settings</span>
+              <ArrowRight size={16} />
+            </Link>
+            <Link to="/support" className="quick-action-link">
+              <ShieldCheck size={20} />
+              <span>Customer Support</span>
+              <ArrowRight size={16} />
+            </Link>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
+
 function CatalogSuggestions() {
-    const [products, setProducts] = useState<{id:string;slug:string;name:string;category_name:string;price_minor:number;currency:string;image_path?:string;supplier_image_urls?:string[]}[]>([]);
-    useEffect(() => {
-        let active = true;
-        void cloudflareRequest<{records:typeof products}>('/api/products?page=1').then(data => {
-            if (active) setProducts(data.records.slice(0, 4));
-        }).catch(() => {});
-        return () => { active = false; };
-    }, []);
-    if (!products.length) return null;
-    return <section className="customer-catalog"><div className="activity-heading"><div><h2>Explore the catalog</h2><p>Discover products currently listed in the store.</p></div><Link className="text-link" to="/marketplace">Explore Store <ArrowRight size={16}/></Link></div><div className="customer-catalog-grid">{products.map(product => <Link className="customer-catalog-card" key={product.id} to={`/products/${product.slug}`}><ProductArtwork name={product.name} category={product.category_name} path={product.image_path} images={product.supplier_image_urls}/><h3>{product.name}</h3><div><span>{product.category_name}</span><strong>{new Intl.NumberFormat('en-NG', {style:'currency',currency:product.currency}).format(product.price_minor / 100)}</strong></div></Link>)}</div></section>;
+  const { formatPrice } = useCurrency()
+  const [products, setProducts] = useState<
+    {
+      id: string
+      slug: string
+      name: string
+      category_name: string
+      price_minor: number
+      currency: string
+      image_path?: string
+      supplier_image_urls?: string[]
+      server_number?: number
+    }[]
+  >([])
+
+  useEffect(() => {
+    let active = true
+    void cloudflareRequest<{ records: typeof products }>('/api/products?page=1')
+      .then((data) => {
+        if (active) setProducts(data.records.slice(0, 4))
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
+
+  if (!products.length) return null
+
+  return (
+    <section className="customer-catalog">
+      <div className="activity-heading">
+        <div>
+          <h2>Explore Trending Products</h2>
+          <p>Verified digital essentials ready for immediate ordering.</p>
+        </div>
+        <Link className="text-link" to="/marketplace">
+          Explore All Products →
+        </Link>
+      </div>
+      <div className="customer-catalog-grid">
+        {products.map((product) => (
+          <Link className="customer-catalog-card" key={product.id} to={`/products/${product.slug}`}>
+            <ProductArtwork
+              name={product.name}
+              category={product.category_name}
+              path={product.image_path}
+              images={product.supplier_image_urls}
+            />
+            <h3>{product.name}</h3>
+            <div className="catalog-card-footer">
+              <span className="card-cat">{product.category_name}</span>
+              {product.server_number ? (
+                <span className={`server-badge server-badge-${product.server_number}`}>
+                  Server {product.server_number}
+                </span>
+              ) : null}
+              <strong className="card-price">{formatPrice(product.price_minor)}</strong>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </section>
+  )
 }
-function Empty({ title, text }: {
-    title: string;
-    text: string;
-}) { return <div className="empty-state"><PackageOpen size={32}/><h2>{title}</h2><p>{text}</p><Link className="text-link" to="/marketplace">Explore marketplace →</Link></div>; }
+
+function Empty({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="empty-state">
+      <PackageOpen size={36} />
+      <h2>{title}</h2>
+      <p>{text}</p>
+      <Link className="button" to="/marketplace">
+        Browse Marketplace →
+      </Link>
+    </div>
+  )
+}
+
 export function Profile() {
-    const { session } = useAuth();
-    const [name, setName] = useState(String(session?.user.user_metadata.full_name ?? ''));
-    const loading = false;
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState('');
-    const [message, setMessage] = useState('');
-    async function save(event: SubmitEvent<HTMLFormElement>) {
-        event.preventDefault();
-        if (busy)
-            return;
-        if (name.trim().length < 2) {
-            setError('Enter at least 2 characters for your name.');
-            return;
-        }
-        setBusy(true);
-        setError('');
-        setMessage('');
-        try {
-            const { error: problem } = (await cloudflareAuth('update-user', { name: name.trim() }), { error: null });
-            if (problem)
-                throw problem;
-            setMessage('Account name saved.');
-        }
-        catch (problem) {
-            setError(problem instanceof Error ? problem.message : 'Unable to save your name.');
-        }
-        finally {
-            setBusy(false);
-        }
+  const { session } = useAuth()
+  const [name, setName] = useState(String(session?.user.user_metadata?.full_name || session?.user.user_metadata?.name || ''))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+
+  async function save(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (busy) return
+    if (name.trim().length < 2) {
+      setError('Please enter at least 2 characters for your name.')
+      return
     }
-    return <section className="customer-page-panel profile-page"><h1>Account Settings</h1><p className="dashboard-intro">Manage your personal information and account security.</p><div className="profile-columns"><div className="profile-details"><h2><ShieldCheck size={22}/>Personal Details</h2>{loading ? <p role="status">Loading your profile…</p> : <form className="account-form profile-form" onSubmit={save}><fieldset disabled={busy}><label>Full Name<input name="full_name" autoComplete="name" value={name} onChange={e => setName(e.target.value)} required minLength={2} maxLength={120}/></label><label>Email Address<input type="email" value={session?.user.email ?? ''} readOnly/></label><button className="button">{busy ? 'Saving…' : 'Update Profile'}</button></fieldset></form>}{error && <p role="alert" className="form-error">{error}</p>}{message && <p role="status" className="form-success">{message}</p>}</div><AccountSettings embedded/></div></section>;
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      await cloudflareAuth('update-user', { name: name.trim() })
+      setMessage('Profile updated successfully.')
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : 'Unable to update your profile.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="customer-page-panel profile-page">
+      <h1>Profile &amp; Settings</h1>
+      <p className="dashboard-intro">Manage your personal information, email address, and account preferences.</p>
+
+      <div className="profile-columns">
+        <div className="profile-details">
+          <h2><UserRound size={20} /> Personal Information</h2>
+          <form className="account-form profile-form" onSubmit={save}>
+            <fieldset disabled={busy}>
+              <label>
+                Full Name
+                <input
+                  name="full_name"
+                  autoComplete="name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  minLength={2}
+                  maxLength={120}
+                />
+              </label>
+              <label>
+                Email Address
+                <input type="email" value={session?.user.email ?? ''} readOnly />
+                <small className="field-hint">Email address is verified and tied to your account identity.</small>
+              </label>
+              <button className="button" type="submit">
+                {busy ? 'Saving Changes…' : 'Save Changes'}
+              </button>
+            </fieldset>
+          </form>
+          {error && <p role="alert" className="form-error">{error}</p>}
+          {message && <p role="status" className="form-success">{message}</p>}
+        </div>
+
+        <AccountSettings embedded />
+      </div>
+    </section>
+  )
 }
-export function AccountSettings({ embedded = false }: {
-    embedded?: boolean;
-}) {
-    const { session } = useAuth();
-    const navigate=useNavigate();
-    const [busy, setBusy] = useState(false);
-    const [message, setMessage] = useState('');
-    const [error, setError] = useState('');
-    async function reset() {
-        if (!session?.user.email || busy)
-            return;
-        setBusy(true);
-        setError('');
-        setMessage('');
-        try {
-            const { error: problem } = (await cloudflareAuth('email-otp/request-password-reset', { email: session.user.email }), { error: null });
-            if (problem)
-                throw problem;
-            navigate('/reset-password',{state:{email:session.user.email,sentAt:Date.now()}});
-        }
-        catch (problem) {
-            setError(problem instanceof Error ? problem.message : 'Unable to request a password reset.');
-        }
-        finally {
-            setBusy(false);
-        }
+
+export function AccountSettings({ embedded = false }: { embedded?: boolean }) {
+  const { session } = useAuth()
+  const navigate = useNavigate()
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  async function reset() {
+    if (!session?.user.email || busy) return
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      await cloudflareAuth('email-otp/request-password-reset', { email: session.user.email })
+      navigate('/reset-password', { state: { email: session.user.email, sentAt: Date.now() } })
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : 'Unable to request password reset.')
+    } finally {
+      setBusy(false)
     }
-    async function acceptAdmin(){setBusy(true);setError('');try{await cloudflareRequest('/api/account/admin-enrollment',{});window.location.assign('/admin')}catch(e){setError(e instanceof Error?e.message:'Enrollment unavailable.')}finally{setBusy(false)}}
-    return <section className={embedded ? 'profile-security' : 'customer-page-panel'}>{!embedded && <><h1>Account Settings</h1><p className="dashboard-intro">Manage access to your LOGSPOLL account.</p><Link className="text-link" to="/dashboard/profile">Edit personal details →</Link></>}<div className="settings-panel"><h2><Settings size={22}/>Security & Password</h2><p>Use a secure six-digit email code to choose your new password.</p><button className="button button-navy" onClick={reset} disabled={busy}>{busy ? 'Sending…' : 'Send Password Reset Code'}</button><button className="button button-outline" onClick={()=>void acceptAdmin()} disabled={busy}>Accept administrator invitation</button></div>{message && <p role="status" className="form-success">{message}</p>}{error && <p role="alert" className="form-error">{error}</p>}</section>;
+  }
+
+  async function acceptAdmin() {
+    setBusy(true)
+    setError('')
+    try {
+      await cloudflareRequest('/api/account/admin-enrollment', {})
+      window.location.assign('/admin')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Enrollment unavailable.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className={embedded ? 'profile-security' : 'customer-page-panel'}>
+      {!embedded && (
+        <>
+          <h1>Security &amp; Account Settings</h1>
+          <p className="dashboard-intro">Manage password authentication, security, and administrative access.</p>
+          <Link className="text-link" to="/dashboard/profile">
+            ← Edit personal details
+          </Link>
+        </>
+      )}
+
+      <div className="settings-panel">
+        <h2><Key size={20} /> Security &amp; Password</h2>
+        <p>Password updates require a secure single-use email verification code sent to your verified email.</p>
+        <div className="button-row">
+          <button className="button button-navy" onClick={reset} disabled={busy}>
+            {busy ? 'Sending Code…' : 'Send Password Reset Code'}
+          </button>
+          <button className="button button-outline" onClick={() => void acceptAdmin()} disabled={busy}>
+            Accept Administrator Invitation
+          </button>
+        </div>
+        {message && <p role="status" className="form-success">{message}</p>}
+        {error && <p role="alert" className="form-error">{error}</p>}
+      </div>
+    </section>
+  )
 }

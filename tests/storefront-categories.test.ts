@@ -19,6 +19,18 @@ test('filters by server_number accurately across suppliers', async () => {
   const s2 = await (await invoke('/api/products?main_category=facebook&server=2')).json() as {total:number;products:{name:string;server_number:number}[]};
   assert.equal(s2.total, 1);
   assert.equal(s2.products[0].server_number, 2);
-  const all = await (await invoke('/api/products?main_category=facebook')).json() as {total:number};
+  const all = await (await invoke('/api/products?main_category=facebook')).json() as {total:number;products:Record<string,unknown>[]};
   assert.equal(all.total, 3);
+  for (const p of all.products) {
+    assert.equal(p.supplier_name, undefined);
+    assert.equal(p.supplier_cost, undefined);
+    assert.equal(p.supplier_product_id, undefined);
+  }
+  const v1Resp = await invoke('/api/v1/products?main_category=facebook&server=2');
+  const v1Data = await v1Resp.json() as {total:number;products:{name:string;server_number:number}[]};
+  assert.equal(v1Data.total, 1);
+  assert.equal(v1Data.products[0].server_number, 2);
+  const v1Cat = await (await invoke('/api/v1/storefront/categories')).json() as {records:{slug:string}[]};
+  assert.equal(v1Cat.records.length, 6);
 });
+

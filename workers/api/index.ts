@@ -69,10 +69,13 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     if (url.pathname === '/api/admin/hstora-review') return await hstoraReview(request,env)
     if (url.pathname === '/api/admin/hstora') return await hstoraAdmin(request,env)
     if (url.pathname === '/api/admin/catalog') return await catalogAdmin(request, env)
-    if (url.pathname === '/api/checkout') return await bachsCheckout(request, env)
-    if (url.pathname === '/api/bachs/order') {
+    if (url.pathname === '/api/checkout' || url.pathname === '/api/v1/checkout') return await bachsCheckout(request, env)
+    if (url.pathname === '/api/bachs/order' || url.pathname === '/api/v1/order' || /^\/api\/(?:v1\/)?orders\/[^/]+\/status$/.test(url.pathname)) {
       if (request.method !== 'GET') throw new HttpError(405, 'GET required.')
-      const user = await identity(request, env), id = url.searchParams.get('id')
+      const user = await identity(request, env)
+      const statusMatch = url.pathname.match(/^\/api\/(?:v1\/)?orders\/([^/]+)\/status$/)
+      const id = statusMatch ? statusMatch[1] : url.searchParams.get('id')
+      if (!id) throw new HttpError(400, 'Order ID required.')
       const attempt = await env.DB!.prepare('SELECT a.* FROM bachs_payment_attempts a WHERE a.order_id=? AND a.customer_id=? ORDER BY a.created_at DESC LIMIT 1').bind(id, user.id).first<{id:string;order_id:string;checkout_id:string;provider_mode:string;amount_minor:number;status:string}>()
       if (!attempt) throw new HttpError(404, 'Order not found.')
       if (attempt.checkout_id && ['initiating', 'open'].includes(attempt.status)) await reconcileBachsAttempt(env, attempt)
@@ -89,10 +92,12 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     }
     // Public catalog uses verified D1 storefront data.
     if (request.method === 'GET' &&
-        ['/api/products', '/api/categories'].includes(url.pathname)) {
+        (['/api/products', '/api/categories', '/api/v1/products', '/api/v1/categories'].includes(url.pathname) ||
+         /^\/api\/(?:v1\/)?products\/[^/]+$/.test(url.pathname))) {
       // Cache only this public projection. Stock responses and private routes
       // remain uncached so the one-hour inventory cutoff is never extended.
-      const cache=url.pathname==='/api/categories'?(globalThis.caches as CacheStorage&{default?:Cache}|undefined)?.default:undefined
+      const isCategories = url.pathname === '/api/categories' || url.pathname === '/api/v1/categories'
+      const cache=isCategories?(globalThis.caches as CacheStorage&{default?:Cache}|undefined)?.default:undefined
       const cacheKey=new Request(url.origin+'/api/categories')
       const cached=cache&&await cache.match(cacheKey)
       if(cached)return cached
@@ -109,10 +114,13 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     if (customerResponse) return customerResponse
     let sql: string; let values: (string | number)[] = []
     switch (url.pathname) {
-      case '/api/products': sql = 'SELECT * FROM staging_storefront_products ORDER BY id LIMIT 100'; break
-      case '/api/categories': sql = 'SELECT c.id,c.slug,c.name,c.short_name,c.description FROM categories c WHERE c.active=1 AND EXISTS(SELECT 1 FROM staging_storefront_products p WHERE p.category_id=c.id) ORDER BY c.sort_order,c.id LIMIT 100'; break
+      case '/api/products':
+      case '/api/v1/products': sql = 'SELECT * FROM staging_storefront_products ORDER BY id LIMIT 100'; break
+      case '/api/categories':
+      case '/api/v1/categories': sql = 'SELECT c.id,c.slug,c.name,c.short_name,c.description FROM categories c WHERE c.active=1 AND EXISTS(SELECT 1 FROM staging_storefront_products p WHERE p.category_id=c.id) ORDER BY c.sort_order,c.id LIMIT 100'; break
       case '/api/account': sql = 'SELECT id,full_name,created_at FROM profiles WHERE id=?'; values = [user.id]; break
-      case '/api/orders': sql = 'SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,created_at FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 100'; values = [user.id]; break
+      case '/api/orders':
+      case '/api/v1/orders': sql = 'SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,created_at FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 100'; values = [user.id]; break
       case '/api/support': sql = 'SELECT id,subject,message,status,reply,created_at FROM support_tickets WHERE user_id=? ORDER BY created_at DESC LIMIT 100'; values = [user.id]; break
       case '/api/notifications': sql = 'SELECT id,title,message,order_id,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100'; values = [user.id]; break
       case '/api/admin/overview':

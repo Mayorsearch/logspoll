@@ -5,12 +5,17 @@ type Customer = { id: string; role: string }
 const storefront = 'storefront_products'
 const productFields = 'p.id,p.category_id,p.slug,p.name,p.brand,p.description,p.price_minor,p.currency,p.delivery_type,p.image_path,p.term,p.features,p.supplier_image_urls,p.featured,p.available_quantity,c.name AS category_name,c.slug AS category_slug'
 function product(row: Record<string, unknown>) {
-  return { ...row, features: JSON.parse(String(row.features ?? '[]')), supplier_image_urls: JSON.parse(String(row.supplier_image_urls ?? '[]')) }
+  const { supplier_name, supplier_cost_minor, supplier_cost, supplier_product_id, authorization_evidence, ...safe } = row
+  void supplier_name; void supplier_cost_minor; void supplier_cost; void supplier_product_id; void authorization_evidence
+  return { ...safe, features: JSON.parse(String(row.features ?? '[]')), supplier_image_urls: JSON.parse(String(row.supplier_image_urls ?? '[]')) }
 }
 export async function customerRead(request: Request, env: ApiEnv, user: Customer | null) {
   const url = new URL(request.url), db = env.DB!
-  if (url.pathname === '/api/products') {
-    const slug = url.searchParams.get('slug'), ids = url.searchParams.get('ids')
+  const isProducts = url.pathname === '/api/products' || url.pathname === '/api/v1/products'
+  const productSlugMatch = url.pathname.match(/^\/api\/(?:v1\/)?products\/([^/]+)$/)
+  if (isProducts || productSlugMatch) {
+    const slug = productSlugMatch ? decodeURIComponent(productSlugMatch[1]) : url.searchParams.get('slug')
+    const ids = url.searchParams.get('ids')
     const q = (url.searchParams.get('q') ?? '').trim().slice(0, 200)
     const category = (url.searchParams.get('category') ?? '').slice(0, 200)
     const page = Math.min(10000, Math.max(1, Math.floor(Number(url.searchParams.get('page')) || 1)))
@@ -37,16 +42,23 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
     const from = ` FROM ${storefront} p JOIN categories c ON c.id=p.category_id WHERE ${predicates.join(' AND ')}`
     const order = ({ 'price-asc': 'p.price_minor ASC,p.id', 'price-desc': 'p.price_minor DESC,p.id', newest: 'p.id DESC' } as Record<string, string>)[url.searchParams.get('sort') ?? ''] ?? 'p.featured DESC,p.name,p.id'
     const total = (await db.prepare('SELECT count(*) AS n' + from).bind(...values).first<{ n: number }>())!.n
+    if (productSlugMatch) {
+      if (total === 0) throw new HttpError(404, 'Product not found.')
+      const fields = hasServer ? `${productFields},p.server_number` : productFields
+      const item = await db.prepare(`SELECT ${fields}${from} LIMIT 1`).bind(...values).first<Record<string, unknown>>()
+      if (!item) throw new HttpError(404, 'Product not found.')
+      return json({ product: product(item), record: product(item) })
+    }
     const limit = ids ? 100 : 20
     const fields = hasServer ? `${productFields},p.server_number` : productFields
     const rows = await db.prepare(`SELECT ${fields}${from} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...values, limit, ids ? 0 : (page - 1) * limit).all()
     return json({ records: rows.results.map(product), products: rows.results.map(product), total, pages: Math.max(1, Math.ceil(total / limit)) })
   }
-  if (url.pathname === '/api/categories') {
+  if (url.pathname === '/api/categories' || url.pathname === '/api/v1/categories') {
     const rows = await db.prepare(`SELECT c.id,c.slug,c.name,c.short_name,c.description,count(p.id) AS product_count FROM categories c LEFT JOIN ${storefront} p ON p.category_id=c.id WHERE c.active=1 GROUP BY c.id ORDER BY c.sort_order,c.id LIMIT 100`).all()
     return json({ records: rows.results })
   }
-  if (url.pathname === '/api/orders') {
+  if (url.pathname === '/api/orders' || url.pathname === '/api/v1/orders') {
     if (!user) throw new HttpError(401, 'Verified sign-in required.')
     const rows = await db.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,created_at FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<{ id: string; payment_status: string; fulfillment_status: string }>()
     if (url.searchParams.get('purchases') !== 'true') return json({ records: rows.results })
