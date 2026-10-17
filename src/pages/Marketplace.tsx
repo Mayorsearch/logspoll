@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { PackageOpen, Search, SlidersHorizontal, ArrowRight, Heart, Grid2X2, ShoppingBag } from 'lucide-react';
 import { useCatalogCategories } from '../components/useHomeCategories';
 import { ProductArtwork } from '../components/ProductArtwork';
+import { BrandIcon } from '../components/BrandIcon';
 import { HomeCategories } from '../components/HomeCategories';
 import { cloudflareRequest } from '../lib/cloudflare-auth';
 import { useFavorites } from '../lib/favorites';
@@ -230,23 +231,118 @@ export function Marketplace() {
         />
       </section>
 
-      {/* Source & Favorites Tabs */}
-      <div className="catalog-source-tabs">
-        <button
-          aria-pressed={!favoritesOnly}
-          onClick={() => {
-            const next = new URLSearchParams(params);
-            next.delete('favorites');
-            next.delete('category');
-            next.delete('page');
-            setParams(next, { replace: true });
-          }}
-        >
-          All Products
-        </button>
-        <button aria-pressed={favoritesOnly} onClick={() => change('favorites', '1')}>
-          <Heart size={16} /> Favorites ({favorites.length})
-        </button>
+      {/* Two-Tier Filter Pills (PadiLogs Design Architecture) */}
+      <div className="marketplace-filters-wrapper" role="region" aria-label="Catalog Filter Pills">
+        {/* Row 1: Source & Server Filter Pills */}
+        <div className="filter-pills-row" role="tablist" aria-label="Source and Server filters">
+          <button
+            type="button"
+            className={`filter-pill ${!server && !favoritesOnly ? 'active' : ''}`}
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              next.delete('server');
+              next.delete('favorites');
+              next.delete('page');
+              setParams(next, { replace: true });
+            }}
+          >
+            <span>All Sources &amp; Tools</span>
+            {statistics && <span className="pill-badge">{statistics.total}</span>}
+          </button>
+
+          <button
+            type="button"
+            className={`filter-pill ${favoritesOnly ? 'active' : ''}`}
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              if (favoritesOnly) {
+                next.delete('favorites');
+              } else {
+                next.set('favorites', '1');
+                next.delete('server');
+              }
+              next.delete('page');
+              setParams(next, { replace: true });
+            }}
+          >
+            <Heart size={14} fill={favoritesOnly ? 'currentColor' : 'none'} />
+            <span>Favourites</span>
+            <span className="pill-badge">{favorites.length}</span>
+          </button>
+
+          <button
+            type="button"
+            className={`filter-pill ${server === '1' ? 'active' : ''}`}
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              if (server === '1') next.delete('server');
+              else next.set('server', '1');
+              next.delete('favorites');
+              next.delete('page');
+              setParams(next, { replace: true });
+            }}
+          >
+            <span>Server 1</span>
+          </button>
+
+          <button
+            type="button"
+            className={`filter-pill ${server === '2' ? 'active' : ''}`}
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              if (server === '2') next.delete('server');
+              else next.set('server', '2');
+              next.delete('favorites');
+              next.delete('page');
+              setParams(next, { replace: true });
+            }}
+          >
+            <span>Server 2</span>
+          </button>
+
+          <button
+            type="button"
+            className={`filter-pill ${server === '3' ? 'active' : ''}`}
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              if (server === '3') next.delete('server');
+              else next.set('server', '3');
+              next.delete('favorites');
+              next.delete('page');
+              setParams(next, { replace: true });
+            }}
+          >
+            <span>Server 3</span>
+          </button>
+        </div>
+
+        {/* Row 2: Category Filter Pills with Brand Icons */}
+        <div className="filter-pills-row" role="tablist" aria-label="Category filters">
+          <button
+            type="button"
+            className={`filter-pill filter-pill-category ${!category ? 'active' : ''}`}
+            onClick={() => change('category', '')}
+          >
+            <span>All Categories</span>
+          </button>
+          {categories.map((cat) => {
+            const isSelected = resolveMainCategory(category) === cat.slug;
+            return (
+              <button
+                key={cat.slug}
+                type="button"
+                className={`filter-pill filter-pill-category ${isSelected ? 'active' : ''}`}
+                onClick={() => change('category', isSelected ? '' : cat.slug)}
+              >
+                <BrandIcon name={cat.name} size={15} />
+                <span>{cat.name}</span>
+                {cat.product_count !== undefined && (
+                  <span className="pill-badge">{cat.product_count}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Filter and Sort Toolbar */}
@@ -388,9 +484,12 @@ export function Marketplace() {
                   </small>
 
                   {/* Multi-Currency Price Formatting */}
-                  <strong className="product-price">{formatPrice(product.price_minor)}</strong>
+                  <div className="product-card-pricing">
+                    <strong className="product-price">{formatPrice(product.price_minor)}</strong>
+                    <span className="price-unit-tag">/ unit</span>
+                  </div>
 
-                  <Link className="product-details-link" to={`/products/${product.slug}`}>
+                  <Link className="card-details-btn" to={`/products/${product.slug}`}>
                     View Details <ArrowRight size={14} />
                   </Link>
 

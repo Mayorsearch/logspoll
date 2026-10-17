@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowRight, PackageOpen, ShieldCheck } from 'lucide-react';
+import { ArrowRight, PackageOpen, ShieldCheck, Zap, Heart, ShoppingBag } from 'lucide-react';
 import { ProductOverview } from '../components/ProductOverview';
 import { ProductArtwork } from '../components/ProductArtwork';
 import { Categories } from '../components/Categories';
@@ -8,6 +8,7 @@ import { useCatalogCategories } from '../components/useCatalogCategories';
 import { useAuth } from '../auth/AuthProvider';
 import { useCart } from '../lib/cart';
 import { useCurrency } from '../lib/currency';
+import { useFavorites } from '../lib/favorites';
 import { cloudflareRequest } from '../lib/cloudflare-auth';
 export function CategoryPage() {
     const { slug } = useParams();
@@ -67,24 +68,174 @@ export function ProductDetails() {
     const { slug } = useParams();
     const { add } = useCart();
     const { formatPrice } = useCurrency();
+    const { favorites, toggleFavorite } = useFavorites();
     const [quantity, setQuantity] = useState(1);
     const [notice, setNotice] = useState('');
     const [product, setProduct] = useState<Product | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+
     useEffect(() => {
         let active = true;
-        {
-            void cloudflareRequest<{
-                records: Product[];
-            }>(`/api/products?slug=${encodeURIComponent(slug ?? '')}`).then(({ records }) => { if (active) {
+        void cloudflareRequest<{
+            records: Product[];
+        }>(`/api/products?slug=${encodeURIComponent(slug ?? '')}`).then(({ records }) => {
+            if (active) {
                 setProduct(records[0] ?? null);
                 setError(records.length ? '' : 'This product is not available.');
-            } }).catch(problem => { if (active)
-                setError(problem.message); }).finally(() => { if (active)
-                setLoading(false); });
-            return () => { active = false; };
-        }
+            }
+        }).catch(problem => {
+            if (active) setError(problem.message);
+        }).finally(() => {
+            if (active) setLoading(false);
+        });
+        return () => { active = false; };
     }, [slug]);
-    return <section className="container section"><Link className="text-link" to="/marketplace">← Back to marketplace</Link>{loading ? <p className="section" role="status">Loading product details…</p> : !product ? <div className="empty-state"><PackageOpen size={38}/><h1>Product details</h1><p role="status">{error || 'Connect the live catalog to view available products and their details.'}</p><Link className="button" to="/login">Sign in to your account</Link></div> : <div className="public-product-grid"><div className="public-product-art"><ProductArtwork path={product.image_path} name={product.name} category={product.category_name} images={product.supplier_image_urls}/></div><article><div className="product-badges-row"><span className="eyebrow">{product.category_name}</span>{product.server_number ? <span className={`server-badge server-badge-${product.server_number}`}>Server {product.server_number}</span> : null}</div><h1>{product.name}</h1><p className="public-product-price">{formatPrice(product.price_minor)}</p><span className={`stock-badge ${product.available_quantity < 1 ? 'out-of-stock' : ''}`}>{product.available_quantity > 0 ? `${product.available_quantity} available` : 'Unavailable to order'}</span><dl className="public-product-info"><dt>Availability</dt><dd>{product.available_quantity > 0 ? `${product.available_quantity} available` : 'Unavailable to order'}</dd><dt>Duration</dt><dd>{product.term || 'See product description'}</dd><dt>Delivery</dt><dd>{product.delivery_type}</dd></dl><div className="product-detail-quantity"><label htmlFor="detail-quantity">Select quantity</label><div className="quantity-stepper"><button type="button" aria-label="Decrease quantity" disabled={!Number.isSafeInteger(quantity) || quantity <= 1} onClick={() => setQuantity(quantity - 1)}>−</button><input id="detail-quantity" aria-label="Quantity" type="number" min={1} max={Math.min(1000, product.available_quantity)} value={quantity} onChange={event => setQuantity(Number(event.target.value))}/><button type="button" aria-label="Increase quantity" disabled={!Number.isSafeInteger(quantity) || quantity >= Math.min(1000, product.available_quantity)} onClick={() => setQuantity(quantity + 1)}>+</button></div></div><div className="button-row"><button className="button" disabled={!Number.isSafeInteger(quantity) || quantity < 1 || quantity > Math.min(1000, product.available_quantity)} onClick={() => { add(product.id, quantity, product.available_quantity); setNotice("Added to your cart, subject to available quantity."); }}>Add to cart</button><Link className="text-link" to="/cart">View cart →</Link></div>{notice && <p className="form-success" role="status">{notice}</p>}<p className="preview-note"><ShieldCheck size={15}/> Secure payment processing must be connected before orders can be placed.</p></article><ProductOverview description={product.description}/></div>}</section>;
+
+    return (
+        <section className="container section">
+            <Link className="text-link" to="/marketplace">← Back to marketplace</Link>
+            {loading ? (
+                <p className="section" role="status">Loading product details…</p>
+            ) : !product ? (
+                <div className="empty-state">
+                    <PackageOpen size={38} />
+                    <h1>Product details</h1>
+                    <p role="status">{error || 'Connect the live catalog to view available products and their details.'}</p>
+                    <Link className="button" to="/login">Sign in to your account</Link>
+                </div>
+            ) : (
+                <div className="product-detail-container">
+                    {/* Left Column: Branded Artwork Card with Badges and Favorite Heart */}
+                    <div className="detail-artwork-card">
+                        <div className="detail-card-badges">
+                            <span className="product-category-badge">{product.category_name}</span>
+                            {product.server_number ? (
+                                <span className={`server-badge server-badge-${product.server_number}`}>
+                                    Server {product.server_number}
+                                </span>
+                            ) : null}
+                        </div>
+
+                        <button
+                            type="button"
+                            className="favorite-button"
+                            aria-label={`${favorites.includes(product.id) ? 'Remove' : 'Add'} ${product.name} ${favorites.includes(product.id) ? 'from' : 'to'} favorites`}
+                            aria-pressed={favorites.includes(product.id)}
+                            onClick={() => toggleFavorite(product.id)}
+                        >
+                            <Heart size={18} fill={favorites.includes(product.id) ? 'currentColor' : 'none'} />
+                        </button>
+
+                        <ProductArtwork
+                            path={product.image_path}
+                            name={product.name}
+                            category={product.category_name}
+                            images={product.supplier_image_urls}
+                        />
+                    </div>
+
+                    {/* Right Column: Title, Price, Dual Highlight Cards, Stepper, Actions */}
+                    <div className="detail-info-column">
+                        <h1 className="detail-title">{product.name}</h1>
+
+                        <div className="detail-price-row">
+                            <strong className="detail-price">{formatPrice(product.price_minor)}</strong>
+                            <span className="detail-unit-label">/ unit</span>
+                            <span className={`stock-badge ${product.available_quantity < 1 ? 'out-of-stock' : ''}`}>
+                                {product.available_quantity > 0 ? `${product.available_quantity} available` : 'Unavailable to order'}
+                            </span>
+                        </div>
+
+                        {/* Side-by-Side Highlight Cards (PadiLogs Blueprint) */}
+                        <div className="detail-highlights-grid">
+                            <div className="detail-highlight-card">
+                                <div className="detail-highlight-icon zap">
+                                    <Zap size={20} />
+                                </div>
+                                <div className="detail-highlight-text">
+                                    <strong>Instant Delivery</strong>
+                                    <p>Automated credential vault dispatch immediately after payment</p>
+                                </div>
+                            </div>
+
+                            <div className="detail-highlight-card">
+                                <div className="detail-highlight-icon shield">
+                                    <ShieldCheck size={20} />
+                                </div>
+                                <div className="detail-highlight-text">
+                                    <strong>Verified Product</strong>
+                                    <p>Guaranteed authentic digital asset with full server support</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Quantity Stepper */}
+                        <div className="product-detail-quantity">
+                            <label htmlFor="detail-quantity"><strong>Quantity</strong></label>
+                            <div className="quantity-stepper">
+                                <button
+                                    type="button"
+                                    aria-label="Decrease quantity"
+                                    disabled={quantity <= 1 || product.available_quantity < 1}
+                                    onClick={() => setQuantity(Math.max(1, quantity - 1))}
+                                >
+                                    −
+                                </button>
+                                <output id="detail-quantity" aria-label="Quantity">
+                                    {quantity}
+                                </output>
+                                <button
+                                    type="button"
+                                    aria-label="Increase quantity"
+                                    disabled={quantity >= Math.min(1000, product.available_quantity)}
+                                    onClick={() => setQuantity(quantity + 1)}
+                                >
+                                    +
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="detail-actions-row">
+                            <button
+                                type="button"
+                                className="detail-purchase-btn"
+                                disabled={product.available_quantity < 1}
+                                onClick={() => {
+                                    add(product.id, quantity, product.available_quantity);
+                                    setNotice(`${product.name} added to cart.`);
+                                }}
+                            >
+                                <ShoppingBag size={18} /> Purchase Product
+                            </button>
+
+                            <button
+                                type="button"
+                                className={`detail-fav-btn ${favorites.includes(product.id) ? 'active' : ''}`}
+                                onClick={() => toggleFavorite(product.id)}
+                            >
+                                <Heart size={18} fill={favorites.includes(product.id) ? 'currentColor' : 'none'} /> Favourite
+                            </button>
+                        </div>
+
+                        {notice && (
+                            <p className="form-success" role="status">
+                                {notice} <Link to="/cart">Open cart →</Link>
+                            </p>
+                        )}
+
+                        <p className="preview-note">
+                            <ShieldCheck size={15} /> All transactions are protected by LogsPoll verified escrow &amp; live reconciliation.
+                        </p>
+                    </div>
+
+                    {/* Bottom Overview Panel */}
+                    <div className="detail-overview-panel">
+                        <ProductOverview description={product.description} />
+                    </div>
+                </div>
+            )}
+        </section>
+    );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { MobileBottomNavigation } from './MobileBottomNavigation'
+import { FloatingChatWidget } from './FloatingChatWidget'
 import { cloudflareAuth } from '../lib/cloudflare-auth'
 import { useAuth } from '../auth/AuthProvider'
 import { useCart } from '../lib/cart'
@@ -347,6 +348,9 @@ export function SiteLayout() {
           <small>Built by SwiftNova Labs</small>
         </div>
       </footer>
+
+      {/* Floating Live Support Widget matching PadiLogs bubble */}
+      <FloatingChatWidget />
     </div>
   )
 }

@@ -3,8 +3,8 @@ import type { SubmitEvent } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { 
   LogOut, PackageOpen, House, History, Settings, UserRound, 
-  ShoppingBag, ShieldCheck, ArrowRight, Heart, BookOpen, CheckCircle2, 
-  Clock, Key, Copy, Check
+  ShoppingBag, ShieldCheck, ArrowRight, Heart, BookOpen, 
+  Key, Copy, Check
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth'
@@ -189,11 +189,9 @@ export function CustomerRecords({
   }
 
   // Calculate Overview Metric Cards
-  const totalOrders = records.length
   const completedPurchases = records.filter(
     (r) => r.payment_status === 'paid' && r.fulfillment_status === 'delivered'
   ).length
-  const pendingOrders = records.filter((r) => r.payment_status !== 'paid').length
 
   return (
     <div className={mode === 'overview' ? 'customer-overview' : 'customer-page-panel'}>
@@ -202,74 +200,43 @@ export function CustomerRecords({
         <p className="dashboard-intro">{descriptions[mode]}</p>
       </div>
 
-      {/* Overview Metric Cards (Requirement 6) */}
+      {/* 3 Top Cards (PadiLogs Design Architecture) */}
       {mode === 'overview' && (
-        <div className="customer-metrics-grid">
-          <div className="metric-card">
-            <div className="metric-icon blue"><ShoppingBag size={20} /></div>
-            <div className="metric-data">
-              <span className="metric-label">Total Orders</span>
-              <strong className="metric-value">{totalOrders}</strong>
-            </div>
-          </div>
-
-          <div className="metric-card">
-            <div className="metric-icon green"><CheckCircle2 size={20} /></div>
-            <div className="metric-data">
-              <span className="metric-label">Delivered Purchases</span>
-              <strong className="metric-value">{completedPurchases}</strong>
-            </div>
-          </div>
-
-          <div className="metric-card">
-            <div className="metric-icon orange"><Clock size={20} /></div>
-            <div className="metric-data">
-              <span className="metric-label">Pending Payment</span>
-              <strong className="metric-value">{pendingOrders}</strong>
-            </div>
-          </div>
-
-          <div className="metric-card">
-            <div className="metric-icon red"><Heart size={20} /></div>
-            <div className="metric-data">
-              <span className="metric-label">Saved Favorites</span>
-              <strong className="metric-value">{favorites.length}</strong>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Account Cards for Overview */}
-      {mode === 'overview' && (
-        <div className="customer-summary">
-          <article className="customer-account-card">
-            <span className="summary-label">
-              <ShieldCheck size={18} /> AUTHENTICATED ACCOUNT
-            </span>
-            <div>
-              <p>Signed in as</p>
-              <strong>{session?.user.email}</strong>
-            </div>
-            <Link className="button button-outline" to="/dashboard/profile">
-              Manage Profile <ArrowRight size={16} />
+        <div className="dashboard-top-cards">
+          {/* Card 1: MAIN WALLET / Shopping Balance */}
+          <article className="dashboard-stat-card wallet-card">
+            <span className="stat-card-badge">SHOPPING BALANCE</span>
+            <strong className="stat-card-value">₦0.00</strong>
+            <p className="stat-card-subtext">Ready for purchases &amp; instant checkout</p>
+            <Link to="/marketplace" className="stat-card-action">
+              Explore Store <ArrowRight size={14} />
             </Link>
           </article>
 
-          <article className="customer-assets-card">
-            <span className="summary-label">
-              <PackageOpen size={18} /> DIGITAL ASSETS VAULT
-            </span>
-            <h2>Your Purchases</h2>
-            <p>Access your purchased tools, accounts, and secure delivery instructions.</p>
-            <Link className="button" to="/dashboard/purchases">
-              View Purchases <ArrowRight size={16} />
+          {/* Card 2: DIGITAL ASSETS / Delivered Purchases */}
+          <article className="dashboard-stat-card">
+            <span className="stat-card-badge">DELIVERED PURCHASES</span>
+            <strong className="stat-card-value">{completedPurchases} Assets</strong>
+            <p className="stat-card-subtext">Access credentials &amp; instant delivery vault</p>
+            <Link to="/dashboard/purchases" className="stat-card-action">
+              Open Vault <ArrowRight size={14} />
+            </Link>
+          </article>
+
+          {/* Card 3: SAVED FAVORITES / Wishlist */}
+          <article className="dashboard-stat-card">
+            <span className="stat-card-badge">WISHLIST</span>
+            <strong className="stat-card-value">{favorites.length} Saved</strong>
+            <p className="stat-card-subtext">Quickly access your pinned essentials</p>
+            <Link to="/marketplace?favorites=1" className="stat-card-action">
+              View Favorites <ArrowRight size={14} />
             </Link>
           </article>
         </div>
       )}
 
-      {/* Catalog Suggestions on Overview */}
-      {mode === 'overview' && <CatalogSuggestions />}
+      {/* Trending Now 🔥 Ranked Section */}
+      {mode === 'overview' && <TrendingSection />}
 
       {/* Recent Activity / Records */}
       <div className={mode === 'overview' ? 'customer-activity' : undefined}>
@@ -399,7 +366,7 @@ export function CustomerRecords({
   )
 }
 
-function CatalogSuggestions() {
+function TrendingSection() {
   const { formatPrice } = useCurrency()
   const [products, setProducts] = useState<
     {
@@ -419,7 +386,7 @@ function CatalogSuggestions() {
     let active = true
     void cloudflareRequest<{ records: typeof products }>('/api/products?page=1')
       .then((data) => {
-        if (active) setProducts(data.records.slice(0, 4))
+        if (active) setProducts(data.records.slice(0, 3))
       })
       .catch(() => {})
     return () => {
@@ -430,37 +397,59 @@ function CatalogSuggestions() {
   if (!products.length) return null
 
   return (
-    <section className="customer-catalog">
-      <div className="activity-heading">
+    <section className="trending-section" aria-label="Trending Products">
+      <div className="trending-heading">
         <div>
-          <h2>Explore Trending Products</h2>
-          <p>Verified digital essentials ready for immediate ordering.</p>
+          <h2>Trending Now 🔥</h2>
+          <p className="stat-card-subtext">Top performing digital tools and accounts this week</p>
         </div>
         <Link className="text-link" to="/marketplace">
-          Explore All Products →
+          View All Products →
         </Link>
       </div>
-      <div className="customer-catalog-grid">
-        {products.map((product) => (
-          <Link className="customer-catalog-card" key={product.id} to={`/products/${product.slug}`}>
-            <ProductArtwork
-              name={product.name}
-              category={product.category_name}
-              path={product.image_path}
-              images={product.supplier_image_urls}
-            />
-            <h3>{product.name}</h3>
-            <div className="catalog-card-footer">
-              <span className="card-cat">{product.category_name}</span>
-              {product.server_number ? (
-                <span className={`server-badge server-badge-${product.server_number}`}>
-                  Server {product.server_number}
-                </span>
-              ) : null}
-              <strong className="card-price">{formatPrice(product.price_minor)}</strong>
-            </div>
-          </Link>
-        ))}
+
+      <div className="trending-grid">
+        {products.map((product, index) => {
+          const rankClass = index === 0 ? 'trending-rank-1' : index === 1 ? 'trending-rank-2' : 'trending-rank-3'
+          return (
+            <article className="trending-card" key={product.id}>
+              <span className={`trending-rank-tag ${rankClass}`}>
+                #{index + 1}
+              </span>
+
+              <Link to={`/products/${product.slug}`} className="live-product-icon">
+                <ProductArtwork
+                  name={product.name}
+                  category={product.category_name}
+                  path={product.image_path}
+                  images={product.supplier_image_urls}
+                />
+              </Link>
+
+              <div className="trending-card-body">
+                <div className="product-badges-row">
+                  <span className="product-category-badge">{product.category_name}</span>
+                  {product.server_number ? (
+                    <span className={`server-badge server-badge-${product.server_number}`}>
+                      Server {product.server_number}
+                    </span>
+                  ) : null}
+                </div>
+
+                <h3>
+                  <Link to={`/products/${product.slug}`}>{product.name}</Link>
+                </h3>
+
+                <div className="trending-card-footer">
+                  <strong className="product-price">{formatPrice(product.price_minor)}</strong>
+                  <Link to={`/products/${product.slug}`} className="text-link">
+                    View Details →
+                  </Link>
+                </div>
+              </div>
+            </article>
+          )
+        })}
       </div>
     </section>
   )
