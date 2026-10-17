@@ -10,3 +10,5 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 )
+
+import './storefront-ui.css'

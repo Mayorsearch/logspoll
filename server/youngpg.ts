@@ -245,6 +245,10 @@ export function pageIsComplete(
 export const DESCRIPTION_REQUIRED = 'Description not supplied by supplier; administrator review required.';
 export const missingDescription = (value: unknown) => value == null || (typeof value === 'string' && !value.trim());
 const normalized = (value: string) => value.normalize('NFKC').trim().toLowerCase();
+// Category/brand/account words do not establish misuse. Explicit compromise does.
+export const restrictedCatalogText = /\b(?:hacked|stolen|compromised|hijacked)(?:\s+\w+){0,2}\s+(?:accounts?|credentials?|cookies?|sessions?|logins?|tokens?)\b|\b(?:credential|password)\s+dumps?\b/i;
+export const normalizeListingTitle = (value: unknown) => label(value,2000,true).replace(/\s+/g,' ');
+
 
 export function listingsFrom(
   values: unknown[],
@@ -253,8 +257,6 @@ export function listingsFrom(
 ) {
   const seen = new Set<string>();
   const extra = new Map<string, { id: string; slug: string; name: string }>();
-  const excluded =
-    /\b(accounts?|logs?|cookies?|sessions?|passwords?|credentials?|compromised|stolen|hacked|facebook|instagram|twitter|tiktok|snapchat|inbox|tokens?|fake.bank.balance)\b/i;
   const products = [];
   for (const value of values) {
     const item = record(value);
@@ -264,15 +266,11 @@ export function listingsFrom(
     const authorization = approved[id] ?? approved['*'];
     if (!authorization) continue;
 
-    // Reject restricted inventory before validating display-field limits. Such
-    // inventory must never block ingestion of independently eligible listings.
-    if (typeof item.title === 'string' &&
-        excluded.test(`${item.title} ${typeof item.description === 'string' ? item.description : ''}`)) continue;
-    const name = label(item.title, 200);
+    // Authorization comes from the configured evidence map, never category words.
+    const name = normalizeListingTitle(item.title);
     const description = missingDescription(item.description) ? DESCRIPTION_REQUIRED : label(item.description, 10000, true);
-    // Never automatically stage credential or compromised-account inventory.
-    if (excluded.test(`${name} ${description}`)) continue;
 
+    if(restrictedCatalogText.test(name+' '+description))continue;
     const nestedCategory = record(item.category);
     const slug = identifier(nestedCategory.slug);
     const title = label(nestedCategory.title, 120);
@@ -303,8 +301,33 @@ export function listingsFrom(
       ...listingMetadata(item),
     });
   }
-  if (products.length > 500) throw new HttpError(502, 'Eligible catalog exceeds 500 products.');
+  if (products.length > 100000) throw new HttpError(502, 'Catalog exceeds supported snapshot size.');
   return { products, categories: [...categories, ...extra.values()] };
+}
+
+// Private discovery is deliberately broader than sale eligibility. Only public
+// catalog fields are copied; fulfillment payloads and credentials never are.
+export function discoverListings(values: unknown[], source: ReturnType<typeof categoriesFrom>, approved: Record<string,string>) {
+  const categories = [...source]; const products: ReturnType<typeof listingsFrom>['products'] = [];
+  const discovery = values.map(value => {
+    const item = record(value), id = identifier(item.id);
+    try {
+      const category = record(item.category), slug = identifier(category.slug), name = label(category.title,120);
+      let match = categories.find(c=>normalized(c.slug)===normalized(slug)) ?? categories.find(c=>normalized(c.name)===normalized(name));
+      if (!match) { match={id:`unmatched-${slug}`,slug,name};categories.push(match); }
+      const title=normalizeListingTitle(item.title), description=missingDescription(item.description)?DESCRIPTION_REQUIRED:label(item.description,10000,true);
+      const metadata={id,name:title,description,category_id:match.id,category_name:name,category_slug:slug,
+        cost_minor:minorPrice(item.price_ngn),stock:0,authorization_ref:approved[id]??approved['*'],...listingMetadata(item)};
+      if (!/^(?:0|[1-9]\d{0,6})$/.test(String(item.available_stock)) || Number(item.available_stock)>1000000) throw new Error('Invalid stock');
+      metadata.stock=['inactive','unavailable','discontinued','sold_out'].includes(String(item.status))?0:Number(item.available_stock);
+      const permitted=listingsFrom([item],categories,approved).products[0];
+      if (permitted) products.push(permitted);
+      return {...metadata,review_block:restrictedCatalogText.test(title+' '+description)?'Explicit compromised-credential indicators; independent security review required.':permitted?null:'Configure supplier-wide or product-specific resale evidence in Supplier API settings.'};
+    } catch {
+      return {id,name:'Metadata withheld',review_block:'Invalid or sensitive public metadata; manual investigation required.'};
+    }
+  });
+  return {categories,products,discovery};
 }
 
 export class SupplierReadError extends HttpError {
@@ -317,7 +340,7 @@ export class SupplierReadError extends HttpError {
 
 // Explicit projection only: never store arbitrary detail responses or fulfillment fields.
 export function listingMetadata(item: Metadata) {
-  const result: { slug?: string; image_url?: string; image_urls?: string[]; supplier_status?: string; subcategory_id?: string; sold_count?: number } = {}
+  const result: { slug?: string; image_url?: string; image_urls?: string[]; supplier_status?: string; subcategory_id?: string; subcategory_name?: string; subcategory_slug?: string; sold_count?: number } = {}
   if (item.slug != null) result.slug = listingSlug(item.slug)
   const images = productImages(item)
   if (images.length) { result.image_urls = images; result.image_url = images[0] }
@@ -326,6 +349,9 @@ export function listingMetadata(item: Metadata) {
   if (item.subcategory && typeof item.subcategory === 'object' && !Array.isArray(item.subcategory)) {
     const id = record(item.subcategory).id
     if (id != null) result.subcategory_id = identifier(id)
+    const sub=record(item.subcategory)
+    if (sub.title != null) result.subcategory_name=label(sub.title,120)
+    if (sub.slug != null) result.subcategory_slug=identifier(sub.slug)
   }
   return result
 }

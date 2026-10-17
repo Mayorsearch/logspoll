@@ -26,15 +26,24 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
     const availability = url.searchParams.get('availability')
     if (availability === 'in-stock') predicates.push('p.available_quantity>0')
     if (availability === 'out-of-stock') predicates.push('p.available_quantity=0')
+    const hasServer = Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('storefront_products') WHERE name='server_number'").first().catch(() => null))
+    const server = url.searchParams.get('server')
+    if (server && ['1', '2', '3'].includes(server)) {
+      if (hasServer) {
+        predicates.push('p.server_number=?')
+        values.push(Number(server))
+      }
+    }
     const from = ` FROM ${storefront} p JOIN categories c ON c.id=p.category_id WHERE ${predicates.join(' AND ')}`
     const order = ({ 'price-asc': 'p.price_minor ASC,p.id', 'price-desc': 'p.price_minor DESC,p.id', newest: 'p.id DESC' } as Record<string, string>)[url.searchParams.get('sort') ?? ''] ?? 'p.featured DESC,p.name,p.id'
     const total = (await db.prepare('SELECT count(*) AS n' + from).bind(...values).first<{ n: number }>())!.n
     const limit = ids ? 100 : 20
-    const rows = await db.prepare(`SELECT ${productFields}${from} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...values, limit, ids ? 0 : (page - 1) * limit).all()
+    const fields = hasServer ? `${productFields},p.server_number` : productFields
+    const rows = await db.prepare(`SELECT ${fields}${from} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...values, limit, ids ? 0 : (page - 1) * limit).all()
     return json({ records: rows.results.map(product), products: rows.results.map(product), total, pages: Math.max(1, Math.ceil(total / limit)) })
   }
   if (url.pathname === '/api/categories') {
-    const rows = await db.prepare(`SELECT c.id,c.slug,c.name,c.short_name,c.description,count(p.id) AS product_count FROM categories c JOIN ${storefront} p ON p.category_id=c.id WHERE c.active=1 GROUP BY c.id ORDER BY c.sort_order,c.id LIMIT 100`).all()
+    const rows = await db.prepare(`SELECT c.id,c.slug,c.name,c.short_name,c.description,count(p.id) AS product_count FROM categories c LEFT JOIN ${storefront} p ON p.category_id=c.id WHERE c.active=1 GROUP BY c.id ORDER BY c.sort_order,c.id LIMIT 100`).all()
     return json({ records: rows.results })
   }
   if (url.pathname === '/api/orders') {

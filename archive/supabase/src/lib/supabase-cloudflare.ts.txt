@@ -1,0 +1,6 @@
+// Cloudflare builds resolve the legacy module here. No SDK or legacy credentials
+// enter that browser bundle; unported legacy pages cannot contact the old database.
+type LegacyClient = NonNullable<typeof import('./supabase').supabase>
+export const supabase: LegacyClient | null = null
+export const configurationError = null
+export const authRedirect = (path: '/auth/callback' | '/reset-password') => `${window.location.origin}${path}`

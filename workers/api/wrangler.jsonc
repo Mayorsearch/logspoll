@@ -17,9 +17,10 @@
       "vars": {
         "ENVIRONMENT": "staging",
         "AUTH_ENABLED": "true",
-        "CATALOG_SYNC_ENABLED": "true",
+        "CATALOG_SYNC_ENABLED": "false",
         "AUTH_ORIGIN": "https://logspoll-api-staging.comedianmayorsearch.workers.dev",
-        "APP_ORIGIN": "https://mobile-preview.logspoll.pages.dev"
+        "APP_ORIGIN": "https://mobile-preview.logspoll.pages.dev",
+        "BACHS_SANDBOX_ENABLED": "true"
       },
       "d1_databases": [
         {

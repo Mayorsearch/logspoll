@@ -56,3 +56,22 @@
 .d1-reference-admin .catalog-actions{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px}
 .d1-reference-admin .catalog-status,.d1-reference-admin .catalog-progress{overflow-wrap:anywhere}
 @media(max-width:760px){.d1-reference-admin .catalog-config-form fieldset{grid-template-columns:minmax(0,1fr);gap:13px}.d1-reference-admin .catalog-config-form .catalog-save{width:100%}.d1-reference-admin .catalog-actions{flex-direction:column}.d1-reference-admin .catalog-actions .cf-btn{width:100%}}
+
+/* Existing Admin HQ colors; compact image previews and touch-friendly catalog rows. */
+.d1-reference-admin .catalog-thumbnail{display:block;width:64px;height:64px;overflow:hidden;border-radius:7px;background:#111a2b;margin-bottom:8px}
+.d1-reference-admin .catalog-thumbnail .product-artwork,.d1-reference-admin .catalog-thumbnail .product-artwork-placeholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;object-fit:cover}
+.d1-reference-admin .catalog-thumbnail svg{width:30px;height:30px;color:#98a2b3}
+.d1-reference-admin .catalog-filters{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
+.d1-reference-admin .catalog-filters input,.d1-reference-admin .catalog-filters select{min-width:0;max-width:100%;padding:10px;border:1px solid #344054;border-radius:7px;background:#111a2b;color:#e2e8f0;font:inherit}
+.d1-reference-admin .catalog-mobile-table p{overflow-wrap:anywhere;max-width:600px}
+@media(max-width:760px){
+ .d1-reference-admin .catalog-mobile-table,.d1-reference-admin .catalog-mobile-table tbody{display:block;min-width:0;width:100%}
+ .d1-reference-admin .catalog-mobile-table thead{display:none}
+ .d1-reference-admin .catalog-mobile-table tr{display:grid;grid-template-columns:minmax(0,1fr);border:1px solid #202a40;border-radius:8px;margin:12px 0;overflow:hidden}
+ .d1-reference-admin .catalog-mobile-table td{display:block;border:0;padding:10px 12px;overflow-wrap:anywhere;min-width:0}
+ .d1-reference-admin .catalog-mobile-table td[data-label]::before{content:attr(data-label);display:block;font-size:10px;color:#98a2b3;margin-bottom:5px}
+ .d1-reference-admin .catalog-filters{display:grid;grid-template-columns:minmax(0,1fr)}
+ .d1-reference-admin .catalog-filters input,.d1-reference-admin .catalog-filters select,.d1-reference-admin .cf-editor input,.d1-reference-admin .cf-editor select,.d1-reference-admin .cf-editor textarea{font-size:16px;min-height:44px;box-sizing:border-box;width:100%}
+ .d1-reference-admin .cf-actions .cf-btn,.d1-reference-admin .catalog-actions .cf-btn{min-height:44px}
+ .d1-reference-admin .catalog-checkbox input{width:auto;min-height:0}
+}

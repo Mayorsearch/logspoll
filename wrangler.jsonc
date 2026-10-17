@@ -23,7 +23,7 @@
 				"VITE_BACHS_SANDBOX_TEST_UI": "false",
 				"ENVIRONMENT": "staging",
 				"AUTH_ENABLED": "true",
-				"CATALOG_SYNC_ENABLED": "true",
+				"CATALOG_SYNC_ENABLED": "false",
 				"AUTH_ORIGIN": "https://mobile-preview.logspoll.pages.dev",
 				"APP_ORIGIN": "https://mobile-preview.logspoll.pages.dev"
 			},

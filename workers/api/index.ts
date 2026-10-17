@@ -1,7 +1,16 @@
+import {stagingBachsWebhook} from './bachs-staging.ts'
+import {bachsCheckout} from './bachs-checkout.ts'
+import {reconcileBachsAttempt} from './bachs-webhook.ts'
+import {storefrontCategories} from './storefront-categories.ts'
+import {hstoraWebhook,hstoraWebhookAdmin} from './hstora-webhook.ts'
+import {supplierManager} from './supplier-manager.ts'
+import {hstoraReview} from './hstora-review.ts'
+import {hstoraAdmin,syncHstoraBatch} from './hstora-manager.ts'
 import { requireRuntime } from './runtime.ts'
 import { HttpError, json } from './http.ts'
 import { supplierReview } from './supplier-review.ts'
-import { catalogAdmin, syncCatalogBatch } from './catalog-sync.ts'
+import { catalogAdmin, catalogWritesReady, refreshPublishedStock, refreshSupplierTaxonomy, syncCatalogBatch } from './catalog-sync.ts'
+import {paymentReadiness} from './payment-readiness.ts'
 import { authReady, consumeVerification, createAuth, identity } from './auth.ts'
 import { drainMail, enqueueMail, drainBusinessMail } from './mail.ts'
 import { adminOperations, adminEnrollment, adminActor } from './admin.ts'
@@ -9,11 +18,14 @@ import { customerRead, customerWrite, publicReviews } from './customer.ts'
 import type { ApiEnv, Execution } from './types.ts'
 export async function apiFetch(request: Request, env: ApiEnv, context?: Execution) {
   try {
+    if(new URL(request.url).pathname==='/api/webhooks/bachs')return await stagingBachsWebhook(request,env)
+    if(new URL(request.url).pathname==='/api/webhooks/hstora')return await hstoraWebhook(request,env)
     await requireRuntime(env)
     const url = new URL(request.url)
     const origin = request.headers.get('Origin')
     if (origin && origin !== url.origin) throw new HttpError(403, 'Origin not permitted.')
     if (!env.DB) throw new HttpError(503, 'Staging database is not configured.')
+    const groupedStorefront=await storefrontCategories(request,env);if(groupedStorefront)return groupedStorefront
     if (url.pathname.startsWith('/api/auth/')) {
       if (url.origin !== env.AUTH_ORIGIN) throw new HttpError(403, 'Use the configured authentication origin.')
       if (!['GET','POST'].includes(request.method)) throw new HttpError(405, 'Method not permitted.')
@@ -49,10 +61,24 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     if (url.pathname === '/api/admin/readiness') {
       await adminActor(request,env);if(request.method!=='GET')throw new HttpError(405,'Read-only endpoint.');
       const tables=await env.DB.prepare("SELECT name FROM sqlite_master WHERE name IN ('admin_invitations','supplier_products','storefront_products')").all();
-      return json({environment:env.ENVIRONMENT,database:'D1',schemaReady:tables.results.length===3,authReady:authReady(env),emailConfigured:Boolean(env.RESEND_API_KEY),catalogConfigured:env.CATALOG_SYNC_ENABLED==='true'&&Boolean(env.SUPPLIER_ENCRYPTION_KEY),livePayments:false,automaticFulfillment:false})
+      return json({environment:env.ENVIRONMENT,database:'D1',schemaReady:tables.results.length===3,authReady:authReady(env),emailConfigured:Boolean(env.RESEND_API_KEY),catalogConfigured:env.CATALOG_SYNC_ENABLED==='true'&&Boolean(env.SUPPLIER_ENCRYPTION_KEY),livePayments:false,automaticFulfillment:false,payments:await paymentReadiness(env,url.origin,url.searchParams.get('verify_bachs')==='1')})
     }
     if (url.pathname === '/api/admin/supplier-review') return await supplierReview(request, env)
+    if (url.pathname === '/api/admin/hstora-webhook') return await hstoraWebhookAdmin(request,env)
+    if (url.pathname === '/api/admin/supplier-manager') return await supplierManager(request,env)
+    if (url.pathname === '/api/admin/hstora-review') return await hstoraReview(request,env)
+    if (url.pathname === '/api/admin/hstora') return await hstoraAdmin(request,env)
     if (url.pathname === '/api/admin/catalog') return await catalogAdmin(request, env)
+    if (url.pathname === '/api/checkout') return await bachsCheckout(request, env)
+    if (url.pathname === '/api/bachs/order') {
+      if (request.method !== 'GET') throw new HttpError(405, 'GET required.')
+      const user = await identity(request, env), id = url.searchParams.get('id')
+      const attempt = await env.DB!.prepare('SELECT a.* FROM bachs_payment_attempts a WHERE a.order_id=? AND a.customer_id=? ORDER BY a.created_at DESC LIMIT 1').bind(id, user.id).first<{id:string;order_id:string;checkout_id:string;provider_mode:string;amount_minor:number;status:string}>()
+      if (!attempt) throw new HttpError(404, 'Order not found.')
+      if (attempt.checkout_id && ['initiating', 'open'].includes(attempt.status)) await reconcileBachsAttempt(env, attempt)
+      const order = await env.DB!.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,created_at FROM orders WHERE id=? AND customer_id=?').bind(id, user.id).first()
+      return json({ order })
+    }
     if (request.method === 'POST' && ['/api/support', '/api/reviews'].includes(url.pathname)) return await customerWrite(request, env, await identity(request, env))
     if (request.method !== 'GET') throw new HttpError(405, 'Application writes are not migrated yet.')
     if (url.pathname === '/api/reviews') return await publicReviews(request, env)
@@ -64,8 +90,17 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     // Public catalog uses verified D1 storefront data.
     if (request.method === 'GET' &&
         ['/api/products', '/api/categories'].includes(url.pathname)) {
+      // Cache only this public projection. Stock responses and private routes
+      // remain uncached so the one-hour inventory cutoff is never extended.
+      const cache=url.pathname==='/api/categories'?(globalThis.caches as CacheStorage&{default?:Cache}|undefined)?.default:undefined
+      const cacheKey=new Request(url.origin+'/api/categories')
+      const cached=cache&&await cache.match(cacheKey)
+      if(cached)return cached
       const response = await customerRead(request, env, null)
-      if (response) return response
+      if (response) {
+        if(cache&&context&&response.ok){response.headers.set('Cache-Control','public, max-age=30');context.waitUntil(cache.put(cacheKey,response.clone()))}
+        return response
+      }
     }
 
     const user = await identity(request, env)
@@ -92,13 +127,12 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
 }
 export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, context: Execution) => {
   context.waitUntil(requireRuntime(env).then(()=>drainBusinessMail(env)).then(()=>drainMail(env)).catch(()=>{}))
-  if (env.CATALOG_SYNC_ENABLED==='true') context.waitUntil((async()=>{
+  if (catalogWritesReady(env)) context.waitUntil((async()=>{
     await requireRuntime(env)
+    await syncHstoraBatch(env).catch(()=>{})
     await env.DB!.prepare("INSERT INTO migration_metadata(key,value) VALUES('catalog_scheduler_heartbeat',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run()
-    // Four bounded resources per minute keep the observed 103 eligible details
-    // plus 16 listing pages within the existing one-hour snapshot safety window.
     for(let batch=0;batch<4;batch++) {
-      try { const result=await syncCatalogBatch(env); if(result.skipped) break }
+      try { if((await refreshPublishedStock(env)).skipped) { const result=await syncCatalogBatch(env); if(result.skipped && (await refreshSupplierTaxonomy(env)).skipped) break } }
       catch { break /* Redacted failure/cooldown is persisted by the batch handler. */ }
       if(batch<3) await new Promise(resolve=>setTimeout(resolve,5500))
     }

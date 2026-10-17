@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { LogOut, PackageOpen, House, History, List, Settings, UserRound, ShoppingBag, ShieldCheck, ArrowRight } from 'lucide-react';
 import { useAuth } from '../auth/AuthProvider';
 import { cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth';
+import { ProductArtwork } from '../components/ProductArtwork';
 import { ReviewForm } from '../components/Reviews';
 import type { Order } from '../lib/customer-data';
 const links = [['', 'Overview', House], ['/purchases', 'Purchase History', History], ['/orders', 'Orders', ShoppingBag], ['/transactions', 'Transactions', List], ['/profile', 'Profile', UserRound], ['/settings', 'Settings', Settings]] as const;
@@ -57,10 +58,23 @@ export function CustomerRecords({ mode }: {
     const title = { overview: `Welcome back, ${String(session?.user.user_metadata.full_name || session?.user.email?.split('@')[0] || 'there')}! 👋`, orders: 'Your Orders', purchases: 'Purchase History', transactions: 'Transaction History' }[mode];
     return <div className={mode === 'overview' ? 'customer-overview' : 'customer-page-panel'}><h1>{title}</h1><p className="dashboard-intro">{mode === 'overview' ? 'Here’s what’s happening with your account today.' : mode === 'purchases' ? 'Access products from your paid, delivered orders.' : mode === 'transactions' ? 'View payment activity when transaction records are connected to this view.' : 'Track payment and fulfillment status for your orders.'}</p>
     {mode === 'overview' && <div className="customer-summary"><article className="customer-account-card"><span className="summary-label"><ShieldCheck size={18}/> YOUR ACCOUNT</span><div><p>Signed in as</p><strong>{session?.user.email}</strong></div><Link className="button" to="/dashboard/profile">Manage Profile <ArrowRight size={18}/></Link></article><article className="customer-assets-card"><span className="summary-label"><PackageOpen size={18}/> DIGITAL ASSETS</span><h2>Your Purchases</h2><p>Access your purchased tools and available delivery instructions.</p><Link className="button" to="/dashboard/purchases">View Purchases <ArrowRight size={18}/></Link><PackageOpen className="asset-watermark" size={150} aria-hidden="true"/></article></div>}
+    {mode === 'overview' && <CatalogSuggestions/>}
     <div className={mode === 'overview' ? 'customer-activity' : undefined}>{mode === 'overview' && <div className="activity-heading"><h2>Recent Activity</h2><Link className="text-link" to="/dashboard/orders">View All</Link></div>}
     {mode === 'transactions' ? <Empty title="Transaction history unavailable" text="Payment records are not connected to this account view yet. Check your orders for their current payment status."/> : loading ? <p role="status">Loading your records…</p> : error ? <div role="alert"><p className="form-error">{error}</p><button className="button button-outline" onClick={() => setAttempt(attempt + 1)}>Retry</button></div> : records.length === 0 ? <Empty title={mode === 'purchases' ? 'No purchases yet' : 'No orders yet'} text={mode === 'purchases' ? 'Your paid, delivered products will appear here.' : 'When you place an order, you can track it here.'}/> : <><h2 className="records-title">{mode === 'overview' ? 'Recent orders' : 'Most recent records'}</h2><div className="order-list">{records.slice(0, mode === 'overview' ? 5 : 50).map(order => <article className="order-card" key={order.id}><div className="order-heading"><h3>{order.reference}</h3><strong>{new Intl.NumberFormat('en-NG', { style: 'currency', currency: order.currency }).format(order.total_minor / 100)}</strong></div><p>{new Date(order.created_at).toLocaleDateString()} · Payment: {order.payment_status} · Delivery: {order.fulfillment_status}</p>{mode === 'purchases' && order.order_items?.map(item => <div className="purchase-item" key={item.id}><h4>{item.product_name} × {item.quantity}</h4>{item.product_entitlements ? <details><summary>View delivery instructions</summary><p className="delivery-instructions">{item.product_entitlements.instructions}</p></details> : <p>Delivery instructions are not available. Please contact support.</p>}<ReviewForm itemId={item.id}/></div>)}</article>)}</div><p className="preview-note">Showing up to {mode === 'overview' ? 5 : 50} recent records.</p></>}
     </div>{mode === 'overview' && <div className="customer-quick-actions"><h2>Quick Actions</h2><Link to="/marketplace"><PackageOpen size={22}/>Browse Products <ArrowRight size={18}/></Link><Link to="/dashboard/settings"><Settings size={22}/>Account Settings <ArrowRight size={18}/></Link><Link to="/support">Contact Support <ArrowRight size={18}/></Link></div>}
   </div>;
+}
+function CatalogSuggestions() {
+    const [products, setProducts] = useState<{id:string;slug:string;name:string;category_name:string;price_minor:number;currency:string;image_path?:string;supplier_image_urls?:string[]}[]>([]);
+    useEffect(() => {
+        let active = true;
+        void cloudflareRequest<{records:typeof products}>('/api/products?page=1').then(data => {
+            if (active) setProducts(data.records.slice(0, 4));
+        }).catch(() => {});
+        return () => { active = false; };
+    }, []);
+    if (!products.length) return null;
+    return <section className="customer-catalog"><div className="activity-heading"><div><h2>Explore the catalog</h2><p>Discover products currently listed in the store.</p></div><Link className="text-link" to="/marketplace">Explore Store <ArrowRight size={16}/></Link></div><div className="customer-catalog-grid">{products.map(product => <Link className="customer-catalog-card" key={product.id} to={`/products/${product.slug}`}><ProductArtwork name={product.name} category={product.category_name} path={product.image_path} images={product.supplier_image_urls}/><h3>{product.name}</h3><div><span>{product.category_name}</span><strong>{new Intl.NumberFormat('en-NG', {style:'currency',currency:product.currency}).format(product.price_minor / 100)}</strong></div></Link>)}</div></section>;
 }
 function Empty({ title, text }: {
     title: string;

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { readFileSync } from 'node:fs'
 import { apiFetch } from '../workers/api/index.ts'
+import {sealCredential} from '../server/supplier-crypto.ts'
 import type { ApiEnv, Database, Statement } from '../workers/api/types.ts'
 
 const connect = '50000000-0000-4000-8000-000000000001'
@@ -59,6 +60,27 @@ async function member(ctx: ReturnType<typeof setup>) {
   const body = await userResponse.json() as {user:{id:string}}
   return {cookie,id:body.user.id}
 }
+
+test('mobile sync always queues durably without supplier calls and preserves incomplete jobs, leases and cooldowns',async t=>{
+ const ctx=setup(),{sqlite,env,request}=ctx
+ const {cookie,id}=await member(ctx);sqlite.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").run(id)
+ env.CATALOG_SYNC_ENABLED='true'
+ sqlite.prepare("INSERT INTO staging_supplier_connections(id,provider,name,enabled,authorized_products,lease_owner,lease_until,next_attempt) VALUES(?,'youngpg','Licensed supplier',1,?,'existing-owner',?,?)").run(connect,JSON.stringify({'*':'LICENSE-WIDE'}),Date.now()+300000,Date.now()+120000)
+ sqlite.prepare("INSERT INTO supplier_sync_jobs(id,connection_id,revision,phase,page,scanned,started_at) VALUES('resume-me',?,1,'listings',10,960,?)").run(connect,Date.now())
+ const before=sqlite.prepare('SELECT * FROM supplier_sync_jobs').get()
+ const fetch=t.mock.method(globalThis,'fetch',async()=>{throw Error('Browser must never fetch supplier inventory')})
+ for(let retry=0;retry<2;retry++){
+  const response=await apiFetch(request('/api/admin/catalog',{action:'sync',id:connect},cookie),env)
+  assert.equal(response.status,202,await response.clone().text());const data=await response.json()
+  assert.equal(data.job_id,'resume-me');assert.equal(data.backgroundReady,false)
+ }
+ assert.deepEqual(sqlite.prepare('SELECT * FROM supplier_sync_jobs').get(),before)
+ assert.equal(sqlite.prepare('SELECT lease_owner FROM staging_supplier_connections').get()!.lease_owner,'existing-owner')
+ assert.equal(fetch.mock.callCount(),0)
+ env.CATALOG_RESUME_AT=new Date(Date.now()+60000).toISOString()
+ assert.equal((await apiFetch(request('/api/admin/catalog',{action:'sync',id:connect},cookie),env)).status,503)
+ assert.deepEqual(sqlite.prepare('SELECT * FROM supplier_sync_jobs').get(),before)
+})
 function stage(sqlite: DatabaseSync, externalId: string, kind = 'permitted_digital_good', authorized = 1) {
   sqlite.prepare('INSERT OR IGNORE INTO supplier_snapshots(id,connection_id,revision,started_at,completed_at) VALUES(?,?,1,?,?)').run('test-snapshot',connect,Date.now()-1000,Date.now()-500)
   const previous=sqlite.prepare('SELECT authorized_products FROM staging_supplier_connections WHERE id=?').get(connect)!
@@ -115,7 +137,7 @@ test('D1 approval, publication, stock revocation, price overrides and descriptio
  stage(sqlite,'license');stage(sqlite,'auto');stage(sqlite,'zero');stage(sqlite,'forbidden','account_access',1)
  sqlite.prepare("UPDATE staging_supplier_feed_items SET stock_quantity=0 WHERE external_id='zero'").run()
  const {cookie,id}=await member(ctx);sqlite.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").run(id)
- const review=(external_id:string,price_minor?:number)=>request('/api/admin/supplier-review',{action:'approve',connection_id:connect,external_id,category_id:category,delivery_type:'Redemption code',description:'Administrator reviewed licensed digital utility.',...(price_minor===undefined?{}:{price_minor})},cookie)
+ const review=(external_id:string,price_minor?:number)=>request('/api/admin/supplier-review',{action:'approve',delivery_verified:true,privacy_verified:true,provider_verified:true,review_reference:'TEST-REVIEWED-DELIVERY-AND-PROVIDER',connection_id:connect,external_id,category_id:category,delivery_type:'Redemption code',description:'Administrator reviewed licensed digital utility.',...(price_minor===undefined?{pricing_mode:'auto'}:{price_minor})},cookie)
  assert.equal((await apiFetch(review('forbidden'),env)).status,409)
  assert.equal((await apiFetch(review('license',2.3),env)).status,400)
  const approved=await apiFetch(review('license',7777),env);assert.equal(approved.status,200,await approved.clone().text());const product=(await approved.json()).product_id
@@ -135,6 +157,24 @@ test('D1 approval, publication, stock revocation, price overrides and descriptio
  sqlite.prepare("UPDATE staging_supplier_feed_items SET supplier_cost_minor=800 WHERE external_id='auto'").run()
  assert.equal(sqlite.prepare('SELECT price_minor FROM products WHERE id=?').get(autoId)!.price_minor,800)
  const zero=await apiFetch(review('zero'),env);assert.equal(zero.status,200);assert.equal((await action({action:'publish',id:(await zero.json()).product_id})).status,409)
+ const zeroId=sqlite.prepare("SELECT product_id FROM supplier_products WHERE external_id='zero'").get()!.product_id
+ assert.equal((await action({action:'unpublish',id:product})).status,200)
+ assert.equal((await action({action:'bulk_publish',ids:[product,zeroId]})).status,409)
+ assert.equal(sqlite.prepare('SELECT publication_verified FROM products WHERE id=?').get(product)!.publication_verified,0) // Entire batch rolls back.
+ assert.equal((await action({action:'bulk_publish',ids:[product,autoId]})).status,200)
+ assert.equal((await action({action:'bulk_price',ids:[product,autoId],mode:'percent_markup',amount:2500})).status,200)
+ assert.equal(sqlite.prepare('SELECT price_minor FROM products WHERE id=?').get(product)!.price_minor,750)
+ assert.equal(sqlite.prepare('SELECT price_minor FROM products WHERE id=?').get(autoId)!.price_minor,1000)
+ sqlite.prepare("UPDATE staging_supplier_feed_items SET supplier_cost_minor=999 WHERE external_id IN ('license','auto')").run()
+ assert.equal(sqlite.prepare('SELECT price_minor FROM products WHERE id=?').get(product)!.price_minor,750)
+ assert.equal((await action({action:'bulk_price',ids:[product],mode:'fixed_markup',amount:101})).status,200)
+ assert.equal(sqlite.prepare('SELECT price_minor FROM products WHERE id=?').get(product)!.price_minor,1100)
+ assert.equal((await action({action:'bulk_price',ids:[product,product],mode:'price',amount:1})).status,400)
+ const records=await(await apiFetch(request('/api/admin/operations?section=products',undefined,cookie),env)).json()
+ assert.equal(records.records.find((p:{id:string})=>p.id===product).estimated_profit_minor,101)
+ sqlite.prepare("UPDATE products SET name='Transferred Facebook account' WHERE id=?").run(autoId)
+ assert.equal((await action({action:'bulk_publish',ids:[autoId]})).status,200)
+ assert.equal((await action({action:'publish',id:autoId})).status,200)
  sqlite.prepare('UPDATE staging_supplier_connections SET enabled=0 WHERE id=?').run(connect)
  assert.equal(sqlite.prepare('SELECT available_quantity FROM verified_product_stock WHERE id=?').get(product)!.available_quantity,0)
  sqlite.prepare('UPDATE staging_supplier_connections SET enabled=1 WHERE id=?').run(connect)
@@ -184,7 +224,7 @@ test('supplier-wide evidence authorizes review and verified stock; product-speci
  sqlite.prepare('INSERT INTO staging_supplier_connections(id,provider,name) VALUES(?,?,?)').run(connect,'youngpg','Licensed supplier')
  stage(sqlite,'wide-item')
  sqlite.prepare('UPDATE staging_supplier_connections SET authorized_products=? WHERE id=?').run(JSON.stringify({'*':'DOCUMENTED-LICENSE-REF'}),connect)
- const body={action:'approve',connection_id:connect,external_id:'wide-item',category_id:category,description:'Reviewed licensed digital resource for authorized resale.',delivery_type:'Redemption code'}
+ const body={action:'approve',delivery_verified:true,privacy_verified:true,provider_verified:true,review_reference:'TEST-REVIEWED-DELIVERY-AND-PROVIDER',pricing_mode:'auto',connection_id:connect,external_id:'wide-item',category_id:category,description:'Reviewed licensed digital resource for authorized resale.',delivery_type:'Redemption code'}
  const approved=await apiFetch(request('/api/admin/supplier-review',body,cookie),env)
  assert.equal(approved.status,200,await approved.clone().text());const product=(await approved.json()).product_id
  assert.equal(sqlite.prepare('SELECT available_quantity FROM verified_product_stock WHERE id=?').get(product)!.available_quantity,4)
@@ -207,4 +247,43 @@ test('supplier-wide evidence authorizes review and verified stock; product-speci
  sqlite.prepare("UPDATE migration_metadata SET value=? WHERE key='catalog_scheduler_heartbeat'").run(String(Date.now()-180000))
  const status=await apiFetch(request('/api/admin/catalog',undefined,cookie),env)
  assert.equal((await status.json()).backgroundReady,false)
+})
+
+test('category words do not replace explicit authorization, delivery and provider review',async()=>{
+ const ctx=setup(),account=await member(ctx)
+ ctx.sqlite.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").run(account.id)
+ ctx.sqlite.prepare("INSERT INTO staging_supplier_connections(id,provider,name) VALUES(?,'youngpg','Synthetic supplier')").run(connect)
+ stage(ctx.sqlite,'financial')
+ ctx.sqlite.prepare("INSERT INTO supplier_source_categories(connection_id,kind,external_id,slug,name,snapshot_id) VALUES(?,'category','financial','financial','Mastercard','test-snapshot')").run(connect)
+ ctx.sqlite.prepare("UPDATE staging_supplier_feed_items SET supplier_category_id='financial' WHERE external_id='financial'").run()
+ const before=ctx.sqlite.prepare('SELECT count(*) n FROM products').get()!.n
+ const response=await apiFetch(ctx.request('/api/admin/supplier-review',{action:'approve',delivery_verified:true,privacy_verified:true,provider_verified:true,review_reference:'TEST-REVIEWED-DELIVERY-AND-PROVIDER',pricing_mode:'auto',connection_id:connect,external_id:'financial',category_id:category,description:'Licensed product with verified resale rights.',delivery_type:'Redemption code'},account.cookie),ctx.env)
+ assert.equal(response.status,200,await response.clone().text())
+ assert.equal(ctx.sqlite.prepare("SELECT approval FROM staging_supplier_feed_items WHERE external_id='financial'").get()!.approval,'approved')
+ assert.equal(ctx.sqlite.prepare('SELECT count(*) n FROM products').get()!.n,Number(before)+1)
+})
+
+test('authenticated admin loads authorized account metadata, prices, reviews, publishes and rejects through the real SQLite workflow',async t=>{
+ const ctx=setup(),{sqlite,request,env}=ctx,{cookie,id}=await member(ctx)
+ sqlite.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").run(id)
+ const sealed=await sealCredential('ypg_'+'a'.repeat(48),connect,env.SUPPLIER_ENCRYPTION_KEY)
+ sqlite.prepare("INSERT INTO staging_supplier_connections(id,provider,name,enabled,encrypted_key,key_nonce,authorized_products) VALUES(?,'youngpg','Authorized reseller',1,?,?,?)").run(connect,sealed.ciphertext,sealed.nonce,JSON.stringify({'*':'TEST-CATALOG-RESALE-AUTHORIZATION'}))
+ const cats=JSON.stringify([{id:'account-category',slug:'account-tools',name:'Account tools for financial services'}]),cached={id:'account-1',name:'Account management',slug:'account-management',category_id:'account-category',description:'Supplier metadata awaiting review.',cost_minor:1000,stock:1}
+ sqlite.prepare("INSERT INTO supplier_sync_jobs(id,connection_id,revision,phase,started_at,completed_at,categories) VALUES('catalog-e2e',?,1,'complete',?,?,?)").run(connect,Date.now()-7200000,Date.now()-7000000,cats)
+ sqlite.prepare("INSERT INTO supplier_sync_items(job_id,external_id,metadata,detail_done) VALUES('catalog-e2e','account-1',?,1)").run(JSON.stringify(cached))
+ sqlite.prepare("INSERT INTO supplier_snapshots(id,connection_id,revision,started_at,completed_at) VALUES('catalog-e2e',?,1,?,?)").run(connect,Date.now()-7200000,Date.now()-7000000)
+ t.mock.method(globalThis,'fetch',async(input,init)=>{assert.match(String(input),/\/listings\/account-management$/);assert.ok(!init?.method||init.method==='GET');return Response.json({success:true,data:{id:'account-1',title:'Financial services account management',description:'Accounts and personal data protection tools for authorized customers.',price_ngn:'20.00',available_stock:3,image_url:'https://cdn.example.com/genuine.png',password:'NEVER-RETURN',fulfillment:{secret:'NEVER-RETURN'}}})})
+ const call=(body:unknown)=>apiFetch(request('/api/admin/supplier-review',body,cookie),env)
+ const prepared=await call({action:'prepare',connection_id:connect,external_id:'account-1'});assert.equal(prepared.status,200,await prepared.clone().text());assert.doesNotMatch(await prepared.clone().text(),/NEVER-RETURN/)
+ assert.equal((await call({action:'bulk_price',mode:'percent_markup',amount:2500,items:[{connection_id:connect,external_id:'account-1'}]})).status,200)
+ assert.equal(sqlite.prepare("SELECT selling_price_minor FROM staging_supplier_feed_items WHERE external_id='account-1'").get()!.selling_price_minor,2500)
+ const review={action:'approve',connection_id:connect,external_id:'account-1',category_id:category,description:'Accounts and financial services management with personal data protection.',delivery_type:'Subscription activation',price_minor:2500,delivery_verified:true,privacy_verified:true,provider_verified:true,review_reference:'TEST-VERIFIED-TRANSFER-PRIVACY-PROVIDER'}
+ assert.equal((await call({...review,provider_verified:false})).status,400)
+ const approved=await call(review);assert.equal(approved.status,200,await approved.clone().text());const product=(await approved.json()).product_id
+ assert.equal((await apiFetch(request('/api/admin/operations',{action:'publish',id:product},cookie),env)).status,200)
+ const visible=await(await apiFetch(request('/api/products',undefined,cookie),env)).json();assert.ok(visible.records.some((p:{id:string;price_minor:number})=>p.id===product&&p.price_minor===2500))
+ sqlite.prepare("UPDATE staging_supplier_feed_items SET supplier_cost_minor=3000 WHERE external_id='account-1'").run()
+ assert.equal(sqlite.prepare('SELECT price_minor FROM products WHERE id=?').get(product)!.price_minor,2500)
+ assert.equal((await call({action:'reject',connection_id:connect,external_id:'account-1'})).status,200)
+ assert.equal(sqlite.prepare('SELECT count(*) n FROM storefront_products WHERE id=?').get(product)!.n,0)
 })

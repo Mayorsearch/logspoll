@@ -1,4 +1,3 @@
-const disabled = () => Response.json({ error: 'Payments and retired scheduler endpoints are disabled. Use the Cloudflare D1 API.' }, { status: 503, headers: { 'Cache-Control': 'no-store' } })
-export const onRequest = disabled
-export const onRequestPost = disabled
-export const onRequestGet = disabled
+import {stagingBachsWebhook} from '../../../workers/api/bachs-staging.ts'
+import type {ApiEnv} from '../../../workers/api/types.ts'
+export const onRequest=({request,env}:{request:Request;env:ApiEnv})=>stagingBachsWebhook(request,env)

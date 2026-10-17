@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { categoriesFrom, listingsFrom, DESCRIPTION_REQUIRED, resaleAllowlist } from '../server/youngpg.ts'
+import { categoriesFrom, listingsFrom, discoverListings, DESCRIPTION_REQUIRED, resaleAllowlist } from '../server/youngpg.ts'
 
 const payload = { success: true, data: [
   { id: 1, slug: 'vpn-premium', title: 'Premium VPN' },
@@ -32,13 +32,13 @@ test('matches exact slug, falls back to unique title, stages unmatched category'
   assert.equal(data.products[0].cost_minor, 250055)
 })
 
-test('does not stage login credentials or unapproved supplier listings', () => {
+test('stages authorized public account metadata without copying credentials or unapproved listings', () => {
   const cats = categoriesFrom(payload)
   const data = listingsFrom([
     sample(100, 'apps', 'Software', { title: 'Facebook session cookies' }),
     sample(101, 'apps', 'Software', { title: 'Licensed Software', description: 'An eligible fully described licensed product' }),
   ], cats, { 100: 'agreement-100' })
-  assert.equal(data.products.length, 0)
+  assert.equal(data.products.length, 1)
 })
 
 test('does not accept invalid listing costs or stock', () => {
@@ -56,18 +56,42 @@ test('blank descriptions remain review-required and ordinary multiline product t
   assert.equal(listingsFrom([sample(1, 'apps', 'Software', { description })], cats, { 1: 'agreement-ref' }).products[0].description, description)
 })
 
-test('supplier-wide resale evidence covers eligible goods but not account credentials', () => {
+test('supplier-wide resale evidence covers authorized public metadata across account categories', () => {
   const categories = categoriesFrom(payload)
   const approved = resaleAllowlist({ '*': 'YoungPG-supplier-wide-authorization-reference' })
   const result = listingsFrom([
     sample(300, 'apps', 'Software', { title: 'Licensed software package' }),
     sample(301, 'apps', 'Software', { title: 'Facebook accounts and session cookies' }),
   ], categories, approved)
-  assert.deepEqual(result.products.map(product => product.id), ['300'])
+  assert.deepEqual(result.products.map(product => product.id), ['300','301'])
   assert.equal(result.products[0].authorization_ref, approved['*'])
   assert.throws(() => resaleAllowlist({ '*': 'bad' }))
   const specific = listingsFrom([
     sample(300, 'apps', 'Software', { title: 'Licensed software package' }),
   ], categories, resaleAllowlist({ '*': 'supplier-wide-reference', '300': 'product-specific-reference' }))
   assert.equal(specific.products[0].authorization_ref, 'product-specific-reference')
+})
+
+test('private discovery records evidence independently from sale eligibility and never copies supplier evidence',()=>{
+ const source=categoriesFrom(payload)
+ const rows=discoverListings([sample(5,'vpn-premium','Premium VPN',{authorization_ref:'untrusted-input'}),sample(6,'apps','Software')],source,{'*':'supplier-wide-reference','5':'specific-evidence-reference'})
+ assert.equal(rows.discovery[0].authorization_ref,'specific-evidence-reference')
+ assert.equal(rows.discovery[1].authorization_ref,'supplier-wide-reference')
+ const unapproved=discoverListings([sample(5,'vpn-premium','Premium VPN',{authorization_ref:'untrusted-input'})],source,{})
+ assert.equal(unapproved.discovery[0].authorization_ref,undefined)
+ assert.ok(unapproved.discovery[0].review_block)
+ assert.equal(unapproved.discovery[0].stock,3) // Supplier quantity is private metadata, not sale permission.
+})
+
+test('future imports preserve category/account metadata, normalize titles, and flag explicit compromise',()=>{
+ const categories=categoriesFrom(payload)
+ const values=[sample(500,'apps','Software',{title:'Facebook\n authorized   account',description:'Approved transfer service.'}),sample(501,'apps','Software',{title:'HACKED TIKTOK account credentials'}),sample(502,'apps','Software',{title:'Licensed '+ 'product '.repeat(40)})]
+ const result=discoverListings(values,categories,{'*':'documented-resale-agreement'})
+ assert.equal(result.discovery[0].name,'Facebook authorized account')
+ assert.equal(result.discovery[0].review_block,null)
+ assert.match(String(result.discovery[1].review_block),/compromised-credential/)
+ assert.equal(result.discovery[1].stock,3)
+ assert.equal(result.discovery[2].review_block,null)
+ assert.ok(result.discovery[2].name.length>200)
+ assert.equal(result.products.length,2)
 })

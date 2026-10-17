@@ -4,6 +4,11 @@ export function safeProductImage(value: unknown): string | null {
   try {
     const url = new URL(value)
     if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.port || /^(localhost|127\.|10\.|192\.168\.|169\.254\.|\[)/i.test(url.hostname)) return null
+    if(!url.hostname.includes('.')||/\.(?:localhost|local|internal|home|lan)$/i.test(url.hostname))return null
+    if(/^\d+(?:\.\d+){3}$/.test(url.hostname)){
+      const [a,b]=url.hostname.split('.').map(Number)
+      if(a===0||a>=224||a===172&&b>=16&&b<=31||a===100&&b>=64&&b<=127||a===198&&[18,19].includes(b))return null
+    }
     // Only public image transformation parameters; signed/private URL tokens stay server-side.
     for (const [key, entry] of url.searchParams) if (!['w', 'h', 'width', 'height', 'q', 'quality', 'format', 'fit', 'auto'].includes(key) || !/^[a-zA-Z0-9,._-]{1,40}$/.test(entry)) return null
     return url.href
@@ -15,5 +20,10 @@ export function productImages(item: Record<string, unknown>): string[] {
   if (Array.isArray(item.images)) values.push(...item.images)
   if (Array.isArray(item.image_urls)) values.push(...item.image_urls)
   const urls = values.map(value => safeProductImage(value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>).url : value)).filter((value): value is string => Boolean(value))
-  return [...new Set(urls)]
+  return [...new Set(urls)].slice(0,12)
+}
+
+export function storedProductImages(value:unknown):string[] {
+  if(typeof value==='string'){if(value.length>30000)return [];try{value=JSON.parse(value)}catch{return []}}
+  return productImages({image_urls:value})
 }

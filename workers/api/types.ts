@@ -19,7 +19,15 @@ export interface ApiEnv {
   AUTH_ORIGIN?: string
   AUTH_SECRET?: string
   RESEND_API_KEY?: string
+  HSTORA_WEBHOOK_SECRET?: string
+  BACHS_API_KEY?: string
+  BACHS_WEBHOOK_SECRET?: string
+  BACHS_SANDBOX_ENABLED?: string
+  BACHS_LIVE_CHECKOUT_ENABLED?: string
+  BACHS_LIVE_VERIFIED?: string
+  BACHS_FULFILLMENT_VERIFIED?: string
   SUPPLIER_ENCRYPTION_KEY?: string
   CATALOG_SYNC_ENABLED?: string
+  CATALOG_RESUME_AT?: string
 }
 export interface Execution { waitUntil(promise: Promise<unknown>): void }

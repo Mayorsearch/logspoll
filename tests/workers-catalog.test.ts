@@ -147,22 +147,23 @@ test('scheduler skips fresh completed snapshots but resumes incomplete checkpoin
  const completed=Date.now()
  f.sqlite.prepare('UPDATE staging_supplier_connections SET last_verified_scan_at=?').run(completed)
  f.sqlite.prepare("INSERT INTO supplier_sync_jobs(id,connection_id,revision,phase,started_at,completed_at,categories,scanned,total,last_page) VALUES('held',?,1,'complete',?,?,?,0,0,1)").run(connection,completed,completed,JSON.stringify([{id:'1',slug:'utilities',name:'Utilities'}]))
+ f.sqlite.prepare('INSERT INTO migration_metadata(key,value) VALUES(?,?)').run('catalog_taxonomy:'+connection,JSON.stringify({job_id:'held',index:1,done:1}))
  let reads=0
  t.mock.method(globalThis,'fetch',async()=>{reads++;return Response.json({success:true,data:[],meta:{current_page:1,last_page:1,total:0}})})
  t.mock.method(globalThis,'setTimeout',((callback:()=>void,ms:number)=>{f.advance(ms);callback();return 0}) as typeof setTimeout)
  const tick=async()=>{const tasks:Promise<unknown>[]=[];worker.scheduled(null,f.env,{waitUntil(p){tasks.push(p)}});await Promise.all(tasks)}
  const held=f.sqlite.prepare('SELECT * FROM supplier_sync_jobs').get()
- await tick();f.advance(30*60*1000-1);await tick()
+ await tick();f.advance(12*60*60*1000-1);await tick()
  assert.equal(reads,0);assert.deepEqual(f.sqlite.prepare('SELECT * FROM supplier_sync_jobs').get(),held)
  assert.equal(f.sqlite.prepare('SELECT lease_owner FROM staging_supplier_connections').get()!.lease_owner,null)
  // An incomplete job must resume, rather than wait for the last success interval.
- f.sqlite.prepare("UPDATE supplier_sync_jobs SET phase='listings',completed_at=NULL").run()
+ f.sqlite.prepare("UPDATE supplier_sync_jobs SET phase='listings',completed_at=NULL,started_at=?").run(Date.now())
  await tick()
  const resumed=f.sqlite.prepare('SELECT id,phase FROM supplier_sync_jobs').get()!
  assert.equal(reads,1);assert.equal(resumed.id,'held');assert.equal(resumed.phase,'complete')
 })
 
-test('automatic starts allow the exact 30-minute boundary; explicit refresh still honors cooldowns and leases',async t=>{
+test('automatic starts allow the exact 12-hour boundary; explicit refresh still honors cooldowns and leases',async t=>{
  const f=await fixture(t);const completed=Date.now()
  f.sqlite.prepare('UPDATE staging_supplier_connections SET last_verified_scan_at=?').run(completed)
  f.sqlite.prepare("INSERT INTO supplier_sync_jobs(id,connection_id,revision,phase,started_at,completed_at) VALUES('held',?,1,'complete',?,?)").run(connection,completed,completed)
@@ -177,6 +178,140 @@ test('automatic starts allow the exact 30-minute boundary; explicit refresh stil
  // Simulate another successful completed scan, retaining the same test checkpoint.
  f.sqlite.prepare("UPDATE supplier_sync_jobs SET phase='complete'").run()
  f.sqlite.prepare('UPDATE staging_supplier_connections SET next_attempt=0,last_verified_scan_at=?').run(completed)
- f.advance(30*60*1000)
+ f.advance(12*60*60*1000)
  assert.equal((await syncCatalogBatch(f.env)).phase,'listings')
+})
+
+test('private discovery retains restricted categories without approving them; safe categories map once',async t=>{
+ const f=await fixture(t)
+ t.mock.method(globalThis,'fetch',async input=>{
+  const u=new URL(String(input))
+  if(u.pathname.endsWith('/categories'))return categories()
+  if(u.pathname.endsWith('/listings'))return Response.json({success:true,data:[listing('1'),{...listing('restricted'),title:'Instagram account',category:{slug:'instagram',title:'Instagram'},subcategory:{id:'s1',slug:'aged',title:'Aged'},password:'NEVER-COPY',fulfillment:{secret:'NEVER-COPY'}}],meta:{current_page:1,last_page:1,total:2}})
+  return Response.json({success:true,data:{id:'1',description:'Verified licensed utility with full public details.'}})
+ })
+ for(let i=0;i<5;i++)await f.step()
+ assert.equal(f.sqlite.prepare('SELECT phase FROM supplier_sync_jobs').get()!.phase,'complete')
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM supplier_sync_items').get()!.n,2)
+ const blocked=f.sqlite.prepare("SELECT metadata FROM supplier_sync_items WHERE external_id='restricted'").get()!.metadata as string
+ assert.match(blocked,/Configure supplier-wide/);assert.doesNotMatch(blocked,/NEVER-COPY|fulfillment|password/)
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM staging_supplier_feed_items').get()!.n,1)
+ assert.equal(f.sqlite.prepare("SELECT count(*) n FROM supplier_source_categories WHERE slug='instagram'").get()!.n,1)
+ assert.equal(f.sqlite.prepare("SELECT count(*) n FROM supplier_source_categories WHERE kind='subcategory'").get()!.n,1)
+ assert.equal(f.sqlite.prepare("SELECT count(*) n FROM categories WHERE slug='ypg-utilities'").get()!.n,1)
+ assert.equal(f.sqlite.prepare("SELECT count(*) n FROM categories WHERE slug='ypg-instagram'").get()!.n,0)
+ assert.ok(f.sqlite.prepare("SELECT category_id FROM staging_supplier_feed_items WHERE external_id='1'").get()!.category_id)
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM storefront_products WHERE slug LIKE ?').get('ypg-%')!.n,0)
+ const {categoryMappingStatements}=await import('../workers/api/catalog-sync.ts')
+ const counts=f.sqlite.prepare('SELECT count(*) n FROM categories').get()!.n
+ await f.db.batch(categoryMappingStatements(f.db,connection,[{id:'1',slug:'utilities',name:'Utilities'}]))
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM categories').get()!.n,counts)
+ assert.equal(f.sqlite.prepare('SELECT changes() n').get()!.n,0)
+})
+
+test('published stock refresh is bounded, preserves overrides/descriptions and never extends stale stock on errors',async t=>{
+ const f=await fixture(t)
+ t.mock.method(globalThis,'fetch',async input=>{
+  const u=new URL(String(input))
+  if(u.pathname.endsWith('/categories'))return categories()
+  if(u.pathname.endsWith('/listings'))return Response.json({success:true,data:[listing('1')],meta:{current_page:1,last_page:1,total:1}})
+  return Response.json({success:true,data:{id:'1',description:'Licensed public utility with verified delivery.',price_ngn:'30.05',available_stock:7}})
+ })
+ for(let i=0;i<5;i++)await f.step()
+ const product='60000000-0000-4000-8000-000000000001'
+ f.sqlite.prepare("UPDATE staging_supplier_feed_items SET approval='approved',selling_price_minor=8888,delivery_type='Redemption code',reviewed_description='Admin description must survive.',reviewed_by='10000000-0000-4000-8000-000000000001',reviewed_at=? WHERE external_id='1'").run(Date.now())
+ f.sqlite.prepare(`INSERT INTO products(id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,publication_verified,pricing_mode) SELECT ?,category_id,'published-test',name,'Admin description must survive.',8888,'YoungPG',1,'active','Redemption code',1,'override' FROM staging_supplier_feed_items WHERE external_id='1'`).run(product)
+ f.sqlite.prepare("INSERT INTO supplier_products VALUES(?,'1',?)").run(connection,product)
+ const {refreshPublishedStock}=await import('../workers/api/catalog-sync.ts')
+ const snapshot=f.sqlite.prepare("SELECT metadata FROM supplier_sync_items WHERE external_id='1'").get()!.metadata as string
+ f.advance(31*60*1000)
+ f.sqlite.prepare("UPDATE supplier_sync_items SET metadata=json_remove(metadata,'$.authorization_ref') WHERE external_id='1'").run()
+ assert.equal((await refreshPublishedStock(f.env)).skipped,true)
+ f.sqlite.prepare("UPDATE supplier_sync_items SET metadata=json_set(?,'$.review_block','Independent delivery review required') WHERE external_id='1'").run(snapshot)
+ assert.equal((await refreshPublishedStock(f.env)).skipped,true)
+ f.sqlite.prepare("UPDATE supplier_sync_items SET metadata=? WHERE external_id='1'").run(snapshot)
+ f.advance(31*60*1000)
+ assert.equal((await refreshPublishedStock(f.env)).skipped,false)
+ const feed=f.sqlite.prepare("SELECT supplier_cost_minor,stock_quantity,source_checked_at FROM staging_supplier_feed_items WHERE external_id='1'").get()!
+ assert.equal(feed.supplier_cost_minor,3005);assert.equal(feed.stock_quantity,7);assert.equal(feed.source_checked_at,Date.now())
+ const p=f.sqlite.prepare('SELECT price_minor,description FROM products WHERE id=?').get(product)!
+ assert.equal(p.price_minor,8888);assert.equal(p.description,'Admin description must survive.')
+ f.advance(31*60*1000)
+ t.mock.method(globalThis,'fetch',async()=>Response.json({}, {status:429,headers:{'Retry-After':'120'}}))
+ assert.equal((await refreshPublishedStock(f.env)).skipped,true)
+ assert.equal(f.sqlite.prepare("SELECT source_checked_at FROM staging_supplier_feed_items WHERE external_id='1'").get()!.source_checked_at,feed.source_checked_at)
+ assert.equal(f.sqlite.prepare('SELECT next_attempt FROM staging_supplier_connections').get()!.next_attempt,Date.now()+120000)
+})
+
+test('quota hold performs no catalog database operations, preserves checkpoints and expires at the exact UTC boundary',async t=>{
+ const f=await fixture(t)
+ const {catalogWritesReady,refreshPublishedStock}=await import('../workers/api/catalog-sync.ts')
+ const resume=Date.now()+60000;f.env.CATALOG_RESUME_AT=new Date(resume).toISOString()
+ const held=f.sqlite.prepare('SELECT * FROM staging_supplier_connections').get()
+ const prepare=t.mock.method(f.db,'prepare',()=>{throw new Error('Catalog must not touch D1 during quota hold')})
+ assert.equal(catalogWritesReady(f.env),false)
+ assert.equal((await syncCatalogBatch(f.env,connection)).skipped,'quota_reset_pending')
+ assert.equal((await refreshPublishedStock(f.env)).skipped,true)
+ assert.equal(prepare.mock.callCount(),0)
+ assert.deepEqual(f.sqlite.prepare('SELECT * FROM staging_supplier_connections').get(),held)
+ f.advance(60000);assert.equal(catalogWritesReady(f.env),true)
+ f.env.CATALOG_RESUME_AT='invalid';assert.equal(catalogWritesReady(f.env),false)
+ f.env.CATALOG_RESUME_AT=undefined;f.env.CATALOG_SYNC_ENABLED='false';assert.equal(catalogWritesReady(f.env),false)
+})
+
+test('held catalog scheduler leaves its heartbeat untouched and starts no supplier requests',async t=>{
+ const f=await fixture(t),{default:worker}=await import('../workers/api/index.ts')
+ f.env.CATALOG_RESUME_AT=new Date(Date.now()+60000).toISOString()
+ const fetch=t.mock.method(globalThis,'fetch',async()=>{throw new Error('No supplier requests during quota hold')})
+ const tasks:Promise<unknown>[]=[];worker.scheduled(null,f.env,{waitUntil(p){tasks.push(p)}});await Promise.all(tasks)
+ assert.equal(fetch.mock.callCount(),0)
+ assert.equal(f.sqlite.prepare("SELECT count(*) n FROM migration_metadata WHERE key='catalog_scheduler_heartbeat'").get()!.n,0)
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM supplier_sync_jobs').get()!.n,0)
+})
+
+test('supplier omission cannot erase saved images or useful descriptions',async t=>{
+ const f=await fixture(t)
+ f.sqlite.prepare(`INSERT INTO staging_supplier_feed_items(connection_id,external_id,name,supplier_cost_minor,stock_quantity,authorization_verified,evidence_reference,source_checked_at,supplier_description,supplier_image_urls)
+ VALUES(?,'1','Licensed utility',1000,1,1,'LICENSE-EVIDENCE-1',?,'Previously verified supplier details.',?)`).run(connection,Date.now(),JSON.stringify(['https://cdn.example.com/saved.png']))
+ t.mock.method(globalThis,'fetch',async input=>{
+  const url=new URL(String(input))
+  if(url.pathname.endsWith('/categories'))return categories()
+  if(url.pathname.endsWith('/listings'))return Response.json({success:true,data:[listing('1')],meta:{current_page:1,last_page:1,total:1}})
+  return Response.json({success:true,data:{id:'1'}})
+ })
+ for(let i=0;i<5;i++)await f.step()
+ assert.equal(f.sqlite.prepare('SELECT phase FROM supplier_sync_jobs').get()!.phase,'complete')
+ const row=f.sqlite.prepare('SELECT supplier_description,supplier_image_urls,supplier_cost_minor FROM staging_supplier_feed_items').get()!
+ assert.equal(row.supplier_description,'Previously verified supplier details.')
+ assert.deepEqual(JSON.parse(String(row.supplier_image_urls)),['https://cdn.example.com/saved.png'])
+ assert.equal(row.supplier_cost_minor,2005)
+})
+
+test('automatic full-scan pause still resumes an incomplete job',async t=>{
+ const f=await fixture(t)
+ f.sqlite.prepare("INSERT INTO migration_metadata(key,value) VALUES(?,'false')").run('catalog_auto_sync:'+connection)
+ t.mock.method(globalThis,'fetch',async input=>String(input).endsWith('/categories')?categories():page(1,['1']))
+ assert.equal((await syncCatalogBatch(f.env)).skipped,'busy_or_cooling_down')
+ await f.step() // Explicit admin job remains permitted.
+ f.advance(6000)
+ const resumed=await syncCatalogBatch(f.env)
+ assert.notEqual(resumed.skipped,'busy_or_cooling_down')
+})
+
+test('subcategory enrichment is independently checkpointed, bounded and rate-limit-aware without restarting product scans',async t=>{
+ const f=await fixture(t),{refreshSupplierTaxonomy}=await import('../workers/api/catalog-sync.ts')
+ f.sqlite.prepare("INSERT INTO supplier_sync_jobs(id,connection_id,revision,phase,started_at,completed_at,categories) VALUES('complete-products',?,1,'complete',?,?,?)").run(connection,Date.now(),Date.now(),JSON.stringify([{id:'1',name:'Utilities',slug:'utilities'}]))
+ const products=f.sqlite.prepare('SELECT * FROM products').all(),job=f.sqlite.prepare('SELECT * FROM supplier_sync_jobs').get()
+ let limited=false
+ const calls=t.mock.method(globalThis,'fetch',async input=>{assert.match(String(input),/categories\/1\/subcategories$/);return limited?Response.json({},{status:429,headers:{'Retry-After':'120'}}):subcategories()})
+ assert.equal((await refreshSupplierTaxonomy(f.env)).skipped,false)
+ assert.equal(f.sqlite.prepare("SELECT count(*) n FROM supplier_source_categories WHERE kind='subcategory'").get()!.n,1)
+ f.advance(6000);assert.equal((await refreshSupplierTaxonomy(f.env)).skipped,true);assert.equal(calls.mock.callCount(),1)
+ f.sqlite.prepare('UPDATE migration_metadata SET value=? WHERE key=?').run(JSON.stringify({job_id:'complete-products',index:0,done:0}),'catalog_taxonomy:'+connection)
+ const cursor=f.sqlite.prepare('SELECT value FROM migration_metadata').get()!.value
+ limited=true;assert.equal((await refreshSupplierTaxonomy(f.env)).skipped,true)
+ assert.equal(f.sqlite.prepare('SELECT next_attempt FROM staging_supplier_connections').get()!.next_attempt,Date.now()+120000)
+ assert.equal(f.sqlite.prepare('SELECT value FROM migration_metadata').get()!.value,cursor)
+ assert.deepEqual(f.sqlite.prepare('SELECT * FROM supplier_sync_jobs').get(),job)
+ assert.deepEqual(f.sqlite.prepare('SELECT * FROM products').all(),products)
 })

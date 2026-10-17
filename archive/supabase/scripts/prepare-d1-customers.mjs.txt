@@ -1,0 +1,49 @@
+// Offline only: generate private, reviewable SQL. Never connects to either database.
+import { readFileSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { createHash } from 'node:crypto'
+
+export function customerImportSQL(records, { allowAdmin = false } = {}) {
+  if (!Array.isArray(records) || !records.length) throw new Error('A trusted customer export is required.')
+  const ids = new Set(), emails = new Set(), quote = value => "'" + value.replaceAll("'", "''") + "'"
+  const sql = ['-- Apply as ONE transactional D1 batch after staging review.']
+  for (const row of records) {
+    const allowed = ['id', 'email', 'full_name', 'role', 'status', 'created_at']
+    if (!row || typeof row !== 'object' || Object.keys(row).some(key => !allowed.includes(key))) throw new Error('Unexpected export fields; passwords and tokens must never be exported.')
+    const { id, full_name: name, role, status, created_at: created } = row
+    const email = typeof row.email === 'string' ? row.email.trim().toLowerCase() : ''
+    if (!/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(id) || ids.has(id) || emails.has(email)) throw new Error('Invalid or duplicate identity.')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || typeof name !== 'string' || name.length > 120) throw new Error('Invalid customer profile.')
+    if (!['customer', 'admin'].includes(role) || !['active', 'restricted'].includes(status) || !/^\d{4}-\d\d-\d\dT/.test(created) || !Number.isFinite(Date.parse(created))) throw new Error('Invalid trusted role, status or timestamp.')
+    if (role === 'admin' && !allowAdmin) throw new Error('Administrator import requires separate --allow-admin-import approval.')
+    ids.add(id); emails.add(email)
+    const uid = quote(id), address = quote(email), display = quote(name), stamp = quote(created)
+    // Any collision or drift aborts. Replays preserve established passwords and roles.
+    for (const mismatch of [
+      `EXISTS(SELECT 1 FROM users WHERE id=${uid} AND status<>${quote(status)})`,
+      `EXISTS(SELECT 1 FROM user_roles WHERE user_id=${uid} AND role<>${quote(role)})`,
+      `EXISTS(SELECT 1 FROM profiles WHERE id=${uid} AND full_name<>${display})`,
+      `EXISTS(SELECT 1 FROM auth_user WHERE (id=${uid} AND lower(email)<>${address}) OR (lower(email)=${address} AND id<>${uid}))`,
+      `EXISTS(SELECT 1 FROM external_identities WHERE issuer='cloudflare-reset-enrollment:v1' AND ((subject=${address} AND user_id<>${uid}) OR (user_id=${uid} AND subject<>${address})))`,
+    ]) sql.push(`INSERT INTO users(id) SELECT '' WHERE ${mismatch};`)
+    sql.push(`INSERT OR IGNORE INTO users(id,status,created_at) VALUES(${uid},${quote(status)},${stamp});`,
+      `INSERT OR IGNORE INTO profiles(id,full_name,created_at,updated_at) VALUES(${uid},${display},${stamp},${stamp});`,
+      `INSERT OR IGNORE INTO user_roles(user_id,role,created_at) VALUES(${uid},${quote(role)},${stamp});`,
+      `INSERT INTO external_identities(issuer,subject,user_id) SELECT 'cloudflare-reset-enrollment:v1',${address},${uid} WHERE NOT EXISTS(SELECT 1 FROM auth_user WHERE id=${uid}) ON CONFLICT DO NOTHING;`,
+      `INSERT OR IGNORE INTO auth_user(id,name,email,emailVerified,createdAt,updatedAt) VALUES(${uid},${display},${address},0,${Date.parse(created)},${Date.parse(created)});`)
+  }
+  return sql.join('\n') + '\n'
+}
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    if (!process.argv[2]) throw new Error('Usage: node scripts/prepare-d1-customers.mjs /private/path/customers.json [--allow-admin-import]')
+    const records = JSON.parse(readFileSync(process.argv[2], 'utf8'))
+    const sql = customerImportSQL(records, { allowAdmin: process.argv.includes('--allow-admin-import') })
+    const directory = resolve('.migration-private'); mkdirSync(directory, { recursive: true, mode: 0o700 }); chmodSync(directory, 0o700)
+    writeFileSync(resolve(directory, 'customers.sql'), sql, { mode: 0o600 }); chmodSync(resolve(directory, 'customers.sql'), 0o600)
+    const manifest = { customers: records.length, administrators: records.filter(r => r.role === 'admin').length, sha256: createHash('sha256').update(sql).digest('hex'), executed: false }
+    writeFileSync(resolve(directory, 'customers-manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 })
+    console.log('Private SQL and manifest prepared in .migration-private/. Nothing imported. Review and test one atomic batch in staging first.')
+  } catch { console.error('Import preparation failed. Validate export fields, unique IDs/emails, trusted roles, and explicit administrator approval. No database was changed.'); process.exitCode = 1 }
+}

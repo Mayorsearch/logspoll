@@ -23,6 +23,12 @@ test('a malformed or unsupported Bachs webhook is never a fulfillment instructio
     {id:'evt_123456789',type:'collection.succeeded',data:{checkout_id:''}},
     {id:'invalid',type:'checkout.completed',data:{checkout_id:'chk_1234567890'}}]) assert.equal(parseBachsEvent(event),null)
 })
+test('product-less Bachs checkout uses verified null/API mode and exact order metadata',()=>{
+ const id='chk_1234567890',orderId='11111111-1111-4111-8111-111111111111'
+ const record={checkout_id:id,reference:orderId,status:'completed',payment_status:'succeeded',session_mode:null,products:null,metadata:{order_id:orderId},recurring:null,source_type:'API',charge:{status:'succeeded'},amount:'50.25',currency:'NGN'}
+ assert.equal(checkedPaidSandboxSession(record,id)?.totalMinor,5025)
+ for(const changed of [{metadata:null},{metadata:{order_id:'wrong'}},{source_type:'OTHER'},{products:[]},{payment_status:'processing'}])assert.equal(checkedPaidSandboxSession({...record,...changed},id),null)
+})
 test('sandbox checkout includes durable reference and allows omitted local return URLs', async t => {
   const orderId='11111111-1111-4111-8111-111111111111'
   t.mock.method(globalThis,'fetch',async (_: unknown, init: RequestInit) => {

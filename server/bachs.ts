@@ -25,6 +25,13 @@ export type CheckoutSessionInput = {
 
 export async function createSandboxSession(input: CheckoutSessionInput): Promise<{ checkoutId: string; checkoutUrl: string }> {
   if (!input.key.startsWith('sk_sandbox_') || input.key.length > 256) throw new Error('Bachs sandbox key is not configured.')
+  return createBachsSession(input, 'sandbox')
+}
+
+export async function createBachsSession(input: CheckoutSessionInput, mode: 'sandbox' | 'live'): Promise<{checkoutId:string;checkoutUrl:string}> {
+  const key=input.key.trim()
+  if (!key.startsWith(mode==='live'?'sk_live_':'sk_sandbox_') || key.length>256 || /[^\x21-\x7e]/.test(key)) throw new Error('Bachs credential environment mismatch.')
+  const base=mode==='live'?'https://api.bachs.io':BACHS_SANDBOX_API
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.buyerEmail) || input.buyerEmail.length > 320) throw new Error('Invalid buyer email.')
   if (!/^[a-zA-Z0-9_-]{12,100}$/.test(input.idempotencyKey)) throw new Error('Invalid checkout idempotency key.')
   if (!!input.successUrl !== !!input.cancelUrl) throw new Error('Both return URLs must be supplied together.')
@@ -47,9 +54,9 @@ export async function createSandboxSession(input: CheckoutSessionInput): Promise
   }
   let response: Response
   try {
-    response = await fetch(`${BACHS_SANDBOX_API}/v1/checkout-sessions`, {
+    response = await fetch(`${base}/v1/checkout-sessions`, {
       method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(12000),
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${input.key}`, 'Idempotency-Key': input.idempotencyKey },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${key}`, 'Idempotency-Key': input.idempotencyKey },
       body: JSON.stringify(body)
     })
   } catch {
@@ -86,8 +93,8 @@ function fromHex(hex: string): Uint8Array | null {
 export async function verifyBachsWebhook(rawBody: string, headers: Headers, secret: string, nowSeconds = Math.floor(Date.now() / 1000)): Promise<boolean> {
   if (!secret || secret.length > 1024 || rawBody.length > 200_000) return false
   const v2 = headers.get('X-Bachs-Signature-V2')
-  let stamp: number | null = null
-  let signatures: string[] = []
+  let stamp: number | null
+  let signatures: string[]
   if (v2) {
     const parts = v2.split(',').map(x => x.trim())
     const stamps = parts.filter(part => part.startsWith('t='))
@@ -115,10 +122,18 @@ export async function verifyBachsWebhook(rawBody: string, headers: Headers, secr
  * webhook data, or a browser redirect, as proof of paid status. */
 export async function getSandboxSession(key: string, checkoutId: string): Promise<Record<string, unknown>> {
   if (!key.startsWith('sk_sandbox_') || key.length > 256) throw new Error('Bachs sandbox key is not configured.')
+  return getBachsSession(key, checkoutId)
+}
+
+/** Read-only verification; never initiates a payment. */
+export async function getBachsSession(configuredKey: string, checkoutId: string): Promise<Record<string, unknown>> {
+  const key = configuredKey.trim()
+  if (!/^sk_(live|sandbox)_[\x21-\x7e]+$/.test(key) || key.length > 256) throw new Error('Bachs API key is not configured.')
+  const base = key.startsWith('sk_live_') ? 'https://api.bachs.io' : BACHS_SANDBOX_API
   if (!/^chk_[A-Za-z0-9_-]{6,100}$/.test(checkoutId)) throw new Error('Invalid checkout reference.')
   let response: Response
   try {
-    response = await fetch(`${BACHS_SANDBOX_API}/v1/checkout-sessions/${checkoutId}`, {
+    response = await fetch(`${base}/v1/checkout-sessions/${checkoutId}`, {
       method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(12000),
       headers: { Accept: 'application/json', Authorization: `Bearer ${key}` }
     })

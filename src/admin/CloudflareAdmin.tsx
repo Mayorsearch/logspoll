@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
 import { LayoutDashboard, Users, Package, Tags, ShoppingBag, CreditCard, MessageSquare, Plug, LifeBuoy, Settings, LogOut, Menu, X, ExternalLink, RefreshCw, ShieldCheck, Mail } from 'lucide-react'
@@ -9,7 +9,10 @@ import './reference-admin.css'
 import './cloudflare-admin.css'
 import './d1-reference-theme.css'
 import CloudflareCatalog from './CloudflareCatalog'
+import CloudflarePayments from './CloudflarePayments'
 import AdminRecords from './AdminRecords'
+import { ProductArtwork } from '../components/ProductArtwork'
+import { storedProductImages } from '../lib/product-images'
 
 type Counts = { customers: number; products: number; orders: number }
 type FeedItem = {
@@ -19,11 +22,18 @@ type FeedItem = {
   category_id: string | null; selling_price_minor: number | null
   delivery_type: string | null; reviewed_at: number | null
   supplier_description?: string; reviewed_description?: string; product_id?: string
+  publication_blockers?: string[]
+  supplier_image_urls?:string
 }
+type Cursor={connection:string;external:string}
 type ReviewSnapshot = {
   environment: string; supplierSyncEnabled: boolean; publicationEnabled: boolean
   legacyApprovalsImported: boolean; counts: { approval: string; total: number }[]
   items: FeedItem[]; categories: { id: string; name: string }[]
+  discovery?: {connection_id:string;external_id:string;name:string;description?:string;image_urls?:string;blocked_reason?:string;cost_minor?:number;stock?:number;approval?:string;selling_price_minor?:number|null}[]
+  sourceCategories?: {connection_id:string;kind:string;external_id:string;name:string}[]
+  discoveryCounts?: {total:number;blocked:number}
+  nextCursor?:Cursor|null
 }
 const d1Nav = [
   { slug: 'overview', label: 'Dashboard overview', Icon: LayoutDashboard },
@@ -65,17 +75,29 @@ export default function CloudflareAdmin() {
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
   const [chosen, setChosen] = useState<FeedItem | null>(null)
+  const editorRef = useRef<HTMLElement>(null)
+  const [reviewReady, setReviewReady] = useState(false)
+  const [preparingKey, setPreparingKey] = useState('')
+  const [reviewIssue, setReviewIssue] = useState('')
+  const [priceIssue, setPriceIssue] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [price, setPrice] = useState('')
   const [delivery, setDelivery] = useState<string>(deliveryMethods[0])
   const [description, setDescription] = useState('')
+  const [automaticPrice,setAutomaticPrice]=useState(false)
+  const [checks,setChecks]=useState({delivery:false,privacy:false,provider:false})
+  const [reviewReference,setReviewReference]=useState('')
+  const [selectedListings,setSelectedListings]=useState<string[]>([]),[bulkMode,setBulkMode]=useState('fixed_markup'),[bulkAmount,setBulkAmount]=useState('')
+  const [discoveryCursor,setDiscoveryCursor]=useState<Cursor|null>(null)
+  const [cursorTrail,setCursorTrail]=useState<(Cursor|null)[]>([])
+  const [discoveryFilter,setDiscoveryFilter]=useState('')
   const recordSections=['products','categories','customers','orders','purchases','support','reviews','settings','audit','email']; const viewing = ['integrations','supplier-review'].includes(section??'')||tab==='supplier-api' ? 'review' : section === 'payments' ? 'payments' : recordSections.includes(section??'')?'records':'overview'
 
   const refresh = useCallback(() => {
     void cloudflareRequest<{schemaReady:boolean}>('/api/admin/readiness').then(r=>{if(!r.schemaReady)setNotice('D1 migration 0006_admin_publication.sql is required.')}).catch(e=>setError(e.message))
     return Promise.all([
         cloudflareRequest<{ records: Counts[] }>('/api/admin/overview'),
-        cloudflareRequest<ReviewSnapshot>('/api/admin/supplier-review'),
+        cloudflareRequest<ReviewSnapshot>(`/api/admin/supplier-review?${discoveryFilter}${discoveryCursor?'&'+new URLSearchParams({after_connection:discoveryCursor.connection,after_external:discoveryCursor.external}):''}`),
       ]).then(([o,r])=>{
       setError('')
       setOverview(o.records?.[0] ?? null)
@@ -83,13 +105,149 @@ export default function CloudflareAdmin() {
     }).catch(problem=>{
       setError(problem instanceof Error ? problem.message : 'Administrator data unavailable.')
     }).finally(()=>setLoading(false))
-  }, [])
+  }, [discoveryCursor,discoveryFilter])
   useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    if (chosen) editorRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    })
+  }, [chosen])
 
   function edit(item: FeedItem) {
     setChosen(item); setCategoryId(item.category_id ?? '')
+    setChecks({delivery:false,privacy:false,provider:false});setReviewReference('')
+    setPriceIssue('')
+    setAutomaticPrice(false)
     setPrice(item.selling_price_minor == null ? '' : String(item.selling_price_minor / 100))
     setDelivery(item.delivery_type ?? deliveryMethods[0]); setDescription(item.reviewed_description|| (item.supplier_description==='Description not supplied by supplier; administrator review required.'?'':item.supplier_description??'')); setError(''); setNotice('')
+  }
+  async function prepare(item:{
+    connection_id:string;
+    external_id:string
+  }) {
+    const key = `${item.connection_id}/${item.external_id}`
+    const staged = review?.items.find(
+      x => x.connection_id === item.connection_id &&
+           x.external_id === item.external_id
+    )
+
+    setPreparingKey(key)
+    setReviewIssue('')
+    setPriceIssue('')
+    setReviewReady(false)
+    setBusy(true)
+    setError('')
+
+    // Show existing staged details immediately.
+    if (staged) {
+      edit(staged)
+    } else {
+      const discovered = review?.discovery?.find(
+        x => x.connection_id === item.connection_id &&
+             x.external_id === item.external_id
+      )
+
+      if (discovered) {
+        edit({
+          connection_id: discovered.connection_id,
+          external_id: discovered.external_id,
+          name: discovered.name,
+          source_category: 'unverified',
+          supplier_cost_minor: discovered.cost_minor ?? 0,
+          stock_quantity: discovered.stock ?? 0,
+          authorization_verified: 0,
+          source_checked_at: 0,
+          approval: discovered.approval === 'approved'
+            || discovered.approval === 'rejected'
+            ? discovered.approval : 'pending',
+          category_id: null,
+          selling_price_minor:
+            discovered.selling_price_minor ?? null,
+          delivery_type: null,
+          reviewed_at: null,
+          supplier_description:
+            discovered.description ?? '',
+          supplier_image_urls: discovered.image_urls
+        })
+      }
+    }
+
+    try {
+      const result = await cloudflareRequest<{
+        item:FeedItem;
+        categories:{id:string;name:string}[]
+      }>('/api/admin/supplier-review', {
+        action:'prepare',
+        ...item
+      })
+
+      setReview(r => r ? {
+        ...r,
+        categories:result.categories
+      } : r)
+
+      setReviewReady(true)
+      setChosen(result.item)
+      setCategoryId(current => current || result.item.category_id || '')
+      setPrice(current => current || (result.item.selling_price_minor == null ? '' : String(result.item.selling_price_minor / 100)))
+      setDescription(current => current || result.item.reviewed_description || result.item.supplier_description || '')
+    } catch (e) {
+      const message = e instanceof Error
+        ? e.message
+        : 'Supplier verification could not complete.'
+
+      setReviewIssue(message)
+      setError(message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  function closeEditor() {
+    setChosen(null)
+    setReviewReady(false)
+    setReviewIssue('')
+    setPriceIssue('')
+  }
+  async function saveIndividualPrice() {
+    if (!chosen || busy || automaticPrice) return
+    setPriceIssue('')
+    setNotice('')
+    const staged = reviewReady || Boolean(review?.items.some(
+      item => item.connection_id === chosen.connection_id && item.external_id === chosen.external_id
+    ))
+    if (!staged) {
+      setPriceIssue('This listing is not staged for pricing yet. Complete Review verification first; a supplier API cooldown may require retrying later.')
+      return
+    }
+    let amount: number
+    try {
+      amount = toKobo(price)
+      if (amount <= 0) throw new Error('Enter a selling price greater than zero.')
+    } catch (problem) {
+      setPriceIssue(problem instanceof Error ? problem.message : 'Invalid selling price.')
+      return
+    }
+    setBusy(true)
+    try {
+      await cloudflareRequest('/api/admin/supplier-review', {
+        action: 'bulk_price', mode: 'price', amount,
+        items: [{ connection_id: chosen.connection_id, external_id: chosen.external_id }]
+      })
+      setChosen(current => current ? { ...current, selling_price_minor: amount } : current)
+      setNotice(`Selling price saved: ${ngn(amount)}. This does not approve or publish the product.`)
+      await refresh()
+    } catch (problem) {
+      setPriceIssue(problem instanceof Error ? problem.message : 'Could not save selling price.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function priceSelected(){
+    if(!selectedListings.length)return
+    if(!/^\d+(?:\.\d{1,2})?$/.test(bulkAmount)){setError('Enter a price/markup with at most two decimal places.');return}
+    if(!window.confirm('Save selling-price overrides for selected listings? Supplier sync will preserve these prices.'))return
+    setBusy(true);setError('');try{await cloudflareRequest('/api/admin/supplier-review',{action:'bulk_price',mode:bulkMode,amount:toKobo(bulkAmount),items:selectedListings.map(key=>{const [connection_id,external_id]=key.split('/');return{connection_id,external_id}})});setSelectedListings([]);setNotice('Selected selling prices saved.');await refresh()}catch(e){setError(e instanceof Error?e.message:'Prices were not saved.')}finally{setBusy(false)}
   }
   async function decide(item: FeedItem, action: 'approve' | 'reject') {
     if (busy) return
@@ -98,12 +256,12 @@ export default function CloudflareAdmin() {
     try {
       const body = action === 'approve'
         ? { action, connection_id: item.connection_id, external_id: item.external_id, category_id: categoryId,
-            ...(price.trim()?{price_minor:toKobo(price)}:{}), delivery_type: delivery, description }
+            ...(automaticPrice?{pricing_mode:'auto'}:{price_minor:toKobo(price)}), delivery_type: delivery, description,delivery_verified:checks.delivery,privacy_verified:checks.privacy,provider_verified:checks.provider,review_reference:reviewReference }
         : { action, connection_id: item.connection_id, external_id: item.external_id }
       const result = await cloudflareRequest<{ review: string; published: boolean }>('/api/admin/supplier-review', body)
 
       setNotice(`Decision saved: ${result.review}. Use Products to publish only verified available stock.`)
-      setChosen(null)
+      closeEditor()
       await refresh()
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Review was not saved.') }
     finally { setBusy(false) }
@@ -111,6 +269,11 @@ export default function CloudflareAdmin() {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (chosen) void decide(chosen, 'approve')
+  }
+  function searchDiscovery(event:FormEvent<HTMLFormElement>){
+    event.preventDefault();const form=new FormData(event.currentTarget)
+    setDiscoveryCursor(null);setCursorTrail([])
+    setDiscoveryFilter(new URLSearchParams(Object.fromEntries(['q','category','stock','approval'].map(k=>[k,String(form.get(k)??'')]))).toString())
   }
   async function logout() {
     setBusy(true)
@@ -168,24 +331,57 @@ export default function CloudflareAdmin() {
         </div>
         <section className="cf-panel"><h2>Migration status</h2><p>Supplier synchronization to D1: <strong>{review?.supplierSyncEnabled?'Configured; verify actual progress in supplier reviews':'Disabled pending migration and configuration'}</strong></p><p>Sellable supplier inventory: <strong>Verified publication only</strong></p><p>Bachs live payments: <strong>Disabled</strong></p><p>All displayed records come from this D1 database.</p><Link className="cf-btn" to="/admin/products">Open supplier reviews</Link></section>
       </>}
-      {viewing === 'payments' && <section className="cf-panel"><h2>Bachs integration</h2><p>Payments and automatic fulfillment are deliberately disabled during the D1 migration. Live payments require a separate verified integration.</p></section>}
+      {viewing === 'payments' && <CloudflarePayments/>}
       {viewing === 'review' && <>
         <div className="cf-metrics"><div><span>Pending</span><strong>{review ? pending : '—'}</strong></div><div><span>Approved</span><strong>{review ? approved : '—'}</strong></div><div><span>Rejected</span><strong>{review ? rejected : '—'}</strong></div></div>
+        {chosen && <section ref={editorRef} className="cf-panel cf-editor" id="supplier-review-editor" aria-label="Selected supplier listing review"><h2>Review and price: {chosen.name}</h2><p className="cf-muted">Resale authorization is checked against your saved evidence. Confirm lawful delivery, privacy and provider permission for this product; category names do not determine eligibility. Publish the approved product separately after stock verification.</p>
+          <form onSubmit={submit}>
+      {busy && preparingKey === `${chosen.connection_id}/${chosen.external_id}` &&
+        <p className="cf-warning" role="status">Checking current YoungPG product details…</p>}
+      {!reviewReady && <p className="cf-warning" role="status">
+        Product details are available for review. Approval needs fresh supplier verification.
+        {reviewIssue && ` ${reviewIssue}`}
+      </p>}
+      {reviewReady && <p className="cf-success" role="status">Current supplier verification passed. You can now complete the approval checklist.</p>}
+      {priceIssue && <p role="alert" className="cf-error">{priceIssue}</p>}
+            <label>LOGSPOLL category<select value={categoryId} onChange={e => setCategoryId(e.target.value)} required><option value="">Select category</option>{review?.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+            <label>Selling price (₦)<input value={price} onChange={e => setPrice(e.target.value)} disabled={automaticPrice || busy} required={!automaticPrice} placeholder="Enter your selling price" inputMode="decimal" /></label>
+            <div className="cf-review-price">
+              <p>Supplier cost: <strong>{ngn(chosen.supplier_cost_minor)}</strong>. Saving a price does not publish the listing.</p>
+              <button type="button" className="cf-btn secondary" onClick={() => void saveIndividualPrice()} disabled={busy || automaticPrice || !price.trim()}>Save selling price only</button>
+            </div>
+            <label className="catalog-checkbox"><input type="checkbox" checked={automaticPrice} onChange={e=>setAutomaticPrice(e.target.checked)}/> Use supplier cost as selling price; automatically track cost changes</label>
+            <label>Delivery method<select value={delivery} onChange={e => setDelivery(e.target.value)}>{deliveryMethods.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
+            <label>Verified product description<textarea value={description} onChange={e => setDescription(e.target.value)} minLength={20} maxLength={10000} rows={5} required placeholder="Enter the verified product description; do not include credentials or account access details." /></label>
+            <label>Supporting review reference<input value={reviewReference} onChange={e=>setReviewReference(e.target.value)} required minLength={5} maxLength={500} placeholder="Agreement / delivery and provider-policy review reference"/></label>
+            {(['delivery','privacy','provider'] as const).map(key=><label key={key} className="catalog-checkbox"><input type="checkbox" checked={checks[key]} onChange={e=>setChecks({...checks,[key]:e.target.checked})}/>{key==='delivery'?'Lawful ownership, transfer and delivery rights verified':key==='privacy'?'No compromised access, unauthorized private data or financial credentials are sold':'This specific product is permitted by the payment provider'}</label>)}
+            <div className="cf-actions"><button type="submit" className="cf-btn" disabled={busy || !reviewReady || !categoryId || !checks.delivery || !checks.privacy || !checks.provider}>{busy ? 'Saving…' : 'Save review approval'}</button><button type="button" className="cf-btn secondary" onClick={closeEditor}>Close editor</button><Link className="cf-btn secondary" to="/admin/products">Manage publication in Products</Link></div>
+          </form>
+        </section>}
+        <section className="cf-panel"><h2>Supplier discovery · {review?.discoveryCounts?.total??0} metadata records</h2><p>All supplier categories remain visible here. Discovery is private and never grants approval. Older checkpoints gain complete discovery metadata on the next scheduled scan.</p>
+          <details><summary>Supplier categories and subcategories ({review?.sourceCategories?.length??0})</summary><p>{review?.sourceCategories?.map(c=><span key={`${c.connection_id}/${c.kind}/${c.external_id}`}>{c.name} ({c.kind}) · </span>)}</p></details>
+          <form className="catalog-filters" onSubmit={searchDiscovery}><input name="q" placeholder="Search all supplier listings" aria-label="Search supplier listings"/><select name="category" aria-label="Supplier category"><option value="">All categories</option>{review?.sourceCategories?.filter(c=>c.kind==='category').map(c=><option key={`${c.connection_id}/${c.external_id}`} value={c.external_id}>{c.name}</option>)}</select><select name="stock" aria-label="Stock"><option value="">All stock</option><option value="in-stock">In stock</option><option value="out-of-stock">Out of stock</option></select><select name="approval" aria-label="Approval"><option value="">All review states</option>{['pending','approved','rejected','blocked'].map(s=><option key={s}>{s}</option>)}</select><button className="cf-btn secondary">Search / filter</button></form>
+          <div className="cf-actions"><span>{selectedListings.length}/25 selected — bulk pricing requires staged products</span><select aria-label="Supplier pricing mode" value={bulkMode} onChange={e=>setBulkMode(e.target.value)}><option value="fixed_markup">Fixed markup (NGN)</option><option value="percent_markup">Percentage markup (%)</option><option value="price">Selling price (NGN)</option></select><input aria-label="Supplier price or markup" inputMode="decimal" value={bulkAmount} onChange={e=>setBulkAmount(e.target.value)}/><button className="cf-btn secondary" disabled={busy||!selectedListings.length} onClick={()=>void priceSelected()}>Save selected prices</button></div>
+          <div className="cf-table-scroll"><table className="catalog-mobile-table"><thead><tr><th>Select / image</th><th>Listing</th><th>Review / price</th></tr></thead><tbody>{review?.discovery?.map(item=><tr key={`${item.connection_id}/${item.external_id}`}><td data-label="Select / image"><input type="checkbox" aria-label={`Select ${item.name}`} checked={selectedListings.includes(`${item.connection_id}/${item.external_id}`)} disabled={busy||selectedListings.length>=25&&!selectedListings.includes(`${item.connection_id}/${item.external_id}`)} onChange={e=>setSelectedListings(old=>e.target.checked?[...old,`${item.connection_id}/${item.external_id}`]:old.filter(key=>key!==`${item.connection_id}/${item.external_id}`))}/><span className="catalog-thumbnail"><ProductArtwork name={item.name} images={storedProductImages(item.image_urls)}/></span></td><td data-label="Listing"><strong>{item.name}</strong><details><summary>Product description</summary><p>{item.description||'Supplier description unavailable; verified manual details required.'}</p></details></td><td data-label="Review / price"><p>Cost: {ngn(item.cost_minor??0)} · Selling: {item.selling_price_minor==null?'Set a price':ngn(item.selling_price_minor)}</p><p>{item.blocked_reason??`Review: ${item.approval??'pending'}; confirm delivery/privacy/provider checks before publication.`}</p><button className="cf-btn secondary" disabled={busy} onClick={()=>void prepare(item)}>
+      {busy && preparingKey === `${item.connection_id}/${item.external_id}`
+        ? 'Loading review…' : 'Review / edit'}
+    </button>
+    {reviewIssue && preparingKey === `${item.connection_id}/${item.external_id}` &&
+      <p className="cf-error" role="alert">{reviewIssue}</p>}</td></tr>)}</tbody></table></div>
+          <div className="cf-actions"><button className="cf-btn secondary" disabled={loading||!cursorTrail.length} onClick={()=>{setDiscoveryCursor(cursorTrail.at(-1)??null);setCursorTrail(t=>t.slice(0,-1))}}>Previous</button><span>Page {cursorTrail.length+1}</span><button className="cf-btn secondary" disabled={loading||!review?.nextCursor} onClick={()=>{setCursorTrail(t=>[...t,discoveryCursor]);setDiscoveryCursor(review!.nextCursor!)}}>Next</button></div>
+        </section>
         <section className="cf-panel"><h2>Supplier catalog review queue</h2><p className="cf-muted">Rows appear only after a separately verified D1 ingestion step. This page does not fetch or import YoungPG products.</p>
-          <div className="cf-table-scroll"><table><thead><tr><th>Listing</th><th>Supplier cost</th><th>Stock reported</th><th>Eligibility</th><th>Review status</th><th>Action</th></tr></thead><tbody>
-          {review?.items.map(item => <tr key={`${item.connection_id}/${item.external_id}`}><td><strong>{item.name}</strong><small>{item.external_id}</small></td><td>{ngn(item.supplier_cost_minor)}</td><td>{item.stock_quantity}</td><td>{item.source_category === 'permitted_digital_good' && item.authorization_verified === 1 ? 'Rights recorded; server rechecks' : 'Not eligible for approval'}</td><td>{item.approval}</td><td>{item.approval === 'pending' ? <div className="cf-actions"><button className="cf-btn secondary" onClick={() => edit(item)} disabled={busy}>Review</button><button className="cf-btn danger" onClick={() => void decide(item, 'reject')} disabled={busy}>Reject</button></div> : '—'}</td></tr>)}
+          <div className="cf-table-scroll"><table className="catalog-mobile-table"><thead><tr><th>Listing</th><th>Supplier cost</th><th>Stock reported</th><th>Eligibility</th><th>Review status</th><th>Action</th></tr></thead><tbody>
+          {review?.items.map(item => <tr key={`${item.connection_id}/${item.external_id}`}><td data-label="Listing"><span className="catalog-thumbnail"><ProductArtwork name={item.name} images={storedProductImages(item.supplier_image_urls)}/></span><strong>{item.name}</strong><small>{item.external_id}</small></td><td data-label="Supplier cost">{ngn(item.supplier_cost_minor)}</td><td data-label="Stock reported">{item.stock_quantity}</td><td data-label="Eligibility">{item.source_category === 'permitted_digital_good' && item.authorization_verified === 1 ? 'Rights recorded; server rechecks' : 'Not eligible for approval'}<small>{item.publication_blockers?.join('; ')}</small></td><td data-label="Review status">{item.approval}</td><td data-label="Actions">{<div className="cf-actions"><button className="cf-btn secondary" onClick={() => void prepare(item)} disabled={busy}>
+      {busy && preparingKey === `${item.connection_id}/${item.external_id}`
+        ? 'Loading review…' : 'Review'}
+    </button>
+    {reviewIssue && preparingKey === `${item.connection_id}/${item.external_id}` &&
+      <p className="cf-error" role="alert">{reviewIssue}</p>}<button className="cf-btn danger" onClick={() => void decide(item, 'reject')} disabled={busy}>Reject</button></div>}</td></tr>)}
           {!review?.items.length && <tr><td colSpan={6}>No staged supplier rows. </td></tr>}
           </tbody></table></div>
         </section>
-        {chosen && <section className="cf-panel cf-editor"><h2>Approve: {chosen.name}</h2><p className="cf-muted">Requires independently verified resale rights, an eligible source category, recent supplier scan and an active LOGSPOLL category. Publish the approved product separately after stock verification.</p>
-          <form onSubmit={submit}>
-            <label>LOGSPOLL category<select value={categoryId} onChange={e => setCategoryId(e.target.value)} required><option value="">Select category</option>{review?.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-            <label>Selling price (₦)<input value={price} onChange={e => setPrice(e.target.value)} placeholder="Automatic supplier price" inputMode="decimal" /></label>
-            <label>Delivery method<select value={delivery} onChange={e => setDelivery(e.target.value)}>{deliveryMethods.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
-            <label>Verified product description<textarea value={description} onChange={e => setDescription(e.target.value)} minLength={20} maxLength={10000} rows={5} required placeholder="Enter the verified product description; do not include credentials or account access details." /></label>
-            <div className="cf-actions"><button type="submit" className="cf-btn" disabled={busy || !categoryId}>{busy ? 'Saving…' : 'Save review approval'}</button><button type="button" className="cf-btn secondary" onClick={() => setChosen(null)}>Cancel</button></div>
-          </form>
-        </section>}
+
       </>}
     </main></div>
   </div>

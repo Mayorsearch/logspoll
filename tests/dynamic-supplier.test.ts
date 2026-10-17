@@ -30,7 +30,7 @@ test('NGN mapping is exact and imports require individual authorization and vali
   const [result] = listingsFrom([item], categories, { '3': 'license-evidence-reference' }).products
   assert.equal(result.cost_minor, 1230); assert.equal(result.currency, 'NGN'); assert.equal(result.stock, 4)
   assert.ok(!('price_minor' in result), 'Supplier cost cannot overwrite retail prices')
-  assert.equal(listingsFrom([{ ...item, title: 'Session cookies' }], categories, { '3': 'license-evidence-reference' }).products.length, 0)
+  assert.equal(listingsFrom([{ ...item, title: 'Session cookies' }], categories, { '3': 'license-evidence-reference' }).products.length, 1)
   for (const stock of [-1, null, '1.2', 1000001]) assert.throws(() => listingsFrom([{ ...item, available_stock: stock }], categories, { '3': 'license-evidence-reference' }))
   assert.throws(() => listingsFrom([item, item], categories, { '3': 'license-evidence-reference' }))
 })
@@ -64,9 +64,9 @@ test('restricted long supplier titles cannot block eligible inventory; eligible 
   const categories=[{id:'1',slug:'utilities',name:'Utilities'}]
   const good={id:'good',title:'Licensed utility',description:'Authorized digital resource.',category:{slug:'utilities',title:'Utilities'},price_ngn:'10.00',available_stock:3}
   const restricted={...good,id:'restricted',title:'Facebook account '+ 'x'.repeat(502),available_stock:-1}
-  assert.deepEqual(listingsFrom([restricted,good],categories,{'*':'LICENSE-WIDE'}).products.map(p=>p.id),['good'])
-  assert.throws(()=>listingsFrom([{...good,title:'x'.repeat(201)}],categories,{'*':'LICENSE-WIDE'}))
-  assert.throws(()=>listingsFrom([restricted,restricted],categories,{'*':'LICENSE-WIDE'}),/Duplicate/)
+  assert.throws(()=>listingsFrom([restricted,good],categories,{'*':'LICENSE-WIDE'}),/stock/)
+  assert.throws(()=>listingsFrom([{...good,title:'x'.repeat(2001)}],categories,{'*':'LICENSE-WIDE'}))
+  assert.throws(()=>listingsFrom([{...restricted,available_stock:1},{...restricted,available_stock:1}],categories,{'*':'LICENSE-WIDE'}),/Duplicate/)
 })
 
 test('long public YoungPG slugs remain route-safe without relaxing supplier IDs',async t=>{

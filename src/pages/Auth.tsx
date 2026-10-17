@@ -16,6 +16,7 @@ export function AuthPage({mode}:{mode:Mode}){
  const [pending,setPending]=useState(mode==='reset')
  const [otp,setOtp]=useState(''),[readyAt,setReadyAt]=useState(state?.sentAt?state.sentAt+60000:0)
  const [seconds,setSeconds]=useState(()=>Math.max(0,Math.ceil((readyAt-Date.now())/1000)))
+ const [showPassword,setShowPassword]=useState(false)
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState(''),[complete,setComplete]=useState(false)
  const codeFlow=pending&&['signup','verify','reset'].includes(mode)
  useEffect(()=>{
@@ -56,8 +57,9 @@ export function AuthPage({mode}:{mode:Mode}){
    {mode==='signup'&&!codeFlow&&<label>Full Name<input name="full_name" placeholder="John Doe" autoComplete="name" required minLength={2} maxLength={120}/></label>}
    <label>Email Address<input type="email" name="email" placeholder="you@example.com" autoComplete="email" value={email} onChange={event=>{setEmail(event.target.value.trim().toLowerCase());setOtp('')}} readOnly={codeFlow&&mode!=='reset'} required maxLength={254}/></label>
    {codeFlow&&<><OtpInput value={otp} onChange={setOtp} disabled={busy}/><p className="otp-help">Use the most recent code. Never share it with anyone.</p></>}
-   {passwordFields&&<label><span className="password-label">{mode==='reset'?'New Password':'Password'}{mode==='login'&&<Link to="/forgot-password">Forgot?</Link>}</span><input type="password" name="password" placeholder="••••••••" autoComplete={mode==='signup'||mode==='reset'?'new-password':'current-password'} required minLength={mode==='login'||mode==='admin'?1:12} maxLength={128}/></label>}
-   {((mode==='signup'&&!codeFlow)||mode==='reset')&&<label>Confirm Password<input type="password" name="confirm" placeholder="Confirm your password" autoComplete="new-password" required minLength={12} maxLength={128}/></label>}
+   {passwordFields&&<label><span className="password-label">{mode==='reset'?'New Password':'Password'}{mode==='login'&&<Link to="/forgot-password">Forgot?</Link>}</span><input type={showPassword?'text':'password'} name="password" placeholder="••••••••" autoComplete={mode==='signup'||mode==='reset'?'new-password':'current-password'} required minLength={mode==='login'||mode==='admin'?1:12} maxLength={128}/></label>}
+   {((mode==='signup'&&!codeFlow)||mode==='reset')&&<label>Confirm Password<input type={showPassword?'text':'password'} name="confirm" placeholder="Confirm your password" autoComplete="new-password" required minLength={12} maxLength={128}/></label>}
+   {passwordFields&&<button type="button" className="password-visibility" aria-pressed={showPassword} onClick={()=>setShowPassword(!showPassword)}>{showPassword?'Hide passwords':'Show passwords'}</button>}
    <button className="button" type="submit">{busy?'Please wait…':codeFlow?(mode==='reset'?'Update password':'Verify email'):mode==='signup'?'Create Account':['forgot','verify'].includes(mode)?'Send verification code':'Sign In Securely'}</button>
   </fieldset></form>}
   {codeFlow&&!complete&&<button type="button" className="otp-resend" onClick={()=>void resend()} disabled={busy||seconds>0||!email}>{seconds>0?`Resend code in ${seconds}s`:'Resend code'}</button>}
