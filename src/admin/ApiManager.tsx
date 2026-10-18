@@ -65,7 +65,7 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
               API Manager & Supplier Controls
             </h1>
             <p style={{ margin: '4px 0 0', color: 'var(--admin-muted, #64748b)', fontSize: '0.875rem' }}>
-              Configure endpoints, encrypted API credentials, synchronization schedules, and webhooks for all three LogsPoll supplier servers.
+              Configure endpoints, encrypted API credentials, synchronization schedules, and webhooks for all four LogsPoll supplier servers.
             </p>
           </div>
         </div>
