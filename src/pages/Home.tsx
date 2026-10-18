@@ -236,14 +236,29 @@ export function Home() {
             </div>
           </article>
 
-          <article className="server-card server-card-soon">
+          <article className="server-card">
             <div className="server-card-badge server-badge-3">Server 3</div>
             <h3>Server 3</h3>
             <p>
-              Specialty digital services and expanded international catalog. Integration currently preparing for launch.
+              Specialty international accounts, verified services, and multi-currency digital assets with automated USD-to-NGN conversion.
             </p>
             <div className="server-card-footer">
-              <span className="coming-soon-tag">Coming Soon</span>
+              <Link to="/marketplace?server=3" className="text-link">
+                View Server 3 Products <ArrowRight size={14} />
+              </Link>
+            </div>
+          </article>
+
+          <article className="server-card">
+            <div className="server-card-badge server-badge-4">Server 4</div>
+            <h3>Server 4</h3>
+            <p>
+              Authorized AI software licenses, ChatGPT Plus, Midjourney subscriptions, developer tools, and high-performance utility accounts.
+            </p>
+            <div className="server-card-footer">
+              <Link to="/marketplace?server=4" className="text-link">
+                View Server 4 Products <ArrowRight size={14} />
+              </Link>
             </div>
           </article>
         </div>

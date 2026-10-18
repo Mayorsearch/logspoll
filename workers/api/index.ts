@@ -10,6 +10,7 @@ import {hstoraAdmin,syncHstoraBatch} from './hstora-manager.ts'
 import {shopviaclone22Admin,syncShopViaClone22Batch} from './shopviaclone22-manager.ts'
 import {digitaltopAdmin,syncDigitalTopBatch} from './digitaltop-manager.ts'
 import {exchangeRateAdmin,refreshExchangeRateCron} from './exchange-rate.ts'
+import {handleStorefrontDiscovery,handleAdminStorefrontDiscovery} from './storefront-discovery.ts'
 import { requireRuntime } from './runtime.ts'
 import { HttpError, json } from './http.ts'
 import { supplierReview } from './supplier-review.ts'
@@ -76,6 +77,8 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     if (url.pathname === '/api/admin/shopviaclone22') return await shopviaclone22Admin(request, env)
     if (url.pathname === '/api/admin/digitaltop') return await digitaltopAdmin(request, env)
     if (url.pathname === '/api/admin/exchange-rate') return await exchangeRateAdmin(request, env)
+    if (url.pathname === '/api/admin/storefront-discovery') return await handleAdminStorefrontDiscovery(request, env)
+    if (url.pathname === '/api/storefront/discovery') return await handleStorefrontDiscovery(request, env)
     if (url.pathname === '/api/admin/catalog') return await catalogAdmin(request, env)
     if (url.pathname === '/api/checkout' || url.pathname === '/api/v1/checkout') return await bachsCheckout(request, env)
     if (url.pathname === '/api/bachs/order' || url.pathname === '/api/v1/order' || /^\/api\/(?:v1\/)?orders\/[^/]+\/status$/.test(url.pathname)) {

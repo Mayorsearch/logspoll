@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
-import { LayoutDashboard, Users, Package, Tags, ShoppingBag, CreditCard, MessageSquare, Plug, LifeBuoy, Settings, LogOut, Menu, X, ExternalLink, RefreshCw, ShieldCheck, Mail } from 'lucide-react'
+import { LayoutDashboard, Users, Package, Tags, ShoppingBag, CreditCard, MessageSquare, Plug, LifeBuoy, Settings, LogOut, Menu, X, ExternalLink, RefreshCw, ShieldCheck, Mail, Sparkles } from 'lucide-react'
 import { cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth'
 import { useAuth } from '../auth/AuthProvider'
 import './demo-admin.css'
@@ -16,6 +16,7 @@ import HstoraManager from './HstoraManager'
 import Shopviaclone22Manager from './Shopviaclone22Manager'
 import SupplierAutomation from './SupplierAutomation'
 import ApiManager from './ApiManager'
+import StorefrontDiscoveryManager from './StorefrontDiscoveryManager'
 import { ProductArtwork } from '../components/ProductArtwork'
 import { storedProductImages } from '../lib/product-images'
 
@@ -49,6 +50,7 @@ const d1Nav = [
   { slug: 'purchases', label: 'Purchases', Icon: ShoppingBag },
   { slug: 'reviews', label: 'Reviews', Icon: MessageSquare },
   { slug: 'api-manager', label: 'API Manager', Icon: RefreshCw },
+  { slug: 'discovery', label: 'Storefront Discovery', Icon: Sparkles },
   { slug: 'server1', label: 'Server 1 · HStora', Icon: Plug },
   { slug: 'server2', label: 'Server 2 · YoungPG', Icon: Plug },
   { slug: 'server3', label: 'Server 3 · Shopviaclone22', Icon: Plug },
@@ -108,6 +110,7 @@ export default function CloudflareAdmin() {
     section === 'server2' ? 'server2' :
     section === 'server3' ? 'server3' :
     section === 'api-manager' ? 'api-manager' :
+    section === 'discovery' ? 'discovery' :
     ['integrations','supplier-hub'].includes(section??'') ? 'hub' :
     ['supplier-review'].includes(section??'')||tab==='supplier-api' ? 'review' :
     section === 'payments' ? 'payments' :
@@ -432,6 +435,9 @@ export default function CloudflareAdmin() {
           initialTab={tab === 'server2' ? 'server2' : tab === 'server3' ? 'server3' : tab === 'pricing' ? 'pricing' : 'server1'}
           onComplete={refresh}
         />
+      )}
+      {viewing==='discovery' && (
+        <StorefrontDiscoveryManager />
       )}
       {viewing==='hub'&&<SupplierAutomation/>}
       {viewing==='review'&&<CloudflareCatalog onComplete={refresh}/>}

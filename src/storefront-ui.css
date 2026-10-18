@@ -1679,3 +1679,173 @@
   text-decoration: underline;
 }
 
+/* ==========================================================================
+   DYNAMIC STOREFRONT DISCOVERY & SECTION REDESIGN
+   ========================================================================== */
+
+.button-refresh-products {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+  color: #ffffff !important;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.825rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(249, 115, 22, 0.25);
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.button-refresh-products:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(249, 115, 22, 0.35);
+}
+
+.button-refresh-products:active {
+  transform: translateY(0);
+}
+
+.compact-budget-badge {
+  font-size: 0.62rem;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #10b98118;
+  color: #059669;
+  border: 1px solid #10b98135;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.server-badge-4 {
+  background: #f3e8ff;
+  color: #7e22ce;
+  border: 1px solid #e9d5ff;
+}
+
+.store-discovery-section {
+  margin-top: 36px;
+  margin-bottom: 36px;
+}
+
+.store-discovery-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.store-discovery-heading-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.store-discovery-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #f97316;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.store-discovery-title {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--navy);
+  margin: 0;
+  line-height: 1.25;
+}
+
+.store-discovery-subtitle {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.store-discovery-view-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #f97316;
+  text-decoration: none;
+  transition: transform 0.15s ease;
+}
+
+.store-discovery-view-all:hover {
+  transform: translateX(3px);
+  text-decoration: underline;
+}
+
+/* Category Grid in Discovery */
+.discovery-category-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.discovery-category-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  text-decoration: none;
+  color: var(--navy);
+  transition: all 0.15s ease;
+}
+
+.discovery-category-card:hover {
+  border-color: #f97316;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(16, 24, 40, 0.06);
+}
+
+.discovery-category-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(249, 115, 22, 0.1);
+  color: #f97316;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.discovery-category-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.discovery-category-name {
+  font-size: 0.825rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.discovery-category-count {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+

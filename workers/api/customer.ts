@@ -33,14 +33,15 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
     if (availability === 'out-of-stock') predicates.push('p.available_quantity=0')
     const hasServer = Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('storefront_products') WHERE name='server_number'").first().catch(() => null))
     const server = url.searchParams.get('server')
-    if (server && ['1', '2', '3'].includes(server)) {
+    if (server && ['1', '2', '3', '4'].includes(server)) {
       if (hasServer) {
         predicates.push('p.server_number=?')
         values.push(Number(server))
       }
     }
     const from = ` FROM ${storefront} p JOIN categories c ON c.id=p.category_id WHERE ${predicates.join(' AND ')}`
-    const order = ({ 'price-asc': 'p.price_minor ASC,p.id', 'price-desc': 'p.price_minor DESC,p.id', newest: 'p.id DESC' } as Record<string, string>)[url.searchParams.get('sort') ?? ''] ?? 'p.featured DESC,p.name,p.id'
+    const seed = url.searchParams.get('seed')?.trim()
+    const sort = url.searchParams.get('sort') ?? ''
     const total = (await db.prepare('SELECT count(*) AS n' + from).bind(...values).first<{ n: number }>())!.n
     if (productSlugMatch) {
       if (total === 0) throw new HttpError(404, 'Product not found.')
@@ -51,6 +52,21 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
     }
     const limit = ids ? 100 : 20
     const fields = hasServer ? `${productFields},p.server_number` : productFields
+
+    if (seed && !sort && !ids) {
+      // Deterministic discovery sequence with stable pagination
+      const allRows = await db.prepare(`SELECT ${fields}${from}`).bind(...values).all<Record<string, unknown>>()
+      const { buildDiscoverySequence, getDiscoveryConfig } = await import('./storefront-discovery.ts')
+      const config = await getDiscoveryConfig(db)
+      const mapped = allRows.results.map(product)
+      const sequenced = buildDiscoverySequence(mapped as any, config, seed)
+      const slice = sequenced.slice((page - 1) * limit, page * limit)
+      const resp = json({ records: slice, products: slice, total, pages: Math.max(1, Math.ceil(total / limit)), seed })
+      resp.headers.set('Cache-Control', 'private, no-cache, no-store, must-revalidate')
+      return resp
+    }
+
+    const order = ({ 'price-asc': 'p.price_minor ASC,p.id', 'price-desc': 'p.price_minor DESC,p.id', newest: 'p.id DESC' } as Record<string, string>)[sort] ?? 'p.featured DESC,p.name,p.id'
     const rows = await db.prepare(`SELECT ${fields}${from} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...values, limit, ids ? 0 : (page - 1) * limit).all()
     return json({ records: rows.results.map(product), products: rows.results.map(product), total, pages: Math.max(1, Math.ceil(total / limit)) })
   }

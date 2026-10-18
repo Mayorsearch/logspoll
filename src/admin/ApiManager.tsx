@@ -5,10 +5,11 @@ import DigitalTopManager from './DigitalTopManager'
 import ExchangeRateManager from './ExchangeRateManager'
 import CloudflareCatalog from './CloudflareCatalog'
 import SupplierAutomation from './SupplierAutomation'
-import { Server, TrendingUp, Layers, Cpu, DollarSign } from 'lucide-react'
+import StorefrontDiscoveryManager from './StorefrontDiscoveryManager'
+import { Server, TrendingUp, Layers, Cpu, DollarSign, Sparkles } from 'lucide-react'
 import { cloudflareRequest } from '../lib/cloudflare-auth'
 
-export type ApiManagerTab = 'server1' | 'server2' | 'server3' | 'server4' | 'exchange-rate' | 'pricing'
+export type ApiManagerTab = 'server1' | 'server2' | 'server3' | 'server4' | 'exchange-rate' | 'pricing' | 'discovery'
 
 interface ApiManagerProps {
   initialTab?: ApiManagerTab
@@ -278,6 +279,30 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
             <TrendingUp size={15} />
             <span>Global 50% Pricing & Automation</span>
           </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'discovery'}
+            onClick={() => setActiveTab('discovery')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              borderRadius: 8,
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              border: 'none',
+              background: activeTab === 'discovery' ? '#f97316' : 'var(--admin-subtle, #f1f5f9)',
+              color: activeTab === 'discovery' ? '#ffffff' : 'var(--admin-text, #334155)',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <Sparkles size={15} />
+            <span>Storefront Discovery</span>
+          </button>
         </div>
       </div>
 
@@ -320,6 +345,12 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
       {activeTab === 'pricing' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <SupplierAutomation />
+        </div>
+      )}
+
+      {activeTab === 'discovery' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <StorefrontDiscoveryManager />
         </div>
       )}
     </div>
