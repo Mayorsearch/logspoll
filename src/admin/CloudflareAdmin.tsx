@@ -12,6 +12,8 @@ import CloudflareCatalog from './CloudflareCatalog'
 import CloudflarePayments from './CloudflarePayments'
 import AdminRecords from './AdminRecords'
 import HstoraReview from './HstoraReview'
+import HstoraManager from './HstoraManager'
+import Shopviaclone22Manager from './Shopviaclone22Manager'
 import SupplierAutomation from './SupplierAutomation'
 import { ProductArtwork } from '../components/ProductArtwork'
 import { storedProductImages } from '../lib/product-images'
@@ -94,6 +96,10 @@ export default function CloudflareAdmin() {
   const [discoveryCursor,setDiscoveryCursor]=useState<Cursor|null>(null)
   const [cursorTrail,setCursorTrail]=useState<(Cursor|null)[]>([])
   const [discoveryFilter,setDiscoveryFilter]=useState('')
+  const [serverTab, setServerTab] = useState<'api' | 'review' | 'pricing'>('api')
+  useEffect(() => {
+    setServerTab(tab === 'review' ? 'review' : 'api')
+  }, [section, tab])
   const recordSections=['products','categories','customers','orders','purchases','support','reviews','settings','audit','email']
   const viewing =
     section === 'server1' ? 'server1' :
@@ -331,9 +337,93 @@ export default function CloudflareAdmin() {
       {error && <p className="cf-error" role="alert">{error}</p>}
       {notice && <p className="cf-success" role="status">{notice}</p>}
       {viewing==='records'&&<AdminRecords key={section} section={section!}/>}
-      {viewing==='server1'&&<HstoraReview provider="hstora"/>}
-      {viewing==='server2'&&<HstoraReview provider="youngpg"/>}
-      {viewing==='server3'&&<section className="cf-panel"><h2>Server 3 · Shopviaclone22</h2><p className="cf-warning" role="status">Adapter unavailable. Integration requires official API documentation, credentials, and supported catalog endpoints.</p><p>Total Products: <strong>0</strong></p></section>}
+      {viewing==='server1' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div className="cf-panel" style={{ padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '1.15rem' }}>Server 1 · HStora</h2>
+              <p style={{ margin: '2px 0 0', color: 'var(--admin-muted)', fontSize: '0.85rem' }}>
+                Add API key & signing secret, test connection, sync catalog, and review products.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className={`cf-btn ${serverTab === 'api' ? '' : 'secondary'}`}
+                onClick={() => setServerTab('api')}
+              >
+                API Configuration
+              </button>
+              <button
+                type="button"
+                className={`cf-btn ${serverTab === 'review' ? '' : 'secondary'}`}
+                onClick={() => setServerTab('review')}
+              >
+                Products & Catalog Review
+              </button>
+            </div>
+          </div>
+          {serverTab === 'api' ? <HstoraManager /> : <HstoraReview provider="hstora" />}
+        </div>
+      )}
+      {viewing==='server2' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div className="cf-panel" style={{ padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '1.15rem' }}>Server 2 · YoungPG</h2>
+              <p style={{ margin: '2px 0 0', color: 'var(--admin-muted)', fontSize: '0.85rem' }}>
+                Manage YoungPG credentials, category allowlist, pricing markup, and approvals.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className={`cf-btn ${serverTab === 'api' ? '' : 'secondary'}`}
+                onClick={() => setServerTab('api')}
+              >
+                API Configuration & Allowlist
+              </button>
+              <button
+                type="button"
+                className={`cf-btn ${serverTab === 'review' ? '' : 'secondary'}`}
+                onClick={() => setServerTab('review')}
+              >
+                Products & Catalog Review
+              </button>
+            </div>
+          </div>
+          {serverTab === 'api' ? <CloudflareCatalog showHstora={false} onComplete={refresh} /> : <HstoraReview provider="youngpg" />}
+        </div>
+      )}
+      {viewing==='server3' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div className="cf-panel" style={{ padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '1.15rem' }}>Server 3 · ShopViaClone22</h2>
+              <p style={{ margin: '2px 0 0', color: 'var(--admin-muted)', fontSize: '0.85rem' }}>
+                Enter API credentials, test provider connectivity, batch sync products, and manage pricing.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className={`cf-btn ${serverTab === 'api' ? '' : 'secondary'}`}
+                onClick={() => setServerTab('api')}
+              >
+                API Configuration
+              </button>
+              <button
+                type="button"
+                className={`cf-btn ${serverTab === 'pricing' ? '' : 'secondary'}`}
+                onClick={() => setServerTab('pricing')}
+              >
+                Pricing & Markup
+              </button>
+            </div>
+          </div>
+          {serverTab === 'api' ? <Shopviaclone22Manager onComplete={refresh} /> : <SupplierAutomation />}
+        </div>
+      )}
       {viewing==='hub'&&<SupplierAutomation/>}
       {viewing==='review'&&<CloudflareCatalog onComplete={refresh}/>}
       {viewing === 'overview' && <>

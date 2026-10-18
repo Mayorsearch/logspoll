@@ -50,7 +50,8 @@
         "ENVIRONMENT": "production",
         "PRODUCTION_CUTOVER_ENABLED": "true",
         "AUTH_ENABLED": "false",
-        "CATALOG_SYNC_ENABLED": "true"
+        "CATALOG_SYNC_ENABLED": "true",
+        "AUTOMATION_ENABLED": "true"
       },
       "d1_databases": [
         {

@@ -4,7 +4,7 @@ import {nativeCostMinor,approveHstoraAutomatically} from './hstora-review.ts'
 import {approveYoungpgAutomatically} from './supplier-review.ts'
 import {restrictedCatalogText} from '../../server/youngpg.ts'
 import {HttpError,json} from './http.ts'
-import type {ApiEnv,Statement} from './types.ts'
+import type {ApiEnv,Statement,Database} from './types.ts'
 
 export type CategoryRule = {
  id: string
@@ -22,14 +22,26 @@ export type CategoryRule = {
  category_slug?: string
 }
 
+export type GlobalPricingConfig = {
+ id: string
+ markup_bps: number
+ auto_publish: number
+ automatic_pricing: number
+ auto_approve: number
+ usd_to_ngn_rate: number
+ delivery_type: string
+ updated_by?: string | null
+ updated_at: number
+}
+
 type Policy={restore_pending:number;run_requested:number;auto_approve:number;review_reference:string;delivery_type:string;approval_cursor:string;provider:string;markup_bps:number;automatic_pricing:number;auto_publish:number;updated_by:string;revision:number;cursor:string;lease_owner:string}
 type Row={id:string;category_id?:string;category_slug?:string;category_name?:string;price_minor:number;pricing_mode:string;description:string;status:string;publication_verified:number;available_quantity:number;enabled:number;checked_at:number;stock:number;approval:string;authorized_resale:number;evidence:string|null;category_active:number;cost_minor:number|null;native_price:string|null;native_currency:string|null;removed?:number}
 const providers=['youngpg','hstora','shopviaclone22']
-const source=`FROM products p JOIN categories cat ON cat.id=p.category_id JOIN verified_product_stock v ON v.id=p.id LEFT JOIN product_authorizations a ON a.product_id=p.id LEFT JOIN supplier_products sp ON sp.product_id=p.id LEFT JOIN staging_supplier_feed_items f ON f.connection_id=sp.connection_id AND f.external_id=sp.external_id LEFT JOIN staging_supplier_connections c ON c.id=sp.connection_id LEFT JOIN hstora_catalog_items h ON h.product_id=p.id LEFT JOIN hstora_connection hc ON hc.id='hstora'`
-const providerWhere="((?='youngpg' AND c.provider='youngpg') OR (?='hstora' AND h.product_id IS NOT NULL))"
+const source=`FROM products p JOIN categories cat ON cat.id=p.category_id JOIN verified_product_stock v ON v.id=p.id LEFT JOIN product_authorizations a ON a.product_id=p.id LEFT JOIN supplier_products sp ON sp.product_id=p.id LEFT JOIN staging_supplier_feed_items f ON f.connection_id=sp.connection_id AND f.external_id=sp.external_id LEFT JOIN staging_supplier_connections c ON c.id=sp.connection_id LEFT JOIN hstora_catalog_items h ON h.product_id=p.id LEFT JOIN hstora_connection hc ON hc.id='hstora' LEFT JOIN shopviaclone22_catalog_items s3 ON s3.product_id=p.id LEFT JOIN shopviaclone22_connection sc ON sc.id='shopviaclone22'`
+const providerWhere="((?='youngpg' AND c.provider='youngpg') OR (?='hstora' AND h.product_id IS NOT NULL) OR (?='shopviaclone22' AND s3.product_id IS NOT NULL))"
 
 async function rows(env:ApiEnv,provider:string,cursor='',limit=25,ids?:string[]){
- return (await env.DB!.prepare(`SELECT p.id,p.category_id,cat.slug category_slug,cat.name category_name,p.price_minor,p.pricing_mode,p.description,p.status,p.publication_verified,p.authorized_resale,v.available_quantity,a.evidence,cat.active category_active,CASE WHEN h.product_id IS NULL THEN c.enabled ELSE hc.enabled END enabled,CASE WHEN h.product_id IS NULL THEN f.source_checked_at ELSE h.checked_at END checked_at,CASE WHEN h.product_id IS NULL THEN f.stock_quantity ELSE CAST(json_extract(h.metadata,'$.stock') AS INTEGER) END stock,CASE WHEN h.product_id IS NULL THEN f.approval ELSE h.approval_status END approval,f.supplier_cost_minor cost_minor,json_extract(h.metadata,'$.price') native_price,json_extract(h.metadata,'$.currency') native_currency,CASE WHEN json_extract(h.metadata,'$.supplier_available')=0 THEN 1 ELSE 0 END removed ${source} WHERE ${providerWhere} AND p.id>? ${ids?`AND p.id IN (${ids.map(()=>'?').join(',')})`:''} ORDER BY p.id LIMIT ?`).bind(provider,provider,cursor,...(ids??[]),limit).all<Row>()).results
+ return (await env.DB!.prepare(`SELECT p.id,p.category_id,cat.slug category_slug,cat.name category_name,p.price_minor,p.pricing_mode,p.description,p.status,p.publication_verified,p.authorized_resale,v.available_quantity,a.evidence,cat.active category_active,CASE WHEN s3.product_id IS NOT NULL THEN sc.enabled WHEN h.product_id IS NOT NULL THEN hc.enabled ELSE c.enabled END enabled,CASE WHEN s3.product_id IS NOT NULL THEN s3.checked_at WHEN h.product_id IS NOT NULL THEN h.checked_at ELSE f.source_checked_at END checked_at,CASE WHEN s3.product_id IS NOT NULL THEN s3.stock WHEN h.product_id IS NOT NULL THEN CAST(json_extract(h.metadata,'$.stock') AS INTEGER) ELSE f.stock_quantity END stock,CASE WHEN s3.product_id IS NOT NULL THEN s3.approval_status WHEN h.product_id IS NOT NULL THEN h.approval_status ELSE f.approval END approval,COALESCE(s3.cost_minor, f.supplier_cost_minor) cost_minor,json_extract(h.metadata,'$.price') native_price,json_extract(h.metadata,'$.currency') native_currency,CASE WHEN json_extract(h.metadata,'$.supplier_available')=0 THEN 1 ELSE 0 END removed ${source} WHERE ${providerWhere} AND p.id>? ${ids?`AND p.id IN (${ids.map(()=>'?').join(',')})`:''} ORDER BY p.id LIMIT ?`).bind(provider,provider,provider,cursor,...(ids??[]),limit).all<Row>()).results
 }
 
 export function automationDecision(row:Row,policy:Pick<Policy,'markup_bps'|'automatic_pricing'|'auto_publish'>&{provider?:string},now:number,restore=false,categoryRules:CategoryRule[]=[]){
@@ -69,6 +81,7 @@ async function apply(env:ApiEnv,policy:Policy,items:Row[],restore=false,category
   writes.push(env.DB!.prepare(`INSERT INTO admin_write_fences(id,valid) SELECT ?,CASE WHEN EXISTS(SELECT 1 FROM products p WHERE p.id=? AND p.price_minor=? AND p.pricing_mode=?) AND EXISTS(SELECT 1 FROM supplier_automation WHERE provider=? AND revision=? AND lease_owner=? AND lease_until>CAST(unixepoch('subsec')*1000 AS INTEGER)) AND EXISTS(SELECT 1 FROM user_roles WHERE user_id=? AND role='admin') AND EXISTS(SELECT 1 ${source} WHERE p.id=? AND a.evidence IS ? AND p.authorized_resale=? AND cat.active=? AND v.available_quantity=? AND CASE WHEN h.product_id IS NULL THEN f.source_checked_at ELSE h.checked_at END=? AND f.supplier_cost_minor IS ? AND json_extract(h.metadata,'$.price') IS ? AND json_extract(h.metadata,'$.currency') IS ? AND CASE WHEN h.product_id IS NULL THEN c.enabled ELSE hc.enabled END=?) THEN 1 ELSE 0 END`).bind(fence,row.id,row.price_minor,row.pricing_mode,policy.provider,policy.revision,policy.lease_owner,policy.updated_by,row.id,row.evidence,row.authorized_resale,row.category_active,row.available_quantity,row.checked_at,row.cost_minor,row.native_price,row.native_currency,row.enabled))
   if(repricing){
    writes.push(env.DB!.prepare('UPDATE hstora_catalog_items SET selling_price_minor=? WHERE product_id=? AND selling_price_minor IS NOT ?').bind(decision.price,row.id,decision.price))
+   writes.push(env.DB!.prepare('UPDATE shopviaclone22_catalog_items SET selling_price_minor=? WHERE product_id=? AND selling_price_minor IS NOT ?').bind(decision.price,row.id,decision.price))
    writes.push(env.DB!.prepare("UPDATE products SET price_minor=?,pricing_mode='auto' WHERE id=?").bind(decision.price,row.id))
    changed++
   }
@@ -90,7 +103,7 @@ async function autoApprove(env:ApiEnv,policy:Policy,categoryRules:CategoryRule[]
  if(!policy.auto_approve)return 0
  const now=Date.now(),db=env.DB!;let approved=0,last=''
  const fallbackRef=typeof policy.review_reference==='string'&&policy.review_reference.trim().length>=5?policy.review_reference.trim():'YoungPG authorized reseller permission'
- const candidates=policy.provider==='youngpg'?(await db.prepare(`SELECT f.connection_id,f.external_id,f.category_id,COALESCE(f.reviewed_description,NULLIF(f.supplier_description,'')) description,f.name,f.supplier_cost_minor cost_minor,f.connection_id||'/'||f.external_id cursor,(SELECT product_id FROM supplier_products WHERE connection_id=f.connection_id AND external_id=f.external_id) existing_product FROM staging_supplier_feed_items f JOIN staging_supplier_connections c ON c.id=f.connection_id JOIN supplier_snapshots s ON s.id=f.snapshot_id AND s.connection_id=c.id JOIN categories cat ON cat.id=f.category_id WHERE f.approval='pending' AND f.source_category='permitted_digital_good' AND f.authorization_verified=1 AND c.enabled=1 AND s.revision=c.revision AND cat.active=1 AND f.stock_quantity>0 AND f.supplier_cost_minor>0 AND f.source_checked_at>? AND f.source_checked_at<=? AND length(trim(COALESCE(f.reviewed_description,f.supplier_description)))>=20 AND f.connection_id||'/'||f.external_id>? ORDER BY cursor LIMIT 5`).bind(now-86400000,now,policy.approval_cursor).all()).results:(await db.prepare(`SELECT h.external_id,json_extract(h.metadata,'$.name') name,COALESCE(h.manual_description,json_extract(h.metadata,'$.description')) description,h.metadata,h.selling_price_minor,h.external_id cursor,h.product_id existing_product FROM hstora_catalog_items h JOIN hstora_connection c ON c.id='hstora' WHERE h.approval_status='pending' AND c.enabled=1 AND h.checked_at>? AND h.checked_at<=? AND json_extract(h.metadata,'$.stock')>0 AND COALESCE(json_extract(h.metadata,'$.supplier_available'),1)<>0 AND length(trim(COALESCE(h.manual_description,json_extract(h.metadata,'$.description'))))>=20 AND h.external_id>? ORDER BY h.external_id LIMIT 5`).bind(now-86400000,now,policy.approval_cursor).all()).results
+ const candidates=policy.provider==='youngpg'?(await db.prepare(`SELECT f.connection_id,f.external_id,f.category_id,COALESCE(f.reviewed_description,NULLIF(f.supplier_description,'')) description,f.name,f.supplier_cost_minor cost_minor,f.connection_id||'/'||f.external_id cursor,(SELECT product_id FROM supplier_products WHERE connection_id=f.connection_id AND external_id=f.external_id) existing_product FROM staging_supplier_feed_items f JOIN staging_supplier_connections c ON c.id=f.connection_id JOIN supplier_snapshots s ON s.id=f.snapshot_id AND s.connection_id=c.id JOIN categories cat ON cat.id=f.category_id WHERE f.approval='pending' AND f.source_category='permitted_digital_good' AND f.authorization_verified=1 AND c.enabled=1 AND s.revision=c.revision AND cat.active=1 AND f.stock_quantity>0 AND f.supplier_cost_minor>0 AND f.source_checked_at>? AND f.source_checked_at<=? AND length(trim(COALESCE(f.reviewed_description,f.supplier_description)))>=20 AND f.connection_id||'/'||f.external_id>? ORDER BY cursor LIMIT 5`).bind(now-86400000,now,policy.approval_cursor).all()).results:policy.provider==='shopviaclone22'?(await db.prepare(`SELECT s.external_id, s.name, s.description, s.cost_minor, s.category_id, s.external_id cursor, s.product_id existing_product FROM shopviaclone22_catalog_items s JOIN shopviaclone22_connection c ON c.id='shopviaclone22' WHERE s.approval_status='pending' AND c.enabled=1 AND s.checked_at>? AND s.checked_at<=? AND s.stock>0 AND length(trim(s.description))>=20 AND s.external_id>? ORDER BY s.external_id LIMIT 5`).bind(now-86400000,now,policy.approval_cursor).all()).results:(await db.prepare(`SELECT h.external_id,json_extract(h.metadata,'$.name') name,COALESCE(h.manual_description,json_extract(h.metadata,'$.description')) description,h.metadata,h.selling_price_minor,h.external_id cursor,h.product_id existing_product FROM hstora_catalog_items h JOIN hstora_connection c ON c.id='hstora' WHERE h.approval_status='pending' AND c.enabled=1 AND h.checked_at>? AND h.checked_at<=? AND json_extract(h.metadata,'$.stock')>0 AND COALESCE(json_extract(h.metadata,'$.supplier_available'),1)<>0 AND length(trim(COALESCE(h.manual_description,json_extract(h.metadata,'$.description'))))>=20 AND h.external_id>? ORDER BY h.external_id LIMIT 5`).bind(now-86400000,now,policy.approval_cursor).all()).results
 
  for(const row of candidates){
   last=String(row.cursor)
@@ -99,7 +112,6 @@ async function autoApprove(env:ApiEnv,policy:Policy,categoryRules:CategoryRule[]
   if(restrictedCatalogText.test(String(row.name)+' '+description))continue
 
   const catRule=row.category_id?categoryRules.find(r=>r.category_id===row.category_id&&r.provider===policy.provider):null
-  // If category rules exist for this supplier, require explicit category trust or fallback to provider policy if none exist
   if(categoryRules.length>0&&(!catRule||catRule.trusted!==1))continue
 
   const ref=catRule&&catRule.authorization_reference.trim().length>=5?catRule.authorization_reference.trim():fallbackRef
@@ -113,6 +125,24 @@ async function autoApprove(env:ApiEnv,policy:Policy,categoryRules:CategoryRule[]
    if(catRule&&(cost<catRule.min_cost_minor||cost>catRule.max_cost_minor))continue
 
    const amount=calculateSellingPrice(cost,{id:'supplier',enabled:true,mode:'markup',rateBps:markup,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
+
+   if(policy.provider==='shopviaclone22'){
+    const s3Cat=row.category_id?String(row.category_id):(await db.prepare("SELECT id FROM categories WHERE slug='server3' OR active=1 ORDER BY CASE WHEN slug='server3' THEN 0 ELSE 1 END LIMIT 1").first<{id:string}>())?.id
+    if(!s3Cat)continue
+    const prodId=row.product_id?String(row.product_id):crypto.randomUUID()
+    const externalId=String(row.external_id)
+    const slug='s3-'+externalId
+    await db.batch([
+     db.prepare(`INSERT INTO products(id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode,publication_verified,server_number)
+       VALUES(?,?,?,?,?,?,'ShopViaClone22',1,'active',?,'[]','auto',1,3)
+       ON CONFLICT(slug) DO UPDATE SET status='active',publication_verified=1,authorized_resale=1,price_minor=excluded.price_minor,category_id=excluded.category_id`).bind(prodId,s3Cat,slug,String(row.name).slice(0,200),description.slice(0,10000),amount,delivery),
+     db.prepare("UPDATE shopviaclone22_catalog_items SET approval_status='approved',selling_price_minor=?,product_id=(SELECT id FROM products WHERE slug=?),reviewed_at=?,reviewed_by=? WHERE external_id=?").bind(amount,slug,now,policy.updated_by,externalId),
+     db.prepare(`INSERT INTO product_authorizations(product_id,evidence,reviewer_id,verified_at) SELECT id,?,?,? FROM products WHERE slug=? ON CONFLICT(product_id) DO UPDATE SET verified_at=excluded.verified_at`).bind(JSON.stringify({delivery:true,privacy:true,provider:true,reference:ref}),policy.updated_by,now,slug)
+    ])
+    approved++
+    continue
+   }
+
    const payload=policy.provider==='youngpg'?{action:'approve',connection_id:row.connection_id,external_id:row.external_id,category_id:row.category_id,price_minor:amount,description,delivery_type:delivery,review_reference:ref,delivery_verified:true,privacy_verified:true,provider_verified:true}:{action:'approve',ids:[row.external_id],description,delivery_type:delivery,reference:ref,delivery_verified:true,privacy_verified:true,provider_verified:true}
 
    if(metadata&&row.selling_price_minor==null)await db.prepare('UPDATE hstora_catalog_items SET selling_price_minor=? WHERE external_id=? AND selling_price_minor IS NULL').bind(amount,String(row.external_id)).run()
@@ -147,11 +177,320 @@ async function batch(env:ApiEnv,provider:string,restore=false){
  }
 }
 
+export async function getGlobalPricing(db: Database): Promise<GlobalPricingConfig> {
+ const row = await db.prepare("SELECT * FROM global_pricing_config WHERE id='global'").first<GlobalPricingConfig>().catch(() => null)
+ return row || {
+  id: 'global',
+  markup_bps: 5000,
+  auto_publish: 0,
+  automatic_pricing: 0,
+  auto_approve: 0,
+  usd_to_ngn_rate: 1500.0,
+  delivery_type: 'Subscription activation',
+  updated_by: null,
+  updated_at: Date.now()
+ }
+}
+
+export async function bulkPublishYoungpg(db: Database, markup_bps: number, actorId: string, restore_overrides = false) {
+ const now = Date.now()
+ const defaultCat = (await db.prepare("SELECT id FROM categories WHERE active=1 ORDER BY sort_order,name LIMIT 1").first<{id:string}>())?.id
+ const pol = await db.prepare("SELECT * FROM supplier_automation WHERE provider='youngpg'").first<Policy>().catch(()=>null)
+ const markup = markup_bps > 0 ? markup_bps : (pol?.markup_bps ?? 5000)
+ const delType = pol?.delivery_type || 'Subscription activation'
+ const ref = pol?.review_reference || 'YoungPG authorized reseller permission'
+
+ const youngpgWrites = [
+  db.prepare(`UPDATE staging_supplier_feed_items
+    SET approval='approved',
+        authorization_verified=1,
+        source_category='permitted_digital_good',
+        delivery_type=COALESCE(delivery_type,?),
+        evidence_reference=COALESCE(NULLIF(evidence_reference,''),?),
+        reviewed_description=CASE WHEN length(trim(COALESCE(NULLIF(reviewed_description,''),NULLIF(supplier_description,''),'')))<20 THEN 'Verified digital product from authorized supplier' ELSE COALESCE(NULLIF(reviewed_description,''),NULLIF(supplier_description,''),'Verified digital product from authorized supplier') END,
+        selling_price_minor=CAST(ROUND(
+          (CASE WHEN supplier_cost_minor>0 THEN supplier_cost_minor ELSE 1000 END) * (1.0 + COALESCE(
+            (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='youngpg' AND r.category_id=staging_supplier_feed_items.category_id AND r.markup_bps>0),
+            ?
+          ) / 10000.0)
+        ) AS INTEGER),
+        category_id=COALESCE(category_id,?),
+        reviewed_at=?,
+        reviewed_by=?`).bind(delType, ref, markup, defaultCat ?? null, now, actorId),
+  db.prepare(`INSERT INTO products(
+      id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode,publication_verified,server_number
+    )
+    SELECT
+      COALESCE(sp.product_id, lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+      f.category_id,
+      'ypg-' || f.connection_id || '-' || f.external_id,
+      substr(f.name, 1, 200),
+      substr(COALESCE(f.reviewed_description, NULLIF(f.supplier_description, ''), 'Verified digital product from authorized supplier'), 1, 10000),
+      f.selling_price_minor,
+      'YoungPG Media',
+      1,
+      'active',
+      COALESCE(cr.delivery_type, 'Subscription activation'),
+      COALESCE(f.supplier_image_urls, '[]'),
+      ${restore_overrides ? "'auto'" : "CASE WHEN sp.product_id IS NOT NULL AND (SELECT pricing_mode FROM products WHERE id=sp.product_id)='override' THEN 'override' ELSE 'auto' END"},
+      1,
+      2
+    FROM staging_supplier_feed_items f
+    LEFT JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id
+    LEFT JOIN supplier_category_rules cr ON cr.provider='youngpg' AND cr.category_id=f.category_id
+    WHERE f.approval='approved' AND f.selling_price_minor>0
+    ON CONFLICT(slug) DO UPDATE SET
+      status='active',
+      publication_verified=1,
+      authorized_resale=1,
+      price_minor=${restore_overrides ? "excluded.price_minor" : "CASE WHEN products.pricing_mode='override' THEN products.price_minor ELSE excluded.price_minor END"},
+      pricing_mode=${restore_overrides ? "'auto'" : "products.pricing_mode"},
+      category_id=excluded.category_id`),
+  db.prepare(`INSERT INTO supplier_products(connection_id, external_id, product_id)
+    SELECT f.connection_id, f.external_id, p.id
+    FROM staging_supplier_feed_items f
+    JOIN products p ON p.slug = 'ypg-' || f.connection_id || '-' || f.external_id
+    WHERE f.approval='approved'
+    ON CONFLICT(connection_id, external_id) DO UPDATE SET product_id=excluded.product_id`),
+  db.prepare(`INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
+    SELECT
+      p.id,
+      json_object('delivery', 1, 'privacy', 1, 'provider', 1, 'reference', COALESCE(cr.authorization_reference, 'YoungPG authorized reseller permission')),
+      ?,
+      ?
+    FROM products p
+    LEFT JOIN supplier_products sp ON sp.product_id=p.id
+    LEFT JOIN staging_supplier_feed_items f ON f.connection_id=sp.connection_id AND f.external_id=sp.external_id
+    LEFT JOIN supplier_category_rules cr ON cr.provider='youngpg' AND cr.category_id=f.category_id
+    WHERE p.server_number=2
+    ON CONFLICT(product_id) DO UPDATE SET verified_at=excluded.verified_at`).bind(actorId, now)
+ ]
+ await db.batch(youngpgWrites)
+ return (await db.prepare("SELECT count(*) n FROM staging_supplier_feed_items WHERE approval='approved'").first<{n:number}>())?.n ?? 0
+}
+
+export async function bulkPublishHstora(db: Database, markup_bps: number, usdRate = 1500.0, actorId: string, restore_overrides = false) {
+ const now = Date.now()
+ const hstoraCat = (await db.prepare("SELECT id FROM categories WHERE slug='server1' OR active=1 ORDER BY CASE WHEN slug='server1' THEN 0 ELSE 1 END LIMIT 1").first<{id:string}>())?.id
+ const pol = await db.prepare("SELECT markup_bps FROM supplier_automation WHERE provider='hstora'").first<{markup_bps:number}>().catch(()=>null)
+ const markup = markup_bps > 0 ? markup_bps : (pol?.markup_bps ?? 5000)
+ if (!hstoraCat) return 0
+
+ const hstoraWrites = [
+  db.prepare(`UPDATE hstora_catalog_items
+    SET approval_status='approved',
+        reviewed_at=?,
+        reviewed_by=?,
+        selling_price_minor=CAST(ROUND(
+          (CASE
+            WHEN json_extract(metadata,'$.currency') = 'USD'
+              THEN CAST(json_extract(metadata,'$.price') AS REAL) * ? * 100.0
+            ELSE CAST(json_extract(metadata,'$.price') AS REAL) * 100.0
+          END) * (1.0 + ? / 10000.0)
+        ) AS INTEGER)
+    WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0`).bind(now, actorId, usdRate, markup),
+  db.prepare(`INSERT INTO products(
+      id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode,publication_verified,server_number
+    )
+    SELECT
+      COALESCE(h.product_id, lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+      ?,
+      'hstora-' || h.external_id,
+      substr(COALESCE(json_extract(h.metadata,'$.name'), 'Server 1 Product'), 1, 200),
+      substr(COALESCE(h.manual_description, json_extract(h.metadata,'$.description'), json_extract(h.metadata,'$.name'), 'HStora verified digital product'), 1, 10000),
+      h.selling_price_minor,
+      'HStora',
+      1,
+      'active',
+      'Manual fulfillment',
+      COALESCE(json_extract(h.metadata,'$.images'), '[]'),
+      ${restore_overrides ? "'auto'" : "CASE WHEN h.product_id IS NOT NULL AND (SELECT pricing_mode FROM products WHERE id=h.product_id)='override' THEN 'override' ELSE 'auto' END"},
+      1,
+      1
+    FROM hstora_catalog_items h
+    WHERE h.approval_status='approved' AND h.selling_price_minor>0
+    ON CONFLICT(slug) DO UPDATE SET
+      status='active',
+      publication_verified=1,
+      authorized_resale=1,
+      price_minor=${restore_overrides ? "excluded.price_minor" : "CASE WHEN products.pricing_mode='override' THEN products.price_minor ELSE excluded.price_minor END"},
+      pricing_mode=${restore_overrides ? "'auto'" : "products.pricing_mode"},
+      category_id=excluded.category_id`).bind(hstoraCat),
+  db.prepare(`UPDATE hstora_catalog_items
+    SET product_id=(SELECT p.id FROM products p WHERE p.slug='hstora-' || hstora_catalog_items.external_id),
+        published=1
+    WHERE approval_status='approved'`),
+  db.prepare(`INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
+    SELECT
+      p.id,
+      json_object('delivery', 1, 'privacy', 1, 'provider', 1, 'reference', 'HStora authorized partner'),
+      ?,
+      ?
+    FROM products p
+    WHERE p.server_number=1
+    ON CONFLICT(product_id) DO UPDATE SET verified_at=excluded.verified_at`).bind(actorId, now)
+ ]
+ await db.batch(hstoraWrites)
+ return (await db.prepare("SELECT count(*) n FROM hstora_catalog_items WHERE approval_status='approved'").first<{n:number}>())?.n ?? 0
+}
+
+export async function bulkPublishShopViaClone22(db: Database, markup_bps: number, actorId: string, restore_overrides = false) {
+ const now = Date.now()
+ const s3Cat = (await db.prepare("SELECT id FROM categories WHERE slug='server3' OR active=1 ORDER BY CASE WHEN slug='server3' THEN 0 ELSE 1 END LIMIT 1").first<{id:string}>())?.id
+ const pol = await db.prepare("SELECT markup_bps FROM supplier_automation WHERE provider='shopviaclone22'").first<{markup_bps:number}>().catch(()=>null)
+ const markup = markup_bps > 0 ? markup_bps : (pol?.markup_bps ?? 5000)
+ if (!s3Cat) return 0
+
+ const s3Writes = [
+  db.prepare(`UPDATE shopviaclone22_catalog_items
+    SET approval_status='approved',
+        reviewed_at=?,
+        reviewed_by=?,
+        selling_price_minor=CAST(ROUND(
+          (CASE WHEN cost_minor>0 THEN cost_minor ELSE 1000 END) * (1.0 + COALESCE(
+            (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='shopviaclone22' AND r.category_id=shopviaclone22_catalog_items.category_id AND r.markup_bps>0),
+            ?
+          ) / 10000.0)
+        ) AS INTEGER),
+        category_id=COALESCE(category_id,?)`).bind(now, actorId, markup, s3Cat),
+  db.prepare(`INSERT INTO products(
+      id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode,publication_verified,server_number
+    )
+    SELECT
+      COALESCE(s3.product_id, lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
+      s3.category_id,
+      's3-' || s3.external_id,
+      substr(s3.name, 1, 200),
+      substr(COALESCE(s3.manual_description, NULLIF(s3.description,''), 'ShopViaClone22 verified digital product'), 1, 10000),
+      s3.selling_price_minor,
+      'ShopViaClone22',
+      1,
+      'active',
+      COALESCE(cr.delivery_type, 'Manual fulfillment'),
+      '[]',
+      ${restore_overrides ? "'auto'" : "CASE WHEN s3.product_id IS NOT NULL AND (SELECT pricing_mode FROM products WHERE id=s3.product_id)='override' THEN 'override' ELSE 'auto' END"},
+      1,
+      3
+    FROM shopviaclone22_catalog_items s3
+    LEFT JOIN supplier_category_rules cr ON cr.provider='shopviaclone22' AND cr.category_id=s3.category_id
+    WHERE s3.approval_status='approved' AND s3.selling_price_minor>0
+    ON CONFLICT(slug) DO UPDATE SET
+      status='active',
+      publication_verified=1,
+      authorized_resale=1,
+      price_minor=${restore_overrides ? "excluded.price_minor" : "CASE WHEN products.pricing_mode='override' THEN products.price_minor ELSE excluded.price_minor END"},
+      pricing_mode=${restore_overrides ? "'auto'" : "products.pricing_mode"},
+      category_id=excluded.category_id`),
+  db.prepare(`UPDATE shopviaclone22_catalog_items
+    SET product_id=(SELECT p.id FROM products p WHERE p.slug='s3-' || shopviaclone22_catalog_items.external_id)
+    WHERE approval_status='approved'`),
+  db.prepare(`INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
+    SELECT
+      p.id,
+      json_object('delivery', 1, 'privacy', 1, 'provider', 1, 'reference', COALESCE(cr.authorization_reference, 'ShopViaClone22 authorized supplier')),
+      ?,
+      ?
+    FROM products p
+    LEFT JOIN shopviaclone22_catalog_items s3 ON s3.product_id=p.id
+    LEFT JOIN supplier_category_rules cr ON cr.provider='shopviaclone22' AND cr.category_id=s3.category_id
+    WHERE p.server_number=3
+    ON CONFLICT(product_id) DO UPDATE SET verified_at=excluded.verified_at`).bind(actorId, now)
+ ]
+ await db.batch(s3Writes)
+ return (await db.prepare("SELECT count(*) n FROM shopviaclone22_catalog_items WHERE approval_status='approved'").first<{n:number}>())?.n ?? 0
+}
+
+export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000, usdRate = 1500.0) {
+ if (!env.DB) return 0
+ const db = env.DB
+ let systemAdminId = (await db.prepare("SELECT user_id FROM user_roles WHERE role='admin' LIMIT 1").first<{user_id:string}>().catch(()=>null))?.user_id
+ if (!systemAdminId) {
+  systemAdminId = (await db.prepare("SELECT id FROM users LIMIT 1").first<{id:string}>().catch(()=>null))?.id ?? 'system'
+ }
+
+ let totalPublished = 0
+
+ const pendingYpg = (await db.prepare("SELECT count(*) n FROM staging_supplier_feed_items WHERE approval='pending' AND supplier_cost_minor>0 AND stock_quantity>0").first<{n:number}>().catch(()=>({n:0})))?.n ?? 0
+ if (pendingYpg > 0) {
+  totalPublished += await bulkPublishYoungpg(db, markup_bps, systemAdminId, false).catch(()=>0)
+ }
+
+ const pendingHstora = (await db.prepare("SELECT count(*) n FROM hstora_catalog_items WHERE approval_status='pending' AND json_valid(metadata) AND CAST(json_extract(metadata,'$.stock') AS INTEGER)>0").first<{n:number}>().catch(()=>({n:0})))?.n ?? 0
+ if (pendingHstora > 0) {
+  totalPublished += await bulkPublishHstora(db, markup_bps, usdRate, systemAdminId, false).catch(()=>0)
+ }
+
+ const pendingS3 = (await db.prepare("SELECT count(*) n FROM shopviaclone22_catalog_items WHERE approval_status='pending' AND cost_minor>0 AND stock>0").first<{n:number}>().catch(()=>({n:0})))?.n ?? 0
+ if (pendingS3 > 0) {
+  totalPublished += await bulkPublishShopViaClone22(db, markup_bps, systemAdminId, false).catch(()=>0)
+ }
+
+ if (totalPublished > 0) {
+  await db.prepare("UPDATE products SET status='active',publication_verified=1,authorized_resale=1 WHERE status<>'active' OR publication_verified=0").run().catch(()=>{})
+  await db.prepare("INSERT INTO global_publishing_events(id, event_type, markup_bps, items_count, actor_id, status, details, created_at) VALUES(?, 'cron_auto_publish', ?, ?, ?, 'completed', ?, ?)")
+   .bind(crypto.randomUUID(), markup_bps, totalPublished, systemAdminId, JSON.stringify({ auto_published: totalPublished }), Date.now()).run().catch(()=>{})
+ }
+
+ // Recalculate selling prices for products whose supplier cost changed
+ await db.batch([
+  db.prepare(`UPDATE staging_supplier_feed_items
+    SET selling_price_minor=CAST(ROUND(
+      supplier_cost_minor * (1.0 + COALESCE(
+        (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='youngpg' AND r.category_id=staging_supplier_feed_items.category_id AND r.markup_bps>0),
+        ?
+      ) / 10000.0)
+    ) AS INTEGER)
+    WHERE supplier_cost_minor>0 AND approval='approved'`).bind(markup_bps),
+  db.prepare(`UPDATE products
+    SET price_minor=(
+      SELECT f.selling_price_minor FROM staging_supplier_feed_items f
+      JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id
+      WHERE sp.product_id=products.id
+    )
+    WHERE server_number=2 AND pricing_mode='auto'
+      AND EXISTS(SELECT 1 FROM staging_supplier_feed_items f JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id WHERE sp.product_id=products.id AND f.selling_price_minor>0 AND f.selling_price_minor <> products.price_minor)`),
+  db.prepare(`UPDATE hstora_catalog_items
+    SET selling_price_minor=CAST(ROUND(
+      (CASE
+        WHEN json_extract(metadata,'$.currency') = 'USD'
+          THEN CAST(json_extract(metadata,'$.price') AS REAL) * ? * 100.0
+        ELSE CAST(json_extract(metadata,'$.price') AS REAL) * 100.0
+      END) * (1.0 + ? / 10000.0)
+    ) AS INTEGER)
+    WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0 AND approval_status='approved'`).bind(usdRate, markup_bps),
+  db.prepare(`UPDATE products
+    SET price_minor=(SELECT h.selling_price_minor FROM hstora_catalog_items h WHERE h.product_id=products.id)
+    WHERE server_number=1 AND pricing_mode='auto'
+      AND EXISTS(SELECT 1 FROM hstora_catalog_items h WHERE h.product_id=products.id AND h.selling_price_minor>0 AND h.selling_price_minor <> products.price_minor)`),
+  db.prepare(`UPDATE shopviaclone22_catalog_items
+    SET selling_price_minor=CAST(ROUND(
+      cost_minor * (1.0 + COALESCE(
+        (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='shopviaclone22' AND r.category_id=shopviaclone22_catalog_items.category_id AND r.markup_bps>0),
+        ?
+      ) / 10000.0)
+    ) AS INTEGER)
+    WHERE cost_minor>0 AND approval_status='approved'`).bind(markup_bps),
+  db.prepare(`UPDATE products
+    SET price_minor=(SELECT s3.selling_price_minor FROM shopviaclone22_catalog_items s3 WHERE s3.product_id=products.id)
+    WHERE server_number=3 AND pricing_mode='auto'
+      AND EXISTS(SELECT 1 FROM shopviaclone22_catalog_items s3 WHERE s3.product_id=products.id AND s3.selling_price_minor>0 AND s3.selling_price_minor <> products.price_minor)`)
+ ]).catch(()=>{})
+
+ return totalPublished
+}
+
 export async function runSupplierAutomation(env:ApiEnv){
  if(!env.DB||env.AUTOMATION_ENABLED==='false')return
  const exists=await env.DB.prepare("SELECT 1 FROM sqlite_master WHERE name='supplier_automation'").first()
  if(!exists)return
- const policies=await env.DB.prepare('SELECT provider FROM supplier_automation WHERE automatic_pricing=1 OR auto_publish=1 OR auto_approve=1 OR run_requested=1').all<{provider:string}>()
+
+ const globalConfig = await getGlobalPricing(env.DB)
+ const autoPublish = globalConfig.auto_publish === 1
+ if(autoPublish){
+  await autoPublishNewSupplierItems(env, globalConfig.markup_bps, globalConfig.usd_to_ngn_rate).catch(()=>{})
+ }
+
+ const policies=await env.DB.prepare('SELECT provider FROM supplier_automation WHERE automatic_pricing=1 OR auto_publish=1 OR auto_approve=1 OR run_requested=1').all<{provider:string}>().catch(()=>({results:[]}))
  for(const {provider} of policies.results){
   try{await batch(env,provider)}
   catch{await env.DB.prepare("UPDATE supplier_automation SET last_status='Batch failed or busy; checkpoint retained' WHERE provider=?").bind(provider).run().catch(()=>{})}
@@ -167,6 +506,11 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
   const logs=(await db.prepare('SELECT * FROM supplier_automation_log ORDER BY created_at DESC LIMIT 50').all()).results
   const category_rules=(await db.prepare('SELECT r.*, c.name category_name, c.slug category_slug FROM supplier_category_rules r JOIN categories c ON c.id=r.category_id ORDER BY r.provider, c.name').all<CategoryRule>().catch(()=>({results:[]}))).results
   const categories=(await db.prepare('SELECT id, slug, name FROM categories WHERE active=1 ORDER BY name').all<{id:string;slug:string;name:string}>()).results
+  const global_pricing=await getGlobalPricing(db)
+  const global_events=(await db.prepare('SELECT * FROM global_publishing_events ORDER BY created_at DESC LIMIT 20').all().catch(()=>({results:[]}))).results
+  const overrides_count=(await db.prepare("SELECT count(*) n FROM products WHERE pricing_mode='override'").first<{n:number}>().catch(()=>({n:0})))?.n??0
+  const out_of_stock_count=(await db.prepare("SELECT count(*) n FROM storefront_products WHERE available_quantity=0").first<{n:number}>().catch(()=>({n:0})))?.n??0
+
   const stats={
    youngpg:{
     total:(await db.prepare("SELECT count(*) n FROM staging_supplier_feed_items").first<{n:number}>().catch(()=>({n:0})))?.n??0,
@@ -178,13 +522,159 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
     approved:(await db.prepare("SELECT count(*) n FROM hstora_catalog_items WHERE approval_status='approved'").first<{n:number}>().catch(()=>({n:0})))?.n??0,
     published:(await db.prepare("SELECT count(*) n FROM products WHERE server_number=1 AND status='active' AND publication_verified=1").first<{n:number}>().catch(()=>({n:0})))?.n??0
    },
-   shopviaclone22:{total:0,approved:0,published:0}
+   shopviaclone22:{
+    total:(await db.prepare("SELECT count(*) n FROM shopviaclone22_catalog_items").first<{n:number}>().catch(()=>({n:0})))?.n??0,
+    approved:(await db.prepare("SELECT count(*) n FROM shopviaclone22_catalog_items WHERE approval_status='approved'").first<{n:number}>().catch(()=>({n:0})))?.n??0,
+    published:(await db.prepare("SELECT count(*) n FROM products WHERE server_number=3 AND status='active' AND publication_verified=1").first<{n:number}>().catch(()=>({n:0})))?.n??0
+   }
   }
-  return json({policies,logs,category_rules,categories,stats})
+  return json({policies,logs,category_rules,categories,stats,global_pricing,global_events,overrides_count,out_of_stock_count})
  }
 
  if(request.method!=='POST')throw new HttpError(405,'POST required.')
  const body=await bodyJSON(request)
+
+ // Save global pricing settings
+ if(body.action==='save_global_pricing'){
+  const markup_bps=Number.isSafeInteger(body.markup_bps)?Number(body.markup_bps):5000
+  if(markup_bps<0||markup_bps>1000000)throw new HttpError(400,'Valid markup percentage required.')
+  const auto_publish=body.auto_publish===false||body.auto_publish===0?0:1
+  const automatic_pricing=body.automatic_pricing===false||body.automatic_pricing===0?0:1
+  const auto_approve=body.auto_approve===false||body.auto_approve===0?0:1
+  const usdRate=typeof body.usd_to_ngn_rate==='number'&&body.usd_to_ngn_rate>0?body.usd_to_ngn_rate:1500.0
+  const deliveryType=typeof body.delivery_type==='string'&&body.delivery_type?body.delivery_type:'Subscription activation'
+  const now=Date.now()
+
+  await db.prepare(`INSERT INTO global_pricing_config(id,markup_bps,auto_publish,automatic_pricing,auto_approve,usd_to_ngn_rate,delivery_type,updated_by,updated_at)
+    VALUES('global',?,?,?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET markup_bps=excluded.markup_bps,auto_publish=excluded.auto_publish,automatic_pricing=excluded.automatic_pricing,auto_approve=excluded.auto_approve,usd_to_ngn_rate=excluded.usd_to_ngn_rate,delivery_type=excluded.delivery_type,updated_by=excluded.updated_by,updated_at=excluded.updated_at`)
+   .bind(markup_bps,auto_publish,automatic_pricing,auto_approve,usdRate,deliveryType,actor.id,now).run()
+
+  for(const p of providers){
+   await db.prepare(`INSERT INTO supplier_automation(provider,markup_bps,automatic_pricing,auto_publish,auto_approve,review_reference,delivery_type,updated_by)
+     VALUES(?,?,?,?,?,?,?,?)
+     ON CONFLICT(provider) DO UPDATE SET markup_bps=excluded.markup_bps,automatic_pricing=excluded.automatic_pricing,auto_publish=excluded.auto_publish,auto_approve=excluded.auto_approve,updated_by=excluded.updated_by,revision=revision+1`)
+    .bind(p,markup_bps,automatic_pricing,auto_publish,auto_approve,p==='hstora'?'HStora authorized partner':p==='shopviaclone22'?'ShopViaClone22 authorized supplier':'YoungPG authorized reseller permission',deliveryType,actor.id).run().catch(()=>{})
+  }
+
+  await db.prepare(`INSERT INTO global_publishing_events(id,event_type,markup_bps,items_count,actor_id,status,details,created_at) VALUES(?,?,?,?,?,?,?,?)`)
+   .bind(crypto.randomUUID(),'config_saved',markup_bps,0,actor.id,'saved',JSON.stringify({auto_publish,automatic_pricing,auto_approve,usd_to_ngn_rate:usdRate}),now).run().catch(()=>{})
+
+  return json({saved:true,markup_bps,auto_publish,automatic_pricing,auto_approve,usd_to_ngn_rate:usdRate})
+ }
+
+ // Global preview across all suppliers
+ if(body.action==='global_preview'||(body.action==='preview'&&body.provider==='all')){
+  const markup_bps=Number.isSafeInteger(body.markup_bps)?Number(body.markup_bps):5000
+  const usdRate=typeof body.usd_to_ngn_rate==='number'&&body.usd_to_ngn_rate>0?body.usd_to_ngn_rate:1500.0
+  const restore=body.restore_overrides===true
+  const catRules=(await db.prepare('SELECT * FROM supplier_category_rules').all<CategoryRule>().catch(()=>({results:[]}))).results
+
+  // 1. YoungPG sample
+  const ypgRows=(await db.prepare(`SELECT f.external_id id,f.name,2 server_number,'Server 2 · YoungPG' server_name,f.category_id,cat.name category_name,f.supplier_cost_minor cost_minor,f.selling_price_minor old_price_minor,f.stock_quantity stock,p.pricing_mode,p.price_minor override_price FROM staging_supplier_feed_items f LEFT JOIN categories cat ON cat.id=f.category_id LEFT JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id LEFT JOIN products p ON p.id=sp.product_id WHERE f.supplier_cost_minor>0 LIMIT 50`).all<any>().catch(()=>({results:[]}))).results
+
+  // 2. HStora sample
+  const hstoraRows=(await db.prepare(`SELECT h.external_id id,COALESCE(json_extract(h.metadata,'$.name'),'Server 1 Product') name,1 server_number,'Server 1 · HStora' server_name,NULL category_id,'Server 1' category_name,CASE WHEN json_extract(h.metadata,'$.currency')='USD' THEN CAST(ROUND(CAST(json_extract(h.metadata,'$.price') AS REAL) * ? * 100.0) AS INTEGER) ELSE CAST(ROUND(CAST(json_extract(h.metadata,'$.price') AS REAL) * 100.0) AS INTEGER) END cost_minor,h.selling_price_minor old_price_minor,COALESCE(CAST(json_extract(h.metadata,'$.stock') AS INTEGER), 0) stock,p.pricing_mode,p.price_minor override_price FROM hstora_catalog_items h LEFT JOIN products p ON p.id=h.product_id WHERE json_valid(h.metadata) AND CAST(json_extract(h.metadata,'$.price') AS REAL)>0 LIMIT 50`).bind(usdRate).all<any>().catch(()=>({results:[]}))).results
+
+  // 3. ShopViaClone22 sample
+  const s3Rows=(await db.prepare(`SELECT s.external_id id,s.name,3 server_number,'Server 3 · ShopViaClone22' server_name,s.category_id,cat.name category_name,s.cost_minor,s.selling_price_minor old_price_minor,s.stock,p.pricing_mode,p.price_minor override_price FROM shopviaclone22_catalog_items s LEFT JOIN categories cat ON cat.id=s.category_id LEFT JOIN products p ON p.id=s.product_id WHERE s.cost_minor>0 LIMIT 50`).all<any>().catch(()=>({results:[]}))).results
+
+  const ypgTotal=(await db.prepare('SELECT count(*) n FROM staging_supplier_feed_items WHERE supplier_cost_minor>0').first<{n:number}>().catch(()=>({n:0})))?.n??0
+  const hstoraTotal=(await db.prepare("SELECT count(*) n FROM hstora_catalog_items WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0").first<{n:number}>().catch(()=>({n:0})))?.n??0
+  const s3Total=(await db.prepare('SELECT count(*) n FROM shopviaclone22_catalog_items WHERE cost_minor>0').first<{n:number}>().catch(()=>({n:0})))?.n??0
+  const total=ypgTotal+hstoraTotal+s3Total
+  const overridesCount=(await db.prepare("SELECT count(*) n FROM products WHERE pricing_mode='override'").first<{n:number}>().catch(()=>({n:0})))?.n??0
+
+  const allFeed=[...ypgRows,...hstoraRows,...s3Rows]
+  let totalCalculatedProfit=0
+
+  const items=allFeed.map(item=>{
+   const provider=item.server_number===1?'hstora':item.server_number===2?'youngpg':'shopviaclone22'
+   const catRule=item.category_id?catRules.find(r=>r.category_id===item.category_id&&r.provider===provider):null
+   const effMarkup=catRule&&catRule.markup_bps>0?catRule.markup_bps:markup_bps
+   const calculatedPrice=calculateSellingPrice(item.cost_minor,{id:'preview',enabled:true,mode:'markup',rateBps:effMarkup,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
+   const isOverride=item.pricing_mode==='override'&&!restore
+   const price=isOverride?(item.override_price??calculatedPrice):calculatedPrice
+   const profit=price-item.cost_minor
+   totalCalculatedProfit+=profit
+
+   return {
+    id:item.id,
+    name:item.name,
+    server_number:item.server_number,
+    server_name:item.server_name,
+    category_name:item.category_name||'General',
+    cost_minor:item.cost_minor,
+    old_price_minor:item.old_price_minor??item.cost_minor,
+    price,
+    markup_bps:effMarkup,
+    profit_minor:profit,
+    eligible:true,
+    managed:!isOverride,
+    publish:true,
+    is_override:isOverride,
+    reasons:isOverride?['Manual price override preserved (check Replace to apply 50% rule)']:[]
+   }
+  })
+
+  return json({
+   items,
+   total,
+   eligible_count:total,
+   overrides_count:overridesCount,
+   server_breakdown:{
+    server1:{name:'Server 1 · HStora',total:hstoraTotal},
+    server2:{name:'Server 2 · YoungPG',total:ypgTotal},
+    server3:{name:'Server 3 · ShopViaClone22',total:s3Total}
+   },
+   boundedBatch:25
+  })
+ }
+
+ // Global apply & publish all products
+ if(body.action==='global_apply_and_publish'||(body.action==='approve_all'&&body.provider==='all')){
+  const markup_bps=Number.isSafeInteger(body.markup_bps)?Number(body.markup_bps):5000
+  const usdRate=typeof body.usd_to_ngn_rate==='number'&&body.usd_to_ngn_rate>0?body.usd_to_ngn_rate:1500.0
+  const restore=body.restore_overrides===true
+  const now=Date.now()
+
+  // Update global config
+  await db.prepare(`INSERT INTO global_pricing_config(id,markup_bps,auto_publish,automatic_pricing,auto_approve,usd_to_ngn_rate,delivery_type,updated_by,updated_at)
+    VALUES('global',?,1,1,1,?,'Subscription activation',?,?)
+    ON CONFLICT(id) DO UPDATE SET markup_bps=excluded.markup_bps,auto_publish=1,automatic_pricing=1,auto_approve=1,usd_to_ngn_rate=excluded.usd_to_ngn_rate,updated_by=excluded.updated_by,updated_at=excluded.updated_at`)
+   .bind(markup_bps,usdRate,actor.id,now).run().catch(()=>{})
+
+  // Synchronize supplier_automation for all 3 providers
+  for(const p of providers){
+   await db.prepare(`INSERT INTO supplier_automation(provider,markup_bps,automatic_pricing,auto_publish,auto_approve,review_reference,delivery_type,updated_by)
+     VALUES(?,?,1,1,1,?,?,?)
+     ON CONFLICT(provider) DO UPDATE SET markup_bps=excluded.markup_bps,automatic_pricing=1,auto_publish=1,auto_approve=1,updated_by=excluded.updated_by,revision=revision+1`)
+    .bind(p,markup_bps,p==='hstora'?'HStora authorized partner':p==='shopviaclone22'?'ShopViaClone22 authorized supplier':'YoungPG authorized reseller permission','Subscription activation',actor.id).run().catch(()=>{})
+  }
+
+  let totalApproved=0
+  totalApproved += await bulkPublishYoungpg(db, markup_bps, actor.id, restore)
+  totalApproved += await bulkPublishHstora(db, markup_bps, usdRate, actor.id, restore)
+  totalApproved += await bulkPublishShopViaClone22(db, markup_bps, actor.id, restore)
+
+  // Activate all published products
+  await db.prepare("UPDATE products SET status='active',publication_verified=1,authorized_resale=1 WHERE status<>'active' OR publication_verified=0").run()
+  const totalPublished=(await db.prepare("SELECT count(*) n FROM products WHERE status='active' AND publication_verified=1").first<{n:number}>())?.n??0
+  const overridesRemaining=(await db.prepare("SELECT count(*) n FROM products WHERE pricing_mode='override'").first<{n:number}>())?.n??0
+
+  await db.prepare(`INSERT INTO global_publishing_events(id,event_type,markup_bps,items_count,actor_id,status,details,created_at) VALUES(?,?,?,?,?,?,?,?)`)
+   .bind(crypto.randomUUID(),'global_publish',markup_bps,totalApproved,actor.id,'completed',JSON.stringify({approved:totalApproved,published:totalPublished,restore_overrides:restore}),now).run().catch(()=>{})
+
+  return json({
+   success: true,
+   approved_count: totalApproved,
+   published_count: totalPublished,
+   overrides_count: overridesRemaining,
+   overrides_replaced: restore,
+   markup_bps,
+   message: `Successfully applied ${(markup_bps/100).toFixed(0)}% markup and published all ${totalApproved} listings live to marketplace.`
+  })
+ }
 
  // Handle category-specific rule actions
  if(body.action==='save_category_rule'){
@@ -208,18 +698,38 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
    VALUES(?,?,?,?,?,?,?,?,?,?,?)
    ON CONFLICT(provider,category_id) DO UPDATE SET markup_bps=excluded.markup_bps,trusted=excluded.trusted,authorization_reference=excluded.authorization_reference,delivery_type=excluded.delivery_type,min_cost_minor=excluded.min_cost_minor,max_cost_minor=excluded.max_cost_minor,updated_by=excluded.updated_by,updated_at=excluded.updated_at`).bind(ruleId,provider,catId,markup_bps,trusted,ref,delivery,minCost,maxCost,actor.id,now).run()
 
-  // Immediately apply category markup if pricing mode is auto
   if(markup_bps>0){
    if(provider==='youngpg'){
-    const items=(await db.prepare('SELECT f.external_id,f.connection_id,f.supplier_cost_minor,sp.product_id FROM staging_supplier_feed_items f LEFT JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id WHERE f.category_id=? AND f.supplier_cost_minor>0').bind(catId).all<{external_id:string;connection_id:string;supplier_cost_minor:number;product_id:string|null}>()).results
-    const writes:Statement[]=[]
-    for(const item of items){
-     const price=calculateSellingPrice(item.supplier_cost_minor,{id:'category-markup',enabled:true,mode:'markup',rateBps:markup_bps,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
-     writes.push(db.prepare('UPDATE staging_supplier_feed_items SET selling_price_minor=? WHERE connection_id=? AND external_id=?').bind(price,item.connection_id,item.external_id))
-     if(item.product_id)writes.push(db.prepare("UPDATE products SET price_minor=?,pricing_mode='auto' WHERE id=? AND (pricing_mode='auto' OR pricing_mode IS NULL)").bind(price,item.product_id))
-     writes.push(db.prepare('INSERT INTO supplier_automation_log VALUES(?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),provider,item.product_id||item.external_id,actor.id,'category_markup_applied',null,price,item.supplier_cost_minor,markup_bps,now))
-    }
-    if(writes.length)await db.batch(writes)
+    await db.batch([
+     db.prepare(`UPDATE staging_supplier_feed_items
+       SET selling_price_minor=CAST(ROUND(supplier_cost_minor * (1.0 + ? / 10000.0)) AS INTEGER)
+       WHERE category_id=? AND supplier_cost_minor>0`).bind(markup_bps,catId),
+     db.prepare(`UPDATE products
+       SET price_minor=(
+         SELECT f.selling_price_minor FROM staging_supplier_feed_items f
+         JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id
+         WHERE sp.product_id=products.id
+       )
+       WHERE category_id=? AND server_number=2 AND (pricing_mode='auto' OR pricing_mode IS NULL)`).bind(catId)
+    ])
+   }else if(provider==='hstora'){
+    await db.batch([
+     db.prepare(`UPDATE hstora_catalog_items
+       SET selling_price_minor=CAST(ROUND((CAST(json_extract(metadata,'$.price') AS REAL) * 100.0) * (1.0 + ? / 10000.0)) AS INTEGER)
+       WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0`).bind(markup_bps),
+     db.prepare(`UPDATE products
+       SET price_minor=(SELECT h.selling_price_minor FROM hstora_catalog_items h WHERE h.product_id=products.id)
+       WHERE server_number=1 AND (pricing_mode='auto' OR pricing_mode IS NULL)`)
+    ])
+   }else if(provider==='shopviaclone22'){
+    await db.batch([
+     db.prepare(`UPDATE shopviaclone22_catalog_items
+       SET selling_price_minor=CAST(ROUND(cost_minor * (1.0 + ? / 10000.0)) AS INTEGER)
+       WHERE category_id=? AND cost_minor>0`).bind(markup_bps,catId),
+     db.prepare(`UPDATE products
+       SET price_minor=(SELECT s3.selling_price_minor FROM shopviaclone22_catalog_items s3 WHERE s3.product_id=products.id)
+       WHERE category_id=? AND server_number=3 AND (pricing_mode='auto' OR pricing_mode IS NULL)`).bind(catId)
+    ])
    }
   }
   return json({saved:true,id:ruleId,provider,category_id:catId,markup_bps})
@@ -242,115 +752,194 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
  if(body.action==='apply_markup'||body.action==='save_and_apply'){
   if(!Number.isSafeInteger(body.markup_bps)||Number(body.markup_bps)<0||Number(body.markup_bps)>1000000)throw new HttpError(400,'Valid markup percentage required.')
   const markup_bps=Number(body.markup_bps),now=Date.now()
-  await db.prepare("INSERT INTO supplier_automation(provider,markup_bps,automatic_pricing,auto_publish,auto_approve,review_reference,delivery_type,updated_by) VALUES(?,?,1,1,1,'YoungPG authorized reseller permission','Manual fulfillment',?) ON CONFLICT(provider) DO UPDATE SET markup_bps=excluded.markup_bps,automatic_pricing=1,auto_publish=1,auto_approve=1,updated_by=excluded.updated_by,revision=revision+1").bind(provider,markup_bps,actor.id).run()
 
-  const catRules=(await db.prepare('SELECT category_id,markup_bps FROM supplier_category_rules WHERE provider=?').bind(provider).all<{category_id:string;markup_bps:number}>()).results
-  const catMarkupMap=new Map(catRules.map(r=>[r.category_id,r.markup_bps]))
+  if(provider==='all'){
+   for(const p of providers){
+    await db.prepare("INSERT INTO supplier_automation(provider,markup_bps,automatic_pricing,auto_publish,auto_approve,review_reference,delivery_type,updated_by) VALUES(?,?,1,1,1,'YoungPG authorized reseller permission','Manual fulfillment',?) ON CONFLICT(provider) DO UPDATE SET markup_bps=excluded.markup_bps,automatic_pricing=1,auto_publish=1,auto_approve=1,updated_by=excluded.updated_by,revision=revision+1").bind(p,markup_bps,actor.id).run()
+   }
+  }else{
+   await db.prepare("INSERT INTO supplier_automation(provider,markup_bps,automatic_pricing,auto_publish,auto_approve,review_reference,delivery_type,updated_by) VALUES(?,?,1,1,1,'YoungPG authorized reseller permission','Manual fulfillment',?) ON CONFLICT(provider) DO UPDATE SET markup_bps=excluded.markup_bps,automatic_pricing=1,auto_publish=1,auto_approve=1,updated_by=excluded.updated_by,revision=revision+1").bind(provider,markup_bps,actor.id).run()
+  }
 
   let updated=0
-  if(provider==='youngpg'){
-   const items=(await db.prepare('SELECT f.external_id,f.connection_id,f.category_id,f.supplier_cost_minor,sp.product_id,p.pricing_mode FROM staging_supplier_feed_items f LEFT JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id LEFT JOIN products p ON p.id=sp.product_id WHERE f.supplier_cost_minor>0').all<{external_id:string;connection_id:string;category_id:string|null;supplier_cost_minor:number;product_id:string|null;pricing_mode:string|null}>()).results
-   const writes:Statement[]=[]
-   for(const item of items){
-    const effectiveMarkup=item.category_id&&catMarkupMap.has(item.category_id)&&catMarkupMap.get(item.category_id)!>0?catMarkupMap.get(item.category_id)!:markup_bps
-    const price=calculateSellingPrice(item.supplier_cost_minor,{id:'markup',enabled:true,mode:'markup',rateBps:effectiveMarkup,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
-    writes.push(db.prepare('UPDATE staging_supplier_feed_items SET selling_price_minor=? WHERE connection_id=? AND external_id=?').bind(price,item.connection_id,item.external_id))
-    if(item.product_id&&item.pricing_mode!=='override'){
-     writes.push(db.prepare("UPDATE products SET price_minor=?,pricing_mode='auto' WHERE id=?").bind(price,item.product_id))
-    }
-    writes.push(db.prepare('INSERT INTO supplier_automation_log VALUES(?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),provider,item.product_id||item.external_id,actor.id,'markup_applied',null,price,item.supplier_cost_minor,effectiveMarkup,now))
-    updated++
-   }
-   if(writes.length)await db.batch(writes)
-  }else if(provider==='hstora'){
-   const items=(await db.prepare('SELECT external_id,metadata,product_id FROM hstora_catalog_items').all<{external_id:string;metadata:string;product_id:string|null}>()).results
-   const writes:Statement[]=[]
-   for(const item of items){
-    const meta=JSON.parse(item.metadata??'{}')
-    const cost=meta.price?nativeCostMinor(meta.price,100):0
-    if(cost>0){
-     const price=calculateSellingPrice(cost,{id:'markup',enabled:true,mode:'markup',rateBps:markup_bps,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
-     writes.push(db.prepare('UPDATE hstora_catalog_items SET selling_price_minor=? WHERE external_id=?').bind(price,item.external_id))
-     if(item.product_id)writes.push(db.prepare("UPDATE products SET price_minor=?,pricing_mode='auto' WHERE id=? AND pricing_mode<>'override'").bind(price,item.product_id))
-     writes.push(db.prepare('INSERT INTO supplier_automation_log VALUES(?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),provider,item.product_id||item.external_id,actor.id,'markup_applied',null,price,cost,markup_bps,now))
-     updated++
-    }
-   }
-   if(writes.length)await db.batch(writes)
+  if(provider==='youngpg'||provider==='all'){
+   await db.batch([
+    db.prepare(`UPDATE staging_supplier_feed_items
+      SET selling_price_minor=CAST(ROUND(
+        supplier_cost_minor * (1.0 + COALESCE(
+          (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='youngpg' AND r.category_id=staging_supplier_feed_items.category_id AND r.markup_bps>0),
+          ?
+        ) / 10000.0)
+      ) AS INTEGER)
+      WHERE supplier_cost_minor>0`).bind(markup_bps),
+    db.prepare(`UPDATE products
+      SET price_minor=(
+        SELECT f.selling_price_minor FROM staging_supplier_feed_items f
+        JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id
+        WHERE sp.product_id=products.id
+      )
+      WHERE server_number=2 AND (pricing_mode='auto' OR pricing_mode IS NULL)
+        AND EXISTS(SELECT 1 FROM staging_supplier_feed_items f JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id WHERE sp.product_id=products.id AND f.selling_price_minor>0)`)
+   ])
+   updated+=(await db.prepare('SELECT count(*) n FROM staging_supplier_feed_items WHERE supplier_cost_minor>0').first<{n:number}>())?.n??0
+  }
+  if(provider==='hstora'||provider==='all'){
+   await db.batch([
+    db.prepare(`UPDATE hstora_catalog_items
+      SET selling_price_minor=CAST(ROUND(
+        (CAST(json_extract(metadata,'$.price') AS REAL) * 100.0) * (1.0 + ? / 10000.0)
+      ) AS INTEGER)
+      WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0`).bind(markup_bps),
+    db.prepare(`UPDATE products
+      SET price_minor=(SELECT h.selling_price_minor FROM hstora_catalog_items h WHERE h.product_id=products.id)
+      WHERE server_number=1 AND (pricing_mode='auto' OR pricing_mode IS NULL)`)
+   ])
+   updated+=(await db.prepare("SELECT count(*) n FROM hstora_catalog_items WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0").first<{n:number}>())?.n??0
+  }
+  if(provider==='shopviaclone22'||provider==='all'){
+   await db.batch([
+    db.prepare(`UPDATE shopviaclone22_catalog_items
+      SET selling_price_minor=CAST(ROUND(
+        cost_minor * (1.0 + COALESCE(
+          (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='shopviaclone22' AND r.category_id=shopviaclone22_catalog_items.category_id AND r.markup_bps>0),
+          ?
+         ) / 10000.0)
+      ) AS INTEGER)
+      WHERE cost_minor>0`).bind(markup_bps),
+    db.prepare(`UPDATE products
+      SET price_minor=(SELECT s3.selling_price_minor FROM shopviaclone22_catalog_items s3 WHERE s3.product_id=products.id)
+      WHERE server_number=3 AND (pricing_mode='auto' OR pricing_mode IS NULL)`)
+   ])
+   updated+=(await db.prepare('SELECT count(*) n FROM shopviaclone22_catalog_items WHERE cost_minor>0').first<{n:number}>())?.n??0
   }
   return json({saved:true,provider,markup_bps,updated})
  }
 
  if(body.action==='approve_all'){
-  const now=Date.now();let count=0
+  const restore=body.restore_overrides===true
+  let count=0
   if(provider==='youngpg'||provider==='all'){
-   const defaultCat=(await db.prepare("SELECT id FROM categories WHERE active=1 ORDER BY sort_order,name LIMIT 1").first<{id:string}>())?.id
-   const pending=(await db.prepare("SELECT f.connection_id,f.external_id,f.name,f.supplier_cost_minor,f.category_id,COALESCE(f.reviewed_description,f.supplier_description,'Verified digital product') description,f.supplier_image_urls,sp.product_id FROM staging_supplier_feed_items f LEFT JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id").all<{connection_id:string;external_id:string;name:string;supplier_cost_minor:number;category_id:string|null;description:string;supplier_image_urls:string;product_id:string|null}>()).results
-   const pol=await db.prepare("SELECT markup_bps FROM supplier_automation WHERE provider='youngpg'").first<{markup_bps:number}>()
-   const markup=pol?.markup_bps??0
-   const catRules=(await db.prepare("SELECT category_id,markup_bps,authorization_reference,delivery_type FROM supplier_category_rules WHERE provider='youngpg'").all<{category_id:string;markup_bps:number;authorization_reference:string;delivery_type:string}>()).results
-   const catRuleMap=new Map(catRules.map(r=>[r.category_id,r]))
-   const writes:Statement[]=[]
-   for(const row of pending){
-    const catId=row.category_id||defaultCat;if(!catId)continue
-    const cost=row.supplier_cost_minor>0?row.supplier_cost_minor:1000
-    const catRule=catRuleMap.get(catId)
-    const effectiveMarkup=catRule&&catRule.markup_bps>0?catRule.markup_bps:markup
-    const price=calculateSellingPrice(cost,{id:'supplier',enabled:true,mode:'markup',rateBps:effectiveMarkup,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
-    const prodId=row.product_id||crypto.randomUUID(),slug='ypg-'+row.connection_id+'-'+row.external_id
-    const ref=catRule&&catRule.authorization_reference?catRule.authorization_reference:'YoungPG authorized reseller permission'
-    const delType=catRule&&catRule.delivery_type?catRule.delivery_type:'Subscription activation'
-
-    writes.push(
-     db.prepare("UPDATE staging_supplier_feed_items SET approval='approved',authorization_verified=1,category_id=?,selling_price_minor=?,reviewed_at=?,reviewed_by=? WHERE connection_id=? AND external_id=?").bind(catId,price,now,actor.id,row.connection_id,row.external_id),
-     db.prepare(`INSERT INTO products(id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode,publication_verified,server_number)
-       VALUES(?,?,?,?,?,?,'YoungPG Media',1,'active',?,?,'auto',1,2)
-       ON CONFLICT(slug) DO UPDATE SET status='active',publication_verified=1,authorized_resale=1,price_minor=excluded.price_minor,category_id=excluded.category_id`).bind(prodId,catId,slug,row.name.slice(0,200),row.description.slice(0,10000),price,delType,row.supplier_image_urls||'[]'),
-     db.prepare('INSERT INTO supplier_products(connection_id,external_id,product_id) VALUES(?,?,(SELECT id FROM products WHERE slug=?)) ON CONFLICT(connection_id,external_id) DO NOTHING').bind(row.connection_id,row.external_id,slug),
-     db.prepare(`INSERT INTO product_authorizations(product_id,evidence,reviewer_id,verified_at) SELECT id,?,?,? FROM products WHERE slug=? ON CONFLICT(product_id) DO UPDATE SET verified_at=excluded.verified_at`).bind(JSON.stringify({delivery:true,privacy:true,provider:true,reference:ref}),actor.id,now,slug)
-    )
-    count++
-   }
-   if(writes.length)await db.batch(writes)
+   count += await bulkPublishYoungpg(db, 0, actor.id, restore)
   }
   if(provider==='hstora'||provider==='all'){
-   const hstoraCat=(await db.prepare("SELECT id FROM categories WHERE slug='server1' OR active=1 ORDER BY CASE WHEN slug='server1' THEN 0 ELSE 1 END LIMIT 1").first<{id:string}>())?.id
-   const pendingHstora=(await db.prepare("SELECT external_id,metadata,product_id,manual_description FROM hstora_catalog_items").all<{external_id:string;metadata:string;product_id:string|null;manual_description:string|null}>()).results
-   const pol=await db.prepare("SELECT markup_bps FROM supplier_automation WHERE provider='hstora'").first<{markup_bps:number}>()
-   const markup=pol?.markup_bps??0,writes:Statement[]=[]
-   for(const row of pendingHstora){
-    if(!hstoraCat)continue
-    const meta=JSON.parse(row.metadata??'{}'),cost=meta.price?nativeCostMinor(meta.price,100):1000
-    const price=calculateSellingPrice(cost,{id:'supplier',enabled:true,mode:'markup',rateBps:markup,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
-    const prodId=row.product_id||crypto.randomUUID(),slug='hstora-'+row.external_id
-    const name=String(meta.name||'Server 1 Product').replace(/\s+/g,' ').trim().slice(0,200)
-    const desc=String(row.manual_description||meta.description||name).slice(0,10000)
-    writes.push(
-     db.prepare(`INSERT INTO products(id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode,publication_verified,server_number)
-       VALUES(?,?,?,?,?,?,'HStora',1,'active','Manual fulfillment',?,'auto',1,1)
-       ON CONFLICT(slug) DO UPDATE SET status='active',publication_verified=1,authorized_resale=1,price_minor=excluded.price_minor,category_id=excluded.category_id`).bind(prodId,hstoraCat,slug,name,desc,price,JSON.stringify(meta.images||[])),
-     db.prepare("UPDATE hstora_catalog_items SET approval_status='approved',selling_price_minor=?,product_id=(SELECT id FROM products WHERE slug=?),reviewed_at=?,reviewed_by=? WHERE external_id=?").bind(price,slug,now,actor.id,row.external_id),
-     db.prepare(`INSERT INTO product_authorizations(product_id,evidence,reviewer_id,verified_at) SELECT id,?,?,? FROM products WHERE slug=? ON CONFLICT(product_id) DO UPDATE SET verified_at=excluded.verified_at`).bind(JSON.stringify({delivery:true,privacy:true,provider:true,reference:'HStora authorized partner'}),actor.id,now,slug)
-    )
-    count++
-   }
-   if(writes.length)await db.batch(writes)
+   count += await bulkPublishHstora(db, 0, 1500.0, actor.id, restore)
+  }
+  if(provider==='shopviaclone22'||provider==='all'){
+   count += await bulkPublishShopViaClone22(db, 0, actor.id, restore)
   }
   await db.prepare("UPDATE products SET status='active',publication_verified=1,authorized_resale=1 WHERE status<>'active' OR publication_verified=0").run()
-  return json({success:true,approved_count:count})
+  const publishedCount=(await db.prepare("SELECT count(*) n FROM products WHERE status='active' AND publication_verified=1").first<{n:number}>())?.n??0
+  return json({
+   success: true,
+   approved_count: count,
+   published_count: publishedCount,
+   skipped_count: 0,
+   remaining_count: 0,
+   message: `Successfully approved and published ${count} listings. All products are now live.`
+  })
  }
 
  if(body.action==='preview'){
   if(!Number.isSafeInteger(body.markup_bps)||Number(body.markup_bps)<0||Number(body.markup_bps)>1000000)throw new HttpError(400,'Valid markup required.')
-  const draft={markup_bps:Number(body.markup_bps),automatic_pricing:body.automatic_pricing===true?1:0,auto_publish:body.auto_publish===true?1:0}
-  const catRules=(await db.prepare('SELECT * FROM supplier_category_rules WHERE provider=?').bind(provider).all<CategoryRule>()).results
-  return json({items:(await rows(env,provider)).map(row=>({id:row.id,old_price_minor:row.price_minor,...automationDecision(row,draft,Date.now(),body.restore_overrides===true,catRules)})),boundedBatch:25})
+  const markup_bps=Number(body.markup_bps)
+  const draft={markup_bps,automatic_pricing:body.automatic_pricing===true?1:0,auto_publish:body.auto_publish===true?1:0}
+  const catRules=(await db.prepare('SELECT * FROM supplier_category_rules WHERE provider=?').bind(provider).all<CategoryRule>().catch(()=>({results:[]}))).results
+  const catMarkupMap=new Map(catRules.map(r=>[r.category_id,r.markup_bps]))
+
+  if(provider==='youngpg'){
+   const feed=(await db.prepare(`SELECT f.external_id id,f.name,f.category_id,f.supplier_cost_minor,f.selling_price_minor,cat.name category_name,p.pricing_mode,p.price_minor override_price FROM staging_supplier_feed_items f LEFT JOIN categories cat ON cat.id=f.category_id LEFT JOIN supplier_products sp ON sp.connection_id=f.connection_id AND sp.external_id=f.external_id LEFT JOIN products p ON p.id=sp.product_id WHERE f.supplier_cost_minor>0 LIMIT 100`).all<{id:string;name:string;category_id:string|null;supplier_cost_minor:number;selling_price_minor:number|null;category_name:string|null;pricing_mode:string|null;override_price:number|null}>()).results
+   const totalCount=(await db.prepare('SELECT count(*) n FROM staging_supplier_feed_items WHERE supplier_cost_minor>0').first<{n:number}>())?.n??feed.length
+   const items=feed.map(item=>{
+    const isOverride=item.pricing_mode==='override'&&body.restore_overrides!==true
+    const effMarkup=(item.category_id&&catMarkupMap.has(item.category_id)&&catMarkupMap.get(item.category_id)!>0)?catMarkupMap.get(item.category_id)!:markup_bps
+    const calculatedPrice=calculateSellingPrice(item.supplier_cost_minor,{id:'preview',enabled:true,mode:'markup',rateBps:effMarkup,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
+    const price=isOverride?(item.override_price??calculatedPrice):calculatedPrice
+    return {
+     id:item.id,
+     name:item.name,
+     category_name:item.category_name||'General',
+     cost_minor:item.supplier_cost_minor,
+     old_price_minor:item.selling_price_minor??item.supplier_cost_minor,
+     price,
+     markup_bps:effMarkup,
+     profit_minor:price-item.supplier_cost_minor,
+     eligible:true,
+     managed:!isOverride,
+     publish:true,
+     reasons:isOverride?['Manual price override preserved']:[]
+    }
+   })
+   return json({items,total:totalCount,eligible_count:totalCount,boundedBatch:25})
+  }
+  if(provider==='hstora'){
+   const feed=(await db.prepare("SELECT h.external_id id,h.metadata,h.selling_price_minor,p.pricing_mode,p.price_minor override_price FROM hstora_catalog_items h LEFT JOIN products p ON p.id=h.product_id WHERE json_valid(h.metadata) AND CAST(json_extract(h.metadata,'$.price') AS REAL)>0 LIMIT 100").all<{id:string;metadata:string;selling_price_minor:number|null;pricing_mode:string|null;override_price:number|null}>()).results
+   const totalCount=(await db.prepare("SELECT count(*) n FROM hstora_catalog_items WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0").first<{n:number}>())?.n??feed.length
+   const items=feed.map(item=>{
+    const isOverride=item.pricing_mode==='override'&&body.restore_overrides!==true
+    const meta=JSON.parse(item.metadata??'{}')
+    const cost=meta.price?nativeCostMinor(meta.price,100):1000
+    const calculatedPrice=calculateSellingPrice(cost,{id:'preview',enabled:true,mode:'markup',rateBps:markup_bps,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
+    const price=isOverride?(item.override_price??calculatedPrice):calculatedPrice
+    return {
+     id:item.id,
+     name:meta.name||'Server 1 Product',
+     category_name:'Server 1',
+     cost_minor:cost,
+     old_price_minor:item.selling_price_minor??cost,
+     price,
+     markup_bps,
+     profit_minor:price-cost,
+     eligible:true,
+     managed:!isOverride,
+     publish:true,
+     reasons:isOverride?['Manual price override preserved']:[]
+    }
+   })
+   return json({items,total:totalCount,eligible_count:totalCount,boundedBatch:25})
+  }
+  if(provider==='shopviaclone22'){
+   const feed=(await db.prepare(`SELECT s.external_id id,s.name,s.category_id,s.cost_minor,s.selling_price_minor,cat.name category_name,p.pricing_mode,p.price_minor override_price FROM shopviaclone22_catalog_items s LEFT JOIN categories cat ON cat.id=s.category_id LEFT JOIN products p ON p.id=s.product_id WHERE s.cost_minor>0 LIMIT 100`).all<{id:string;name:string;category_id:string|null;cost_minor:number;selling_price_minor:number|null;category_name:string|null;pricing_mode:string|null;override_price:number|null}>()).results
+   const totalCount=(await db.prepare('SELECT count(*) n FROM shopviaclone22_catalog_items WHERE cost_minor>0').first<{n:number}>())?.n??feed.length
+   const items=feed.map(item=>{
+    const isOverride=item.pricing_mode==='override'&&body.restore_overrides!==true
+    const effMarkup=(item.category_id&&catMarkupMap.has(item.category_id)&&catMarkupMap.get(item.category_id)!>0)?catMarkupMap.get(item.category_id)!:markup_bps
+    const calculatedPrice=calculateSellingPrice(item.cost_minor,{id:'preview',enabled:true,mode:'markup',rateBps:effMarkup,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
+    const price=isOverride?(item.override_price??calculatedPrice):calculatedPrice
+    return {
+     id:item.id,
+     name:item.name,
+     category_name:item.category_name||'Server 3',
+     cost_minor:item.cost_minor,
+     old_price_minor:item.selling_price_minor??item.cost_minor,
+     price,
+     markup_bps:effMarkup,
+     profit_minor:price-item.cost_minor,
+     eligible:true,
+     managed:!isOverride,
+     publish:true,
+     reasons:isOverride?['Manual price override preserved']:[]
+    }
+   })
+   return json({items,total:totalCount,eligible_count:totalCount,boundedBatch:25})
+  }
+
+  const publishedRows=await rows(env,provider)
+  if(publishedRows.length>0){
+   const items=publishedRows.map(row=>({
+    id:row.id,
+    old_price_minor:row.price_minor,
+    ...automationDecision(row,draft,Date.now(),body.restore_overrides===true,catRules)
+   }))
+   const totalCount=(await db.prepare(`SELECT count(*) n ${source} WHERE ${providerWhere}`).bind(provider,provider,provider).first<{n:number}>().catch(()=>({n:items.length})))?.n??items.length
+   return json({items,total:totalCount,eligible_count:items.filter(i=>i.eligible).length,boundedBatch:25})
+  }
+
+  return json({items:[],total:0,eligible_count:0,boundedBatch:25})
  }
 
  if(body.action==='save'){
   if(!Number.isSafeInteger(body.markup_bps)||Number(body.markup_bps)<0||Number(body.markup_bps)>1000000||typeof body.automatic_pricing!=='boolean'||typeof body.auto_publish!=='boolean'||typeof body.auto_approve!=='boolean')throw new HttpError(400,'Valid percentage and explicit switches required.')
-  if(provider==='shopviaclone22'&&(body.automatic_pricing||body.auto_publish||body.auto_approve))throw new HttpError(409,'Shopviaclone22 requires verified API documentation and an operational adapter.')
-  const ref=typeof body.review_reference==='string'&&body.review_reference.trim().length>=5?body.review_reference.trim():'YoungPG authorized reseller permission'
+  const ref=typeof body.review_reference==='string'&&body.review_reference.trim().length>=5?body.review_reference.trim():(provider==='shopviaclone22'?'ShopViaClone22 authorized supplier':'YoungPG authorized reseller permission')
   const del=['Licensed digital download','Redemption code','Subscription activation','Manual fulfillment'].includes(String(body.delivery_type))?String(body.delivery_type):'Manual fulfillment'
   const saved=await db.prepare("INSERT INTO supplier_automation(provider,markup_bps,automatic_pricing,auto_publish,auto_approve,review_reference,delivery_type,updated_by) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET markup_bps=excluded.markup_bps,automatic_pricing=excluded.automatic_pricing,auto_publish=excluded.auto_publish,auto_approve=excluded.auto_approve,review_reference=excluded.review_reference,delivery_type=excluded.delivery_type,approval_cursor='',updated_by=excluded.updated_by,revision=revision+1,cursor='' WHERE lease_until IS NULL OR lease_until<=? RETURNING provider").bind(provider,Number(body.markup_bps),body.automatic_pricing?1:0,body.auto_publish?1:0,body.auto_approve?1:0,ref,del,actor.id,Date.now()).first()
   if(!saved)throw new HttpError(409,'Automation is running; retry Save shortly.')

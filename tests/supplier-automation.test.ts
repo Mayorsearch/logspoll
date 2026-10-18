@@ -37,7 +37,7 @@ test('foreign currency never silently assumes USD or an invented exchange rate',
 function fixture(){
  const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON')
  const directory=new URL('../workers/api/migrations/',import.meta.url)
- for(const name of readdirSync(directory).filter(name=>/^00(?:0[1-9]|1[0-6])_.*\.sql$/.test(name)).sort())sql.exec(readFileSync(new URL(name,directory),'utf8'))
+ for(const name of readdirSync(directory).filter(name=>/^00\d{2}_.*\.sql$/.test(name)).sort())sql.exec(readFileSync(new URL(name,directory),'utf8'))
  const actor=crypto.randomUUID(),category=crypto.randomUUID(),connection=crypto.randomUUID(),snapshot=crypto.randomUUID(),product=crypto.randomUUID(),checked=Date.now()
  sql.prepare('INSERT INTO users(id) VALUES(?)').run(actor);sql.prepare("INSERT INTO user_roles(user_id,role) VALUES(?,'admin')").run(actor)
  sql.prepare("INSERT INTO categories(id,slug,name,short_name) VALUES(?,'fixture-vpn','VPN','VPN')").run(category)
