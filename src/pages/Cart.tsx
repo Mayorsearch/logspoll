@@ -1,102 +1,417 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useCart } from '../lib/cart';
-import { cloudflareRequest } from '../lib/cloudflare-auth';
-import { useAuth } from '../auth/AuthProvider';
-import { useCurrency } from '../lib/currency';
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { useCart } from '../lib/cart'
+import { cloudflareRequest } from '../lib/cloudflare-auth'
+import { useCurrency } from '../lib/currency'
+import { ProductArtwork } from '../components/ProductArtwork'
+import {
+  ShoppingCart,
+  Trash2,
+  Plus,
+  Minus,
+  ArrowRight,
+  ShieldCheck,
+  Zap,
+  Lock,
+  AlertTriangle,
+  RefreshCw,
+  Server as ServerIcon,
+  ShoppingBag
+} from 'lucide-react'
+
 interface Product {
-    id: string;
-    name: string;
-    slug: string;
-    price_minor: number;
-    currency: string;
-    available_quantity: number;
+  id: string
+  name: string
+  slug: string
+  price_minor: number
+  currency: string
+  available_quantity: number
+  server_number?: number | null
+  category_name?: string | null
+  image_path?: string | null
+  supplier_image_urls?: string[]
 }
-export function Cart({ checkout = false }: {
-    checkout?: boolean;
-}) {
-    const { items, update, clear } = useCart();
-    const { session } = useAuth();
-    const sandboxMode = false;
-    const [sandboxBusy, setSandboxBusy] = useState(false);
-    const [sandboxMessage, setSandboxMessage] = useState('');
-    async function sandboxPay() {
-        if (!session || items.length !== 1 || items[0].quantity !== 1) {
-            setSandboxMessage('Sandbox testing supports one approved item at a time.');
-            return;
-        }
-        setSandboxBusy(true);
-        setSandboxMessage('');
-        try {
-            const key = `logspoll-sandbox-request:${session.user.id}:${items[0].id}`;
-            let requestId = sessionStorage.getItem(key);
-            if (!requestId) {
-                requestId = crypto.randomUUID();
-                sessionStorage.setItem(key, requestId);
-            }
-            const response = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-                body: JSON.stringify({ product_id: items[0].id, quantity: 1, request_id: requestId }) });
-            const data: {
-                error?: string;
-                checkout_url?: string;
-                order_id?: string;
-            } = await response.json();
-            if (!response.ok || !data.checkout_url || !data.order_id)
-                throw Error(data.error ?? 'Sandbox checkout unavailable.');
-            const url = new URL(data.checkout_url);
-            if (url.protocol !== 'https:' || !['checkout.bachs.io', 'sandbox-checkout.bachs.io'].includes(url.hostname))
-                throw Error('Unexpected Bachs checkout URL.');
-            sessionStorage.setItem('logspoll-last-sandbox-order', data.order_id);
-            window.location.assign(data.checkout_url);
-        }
-        catch (problem) {
-            setSandboxMessage(problem instanceof Error ? problem.message : 'Sandbox checkout unavailable.');
-        }
-        finally {
-            setSandboxBusy(false);
-        }
+
+export function Cart() {
+  const { items, update, remove, clear } = useCart()
+  const { formatPrice } = useCurrency()
+  const navigate = useNavigate()
+
+  const [products, setProducts] = useState<Product[]>([])
+  const [loading, setLoading] = useState<boolean>(Boolean(items.length))
+  const [error, setError] = useState<string>('')
+  const [refreshing, setRefreshing] = useState<boolean>(false)
+
+  const ids = items.map(item => item.id).sort().join(',')
+
+  // Fetch real-time stock and prices from production D1
+  const fetchProducts = async (isManual = false) => {
+    if (!ids) {
+      setProducts([])
+      setLoading(false)
+      return
     }
-    async function checkSandboxStatus() {
-        const id = sessionStorage.getItem('logspoll-last-sandbox-order');
-        if (!session || !id) {
-            setSandboxMessage('No previous sandbox order found in this browser.');
-            return;
-        }
-        setSandboxBusy(true);
-        try {
-            const response = await fetch(`/api/bachs/order?id=${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${session.access_token}` } });
-            const data: {
-                error?: string;
-                order?: {
-                    state: string;
-                };
-            } = await response.json();
-            if (!response.ok || !data.order)
-                throw Error(data.error ?? 'Unable to retrieve sandbox order.');
-            setSandboxMessage(`Sandbox payment status: ${data.order.state}. Automatic supplier delivery is not yet enabled.`);
-        }
-        catch (problem) {
-            setSandboxMessage(problem instanceof Error ? problem.message : 'Unable to retrieve sandbox order.');
-        }
-        finally {
-            setSandboxBusy(false);
-        }
+    if (isManual) setRefreshing(true)
+    else setLoading(true)
+    setError('')
+
+    try {
+      const res = await cloudflareRequest<{ records: Product[] }>(
+        `/api/products?ids=${encodeURIComponent(ids)}`
+      )
+      setProducts(res.records || [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to verify real-time product prices.')
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
     }
-    const [products, setProducts] = useState<Product[]>([]);
-    const [loading, setLoading] = useState(Boolean(items.length));
-    const [error, setError] = useState('');
-    const ids = items.map(item => item.id).sort().join(',');
-    useEffect(() => {
-        let active=true;
-        queueMicrotask(()=>{
-            if(!active)return;
-            if(!ids){setProducts([]);setLoading(false);return}
-            setLoading(true);setError('');
-            void cloudflareRequest<{records:Product[]}>(`/api/products?ids=${encodeURIComponent(ids)}`).then(({records})=>{if(active)setProducts(records)}).catch(problem=>{if(active)setError(problem.message)}).finally(()=>{if(active)setLoading(false)});
-        });
-        return()=>{active=false};
-    },[ids]);
-    const { formatPrice } = useCurrency();
-    const total = items.reduce((sum, item) => sum + (products.find(product => product.id === item.id)?.price_minor ?? 0) * item.quantity, 0);
-    return <section className="container section"><span className="eyebrow">YOUR PRIVATE ACCOUNT</span><h1>{checkout ? (sandboxMode ? 'Bachs sandbox checkout test' : 'Checkout unavailable') : 'Your cart'}</h1><p className="form-error">{sandboxMode ? 'TEST ONLY: Bachs sandbox uses simulated payments. Even a verified sandbox payment will not purchase or deliver products from the provider yet.' : 'Live checkout is disabled pending verified payment, stock reservation, refund handling and authorized automatic fulfillment. No charge or supplier purchase will occur.'}</p>{loading ? <p role="status">Checking current product details…</p> : error ? <p className="form-error" role="alert">{error}</p> : !items.length ? <div className="empty-state"><h2>Your cart is empty</h2><Link className="button" to="/marketplace">Browse approved products</Link></div> : <div className="order-list">{items.map(item => { const product = products.find(product => product.id === item.id); return <article className="order-card cart-row" key={item.id}><div><h3>{product ? <Link to={`/products/${product.slug}`}>{product.name}</Link> : 'Product unavailable'}</h3><p>{product ? formatPrice(product.price_minor) : 'Remove this product before checkout.'}</p>{product && item.quantity > product.available_quantity && <p className="form-error">Only {product.available_quantity} currently available.</p>}</div><label>Quantity<input aria-label={`Quantity for ${product?.name ?? 'unavailable product'}`} type="number" min={1} max={Math.min(1000, product?.available_quantity ?? 1000)} value={item.quantity} onChange={event => update(item.id, Number(event.target.value))}/></label><button className="button button-outline" onClick={() => update(item.id, 0)}>Remove</button></article>; })}<p>Estimated total: <strong>{formatPrice(total)}</strong> <small style={{ color: '#667085', fontSize: '11px' }}>(Settlement currency: NGN ₦ via Bachs)</small></p><p className="preview-note">Cart estimates use current catalog prices. A secure backend must recalculate totals before accepting any payment.</p><div className="button-row"><button className="button button-outline" onClick={clear}>Clear cart</button>{sandboxMode ? <button className="button" disabled={sandboxBusy || loading || !!error || items.length !== 1 || items[0]?.quantity !== 1} onClick={() => void sandboxPay()}>Test Bachs sandbox payment</button> : <button className="button" disabled>Checkout unavailable</button>}{sandboxMode && <button className="button button-outline" disabled={sandboxBusy} onClick={() => void checkSandboxStatus()}>Check test order status</button>}</div>{sandboxMessage && <p role="status">{sandboxMessage}</p>}</div>}</section>;
+  }
+
+  useEffect(() => {
+    let active = true
+    queueMicrotask(() => {
+      if (active) void fetchProducts()
+    })
+    return () => {
+      active = false
+    }
+  }, [ids])
+
+  // Map items to their validated live product record
+  const cartEntries = items.map(item => {
+    const product = products.find(p => p.id === item.id)
+    const available = product ? product.available_quantity : 0
+    const isOutOfStock = Boolean(product && available <= 0)
+    const isExceeded = Boolean(product && available > 0 && item.quantity > available)
+    const isMissing = !loading && !product && products.length > 0
+    const hasIssue = isOutOfStock || isExceeded || isMissing
+    const unitPrice = product ? product.price_minor : 0
+    const lineTotal = unitPrice * item.quantity
+
+    return {
+      item,
+      product,
+      available,
+      isOutOfStock,
+      isExceeded,
+      isMissing,
+      hasIssue,
+      unitPrice,
+      lineTotal,
+    }
+  })
+
+  const hasAnyIssues = cartEntries.some(e => e.hasIssue)
+  const subtotalMinor = cartEntries.reduce((sum, e) => sum + e.lineTotal, 0)
+  const totalItemCount = items.reduce((sum, item) => sum + item.quantity, 0)
+
+  return (
+    <div className="cart-checkout-page">
+      <div className="cart-checkout-container">
+        {/* Navigation Step Breadcrumbs */}
+        <div className="cart-steps-nav" aria-label="Checkout Progress">
+          <div className="cart-step-item active">
+            <span className="cart-step-badge">1</span>
+            <span className="cart-step-title">Review Cart</span>
+          </div>
+          <div className="cart-step-separator" />
+          <div className="cart-step-item">
+            <span className="cart-step-badge">2</span>
+            <span className="cart-step-title">Secure Checkout</span>
+          </div>
+          <div className="cart-step-separator" />
+          <div className="cart-step-item">
+            <span className="cart-step-badge">3</span>
+            <span className="cart-step-title">Instant Delivery</span>
+          </div>
+        </div>
+
+        {/* Empty Cart State */}
+        {!items.length ? (
+          <div className="cart-empty-state">
+            <div className="cart-empty-icon-box">
+              <ShoppingBag size={34} />
+            </div>
+            <h1 className="cart-empty-title">Your Cart is Empty</h1>
+            <p className="cart-empty-desc">
+              Browse our verified digital inventory across Servers 1 to 4 to find high-performance accounts, VPNs, and tools.
+            </p>
+            <Link to="/marketplace" className="cart-primary-btn" style={{ maxWidth: 240, marginTop: 12 }}>
+              Browse Marketplace <ArrowRight size={16} />
+            </Link>
+          </div>
+        ) : (
+          <div className="cart-grid-layout">
+            {/* Left Column: Cart Items List */}
+            <div className="cart-panel">
+              <div className="cart-panel-header">
+                <h1 className="cart-panel-title">
+                  <ShoppingCart size={22} color="#ff6500" />
+                  Shopping Cart
+                  <span className="cart-item-count-badge">
+                    {totalItemCount} {totalItemCount === 1 ? 'item' : 'items'}
+                  </span>
+                </h1>
+                <button
+                  type="button"
+                  className="cart-secondary-btn"
+                  style={{ width: 'auto', padding: '6px 12px', fontSize: '0.8rem' }}
+                  onClick={() => void fetchProducts(true)}
+                  disabled={refreshing || loading}
+                  title="Verify latest stock and prices against production D1"
+                >
+                  <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+                  <span>Verify Stock</span>
+                </button>
+              </div>
+
+              {error && (
+                <div className="checkout-verification-notice" style={{ background: 'rgba(239, 68, 68, 0.08)', borderColor: '#ef4444', color: '#dc2626' }}>
+                  <AlertTriangle size={18} />
+                  <div>
+                    <strong>Stock verification alert:</strong> {error}
+                  </div>
+                </div>
+              )}
+
+              {hasAnyIssues && (
+                <div className="checkout-verification-notice">
+                  <AlertTriangle size={18} />
+                  <div>
+                    <strong>Inventory update required:</strong> One or more items in your cart have stock limitations. Adjust quantities or remove unavailable products to proceed to checkout.
+                  </div>
+                </div>
+              )}
+
+              {loading && !products.length ? (
+                <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--lp-text-muted)' }}>
+                  <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 12px', color: '#ff6500' }} />
+                  <p style={{ margin: 0, fontSize: '0.9rem' }}>Verifying live stock & prices from production database…</p>
+                </div>
+              ) : (
+                <div className="cart-items-list">
+                  {cartEntries.map(({ item, product, available, isOutOfStock, isExceeded, isMissing, hasIssue, unitPrice, lineTotal }) => (
+                    <article
+                      key={item.id}
+                      className={`cart-item-card ${hasIssue ? 'has-issue' : ''}`}
+                    >
+                      {/* Product Artwork Image */}
+                      <div className="cart-item-image-wrap">
+                        {product ? (
+                          <ProductArtwork
+                            name={product.name}
+                            path={product.image_path}
+                            category={product.category_name ?? ''}
+                            images={product.supplier_image_urls}
+                          />
+                        ) : (
+                          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1e293b', color: '#64748b' }}>
+                            <ShoppingBag size={20} />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Details */}
+                      <div className="cart-item-details">
+                        <div className="cart-item-meta-row">
+                          {product?.server_number ? (
+                            <span className={`cart-server-badge s${product.server_number}`}>
+                              <ServerIcon size={10} />
+                              Server {product.server_number}
+                            </span>
+                          ) : (
+                            <span className="cart-server-badge">
+                              <ServerIcon size={10} />
+                              Verified Server
+                            </span>
+                          )}
+                          {product?.category_name && (
+                            <span className="cart-category-tag">· {product.category_name}</span>
+                          )}
+                        </div>
+
+                        {product ? (
+                          <Link to={`/products/${product.slug}`} className="cart-item-title">
+                            {product.name}
+                          </Link>
+                        ) : (
+                          <div className="cart-item-title" style={{ color: '#ef4444' }}>
+                            {isMissing ? 'Product no longer listed in catalog' : 'Verifying item…'}
+                          </div>
+                        )}
+
+                        {/* Stock status indicator */}
+                        {product && (
+                          <div className={`cart-item-stock-status ${isOutOfStock ? 'out-of-stock' : isExceeded ? 'low-stock' : 'in-stock'}`}>
+                            {isOutOfStock ? (
+                              <>
+                                <AlertTriangle size={13} />
+                                <span>Out of stock — remove to continue</span>
+                              </>
+                            ) : isExceeded ? (
+                              <>
+                                <AlertTriangle size={13} />
+                                <span>Only {available} available in stock</span>
+                              </>
+                            ) : (
+                              <span>✓ In Stock ({available} available)</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Right: Stepper, Price & Remove */}
+                      <div className="cart-item-right">
+                        <div className="cart-stepper" aria-label="Item quantity stepper">
+                          <button
+                            type="button"
+                            className="cart-stepper-btn"
+                            aria-label="Decrease quantity"
+                            disabled={item.quantity <= 1}
+                            onClick={() => update(item.id, item.quantity - 1)}
+                          >
+                            <Minus size={13} />
+                          </button>
+                          <input
+                            type="number"
+                            className="cart-stepper-input"
+                            aria-label={`Quantity for ${product?.name ?? 'item'}`}
+                            min={1}
+                            max={product ? Math.min(1000, product.available_quantity) : 1000}
+                            value={item.quantity}
+                            onChange={e => {
+                              const val = parseInt(e.target.value, 10)
+                              if (!isNaN(val)) update(item.id, val)
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="cart-stepper-btn"
+                            aria-label="Increase quantity"
+                            disabled={Boolean(product && item.quantity >= product.available_quantity)}
+                            onClick={() => update(item.id, item.quantity + 1)}
+                          >
+                            <Plus size={13} />
+                          </button>
+                        </div>
+
+                        <div className="cart-item-price-block">
+                          <div className="cart-item-total-price">
+                            {formatPrice(lineTotal)}
+                          </div>
+                          {item.quantity > 1 && (
+                            <div className="cart-item-unit-price">
+                              {formatPrice(unitPrice)} each
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          className="cart-item-remove-btn"
+                          aria-label="Remove item"
+                          onClick={() => remove(item.id)}
+                          title="Remove item from cart"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+
+              {/* Bottom Actions */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 16, borderTop: '1px solid var(--lp-border)' }}>
+                <Link to="/marketplace" className="cart-secondary-btn" style={{ width: 'auto' }}>
+                  ← Continue Shopping
+                </Link>
+                <button
+                  type="button"
+                  className="cart-secondary-btn"
+                  style={{ width: 'auto', color: '#ef4444', borderColor: 'transparent' }}
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to clear your cart?')) {
+                      clear()
+                    }
+                  }}
+                >
+                  <Trash2 size={14} />
+                  <span>Clear Cart</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Right Column: Order Summary & Checkout Action */}
+            <aside className="cart-summary-box">
+              <h2 className="cart-summary-title">Order Summary</h2>
+
+              <div className="cart-summary-breakdown">
+                <div className="cart-summary-row">
+                  <span>Subtotal ({totalItemCount} {totalItemCount === 1 ? 'item' : 'items'})</span>
+                  <strong>{formatPrice(subtotalMinor)}</strong>
+                </div>
+
+                <div className="cart-summary-row free-tag">
+                  <span>Digital Delivery</span>
+                  <span>Instant · FREE</span>
+                </div>
+
+                <div className="cart-summary-divider" />
+
+                <div className="cart-summary-total-row">
+                  <span className="cart-summary-total-label">Estimated Total</span>
+                  <span className="cart-summary-total-amount">
+                    {formatPrice(subtotalMinor)}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--lp-text-muted)', textAlign: 'right' }}>
+                  Official settlement currency: NGN ₦
+                </div>
+              </div>
+
+              {hasAnyIssues ? (
+                <button type="button" className="cart-primary-btn" disabled>
+                  <AlertTriangle size={16} /> Resolve Stock Issues to Checkout
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="cart-primary-btn"
+                  onClick={() => navigate('/checkout')}
+                  disabled={loading || !items.length || subtotalMinor <= 0}
+                >
+                  <Lock size={16} /> Proceed to Secure Checkout
+                </button>
+              )}
+
+              {/* Security & Guarantees */}
+              <div className="cart-trust-badges">
+                <div className="cart-trust-item">
+                  <div className="cart-trust-icon">
+                    <Zap size={12} />
+                  </div>
+                  <span>Instant automated digital delivery upon payment</span>
+                </div>
+                <div className="cart-trust-item">
+                  <div className="cart-trust-icon">
+                    <Lock size={12} />
+                  </div>
+                  <span>256-Bit SSL encrypted transaction</span>
+                </div>
+                <div className="cart-trust-item">
+                  <div className="cart-trust-icon">
+                    <ShieldCheck size={12} />
+                  </div>
+                  <span>100% verified server catalog stock</span>
+                </div>
+              </div>
+            </aside>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
+export default Cart

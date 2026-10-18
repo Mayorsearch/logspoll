@@ -12,6 +12,7 @@ const Admin = lazy(() => import('./admin/Admin'))
 import { CartProvider } from './lib/cart'
 import { CurrencyProvider } from './lib/currency'
 import { Cart } from './pages/Cart'
+import { Checkout } from './pages/Checkout'
 import { AuthProvider } from './auth/AuthProvider'
 import { ProtectedRoute, AdminGate } from './auth/ProtectedRoute'
 import { AuthPage, AuthCallback, RecoveryRedirect } from './pages/Auth'
@@ -64,9 +65,10 @@ export default function App() {
                 <Route path="auth/callback" element={<AuthCallback />} />
                 <Route path="admin/login" element={<AuthPage key="admin" mode="admin" />} />
 
+                <Route path="cart" element={<Cart />} />
+
                 <Route element={<ProtectedRoute />}>
-                  <Route path="cart" element={<Cart />} />
-                  <Route path="checkout" element={<Cart checkout />} />
+                  <Route path="checkout" element={<Checkout />} />
                   <Route path="dashboard" element={<DashboardLayout />}>
                     <Route index element={<CustomerRecords key="overview" mode="overview" />} />
                     <Route path="profile" element={<Profile />} />
