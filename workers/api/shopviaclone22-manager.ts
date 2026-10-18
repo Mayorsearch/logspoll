@@ -4,6 +4,7 @@ import { HttpError as CredentialError } from '../../server/auth.ts'
 import { openCredential, sealCredential } from '../../server/supplier-crypto.ts'
 import {
   ShopViaError,
+  fetchShopViaProfile,
   fetchShopViaCatalog,
   normalizeShopViaCatalog,
   type NormalizedProduct,
@@ -121,16 +122,38 @@ export async function shopviaclone22Admin(request: Request, env: ApiEnv) {
     if (!row) throw new HttpError(409, 'Configure ShopViaClone22 credentials first.')
     try {
       const apiKey = await openCredential(row.ciphertext, row.nonce, 'shopviaclone22', env.SUPPLIER_ENCRYPTION_KEY)
-      const data = await fetchShopViaCatalog(apiKey, row.base_url)
-      const normalized = normalizeShopViaCatalog(data, 'NGN')
+      // Task 3: Use /profile.php for initial read-only connection test
+      const profile = await fetchShopViaProfile(apiKey, row.base_url)
+
+      const username = profile.username || (typeof profile.user === 'object' && (profile.user as any)?.username) || 'Verified Account'
+      const balance = profile.balance !== undefined ? String(profile.balance) : undefined
+      const currency = profile.currency || 'NGN'
+
+      const statusMsg = `Connected via profile.php: ${username}${balance ? ` (Balance: ${currency} ${balance})` : ''}`
+      await db
+        .prepare("UPDATE shopviaclone22_connection SET last_status=?, last_success=? WHERE id='shopviaclone22'")
+        .bind(statusMsg, Date.now())
+        .run()
+        .catch(() => {})
+
       return json({
         connected: true,
-        total: normalized.products.length,
-        categories: normalized.categories.length,
+        message: statusMsg,
+        username,
+        balance,
+        currency,
       })
     } catch (error) {
-      const message = error instanceof ShopViaError ? error.message : 'Supplier connection test failed.'
+      const rawMsg = error instanceof ShopViaError ? error.message : (error instanceof Error ? error.message : 'Supplier connection test failed.')
+      const message = rawMsg.replace(/api_key=[^&\s]+/gi, 'api_key=[REDACTED]')
       const status = error instanceof ShopViaError ? error.status : 502
+
+      await db
+        .prepare("UPDATE shopviaclone22_connection SET last_status=? WHERE id='shopviaclone22'")
+        .bind(message.slice(0, 500))
+        .run()
+        .catch(() => {})
+
       return json({ connected: false, error: message, layer: 'supplier', provider_status: status }, 200)
     }
   }
@@ -206,13 +229,20 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
       await db.prepare("SELECT id FROM categories WHERE slug='server3' OR active=1 ORDER BY CASE WHEN slug='server3' THEN 0 ELSE 1 END LIMIT 1").first<{ id: string }>()
     )?.id
 
-    // 2. Query supplier automation settings and category rules
+    // 2. Query global pricing config (50% markup = 5000 bps) and supplier automation settings
+    const globalCfg = await db
+      .prepare("SELECT markup_bps, auto_publish, automatic_pricing, auto_approve FROM global_pricing_config WHERE id='global'")
+      .first<{ markup_bps: number; auto_publish: number; automatic_pricing: number; auto_approve: number }>()
+      .catch(() => null)
+
     const pol = await db
       .prepare("SELECT markup_bps, automatic_pricing, auto_publish, auto_approve FROM supplier_automation WHERE provider='shopviaclone22'")
       .first<{ markup_bps: number; automatic_pricing: number; auto_publish: number; auto_approve: number }>()
-    const defaultMarkup = pol?.markup_bps ?? 2000
-    const autoPublish = pol?.auto_publish === 1
-    const autoApprove = pol?.auto_approve === 1
+      .catch(() => null)
+
+    const defaultMarkup = globalCfg?.markup_bps ?? pol?.markup_bps ?? 5000
+    const autoPublish = (globalCfg?.auto_publish === 1) || (pol?.auto_publish === 1)
+    const autoApprove = (globalCfg?.auto_approve === 1) || (pol?.auto_approve === 1)
 
     const catRules = (
       await db.prepare('SELECT category_id, markup_bps, trusted, delivery_type, authorization_reference FROM supplier_category_rules WHERE provider=?').bind('shopviaclone22').all<{
@@ -329,14 +359,15 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
 
     await commit(writes)
   } catch (error) {
-    const message = error instanceof ShopViaError ? error.message : 'ShopViaClone22 sync failed.'
+    const rawMsg = error instanceof ShopViaError ? error.message : (error instanceof Error ? error.message : 'ShopViaClone22 sync failed.')
+    const message = rawMsg.replace(/api_key=[^&\s]+/gi, 'api_key=[REDACTED]')
     await db
       .prepare(
         `UPDATE shopviaclone22_connection
          SET last_status=?, next_attempt=?, lease_owner=NULL, lease_until=NULL
          WHERE id='shopviaclone22' AND revision=? AND lease_owner=?`
       )
-      .bind(message, Date.now() + 60000, row.revision, owner)
+      .bind(message.slice(0, 500), Date.now() + 60000, row.revision, owner)
       .run()
   }
 }
