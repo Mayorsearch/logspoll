@@ -2,7 +2,7 @@ import {safeProductImage} from '../src/lib/product-images.ts'
 /** HStora's documented read-only API. Never invokes orders, wallet charges or delivery endpoints. */
 export const HSTORA_ORIGIN='https://hstora.com'
 export const HSTORA_STOREFRONT_CATEGORY='server1'
-export type HstoraCredentials={key:string;secret:string;allowedOrigin?:string}
+export type HstoraCredentials={key:string;secret:string;allowedOrigin?:string;baseUrl?:string}
 export class HstoraError extends Error {
  readonly status:number
  readonly retryAfterMs:number
@@ -19,7 +19,7 @@ function text(value:unknown,max:number){if(typeof value!=='string')return '';if(
 
 export async function hstoraHeaders(credentials:HstoraCredentials,path:string,query:string,timestamp=String(Math.floor(Date.now()/1000)),nonce=crypto.randomUUID().replaceAll('-','')){
  const key=credentials.key.trim(),secret=credentials.secret.trim()
- if(!/^hs_pk_[A-Za-z0-9_-]+$/.test(key)||!/^hs_sk_[A-Za-z0-9_-]+$/.test(secret)||key.length>256||secret.length>1024)throw new HstoraError('HStora key and signing secret are required.',503)
+ if(!/^hs_pk_[A-Za-z0-9_-]+$/.test(key)||!/^hs_sk_[A-Za-z0-9_-]+$/.test(secret)||key.length>256||secret.length>1024)throw new HstoraError('Invalid HStora credential format. Enter the API key (hs_pk_) and API signing secret (hs_sk_), not the webhook secret.',400)
  if(!/^\/api\/v1\/(?:catalog|products\/[1-9]\d{0,15})$/.test(path)||/[\r\n#]/.test(query))throw new HstoraError('Unsupported HStora resource.',400)
  const canonical=['GET',path,query,timestamp,nonce,''].join('\n')
  const imported=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign'])
@@ -39,12 +39,19 @@ export async function hstoraRejection(response:Response){
  }
  const ray=response.headers.get('cf-ray'),requestId=response.headers.get('x-request-id')
  const identifier=(ray&&/^[a-fA-F0-9]{12,32}(?:-[A-Z]{3})?$/.test(ray)?` CF-Ray ${ray}.`:'')+(requestId&&/^[a-zA-Z0-9-]{8,80}$/.test(requestId)?` Request ID ${requestId}.`:'')
- return `HStora HTTP ${response.status}: ${reason}.${identifier}${reason==='origin_not_allowed'?' Configure this key’s allowed domain as logspoll.com; requests use Origin https://logspoll.com.':''}`
+ let extra = ''
+ if (reason === 'origin_not_allowed') {
+  extra = ' Configure this key’s allowed domain as logspoll.com; requests use Origin https://logspoll.com.'
+ } else if (reason === 'non-JSON gateway rejection' && response.status === 403) {
+  extra = ' Cloudflare WAF/Bot protection at supplier host blocked request. Check API Base URL and IP/domain whitelist in HStora.'
+ }
+ return `HStora HTTP ${response.status}: ${reason}.${identifier}${extra}`
 }
 async function get(credentials:HstoraCredentials,path:string,query='',timeout=20000){
  const headers=await hstoraHeaders(credentials,path,query)
+ const origin = (credentials.baseUrl?.trim().replace(/\/+$/, '') || HSTORA_ORIGIN)
  let response:Response
- try{response=await fetch(HSTORA_ORIGIN+path+(query?'?'+query:''),{method:'GET',headers,redirect:'manual',signal:AbortSignal.timeout(timeout)})}
+ try{response=await fetch(origin+path+(query?'?'+query:''),{method:'GET',headers,redirect:'manual',signal:AbortSignal.timeout(timeout)})}
  catch(error){throw new HstoraError(error instanceof Error&&['TimeoutError','AbortError'].includes(error.name)?'HStora request timed out.':'HStora connection failed.')}
  if(!response.ok){const retry=response.headers.get('Retry-After'),seconds=retry&&/^\d+$/.test(retry)?Number(retry):30;throw new HstoraError(await hstoraRejection(response),response.status,Math.min(3600000,Math.max(30000,seconds*1000)))}
  if(!response.headers.get('Content-Type')?.includes('application/json'))throw new HstoraError('HStora returned a non-JSON response.')

@@ -15,6 +15,7 @@ import HstoraReview from './HstoraReview'
 import HstoraManager from './HstoraManager'
 import Shopviaclone22Manager from './Shopviaclone22Manager'
 import SupplierAutomation from './SupplierAutomation'
+import ApiManager from './ApiManager'
 import { ProductArtwork } from '../components/ProductArtwork'
 import { storedProductImages } from '../lib/product-images'
 
@@ -47,6 +48,7 @@ const d1Nav = [
   { slug: 'orders', label: 'Orders', Icon: ShoppingBag },
   { slug: 'purchases', label: 'Purchases', Icon: ShoppingBag },
   { slug: 'reviews', label: 'Reviews', Icon: MessageSquare },
+  { slug: 'api-manager', label: 'API Manager', Icon: RefreshCw },
   { slug: 'server1', label: 'Server 1 · HStora', Icon: Plug },
   { slug: 'server2', label: 'Server 2 · YoungPG', Icon: Plug },
   { slug: 'server3', label: 'Server 3 · Shopviaclone22', Icon: Plug },
@@ -105,7 +107,8 @@ export default function CloudflareAdmin() {
     section === 'server1' ? 'server1' :
     section === 'server2' ? 'server2' :
     section === 'server3' ? 'server3' :
-    ['integrations','supplier-hub','api-manager'].includes(section??'') ? 'hub' :
+    section === 'api-manager' ? 'api-manager' :
+    ['integrations','supplier-hub'].includes(section??'') ? 'hub' :
     ['supplier-review'].includes(section??'')||tab==='supplier-api' ? 'review' :
     section === 'payments' ? 'payments' :
     recordSections.includes(section??'') ? 'records' : 'overview'
@@ -363,7 +366,7 @@ export default function CloudflareAdmin() {
               </button>
             </div>
           </div>
-          {serverTab === 'api' ? <HstoraManager /> : <HstoraReview provider="hstora" />}
+          {serverTab === 'api' ? <HstoraManager onComplete={refresh} /> : <HstoraReview provider="hstora" />}
         </div>
       )}
       {viewing==='server2' && (
@@ -423,6 +426,12 @@ export default function CloudflareAdmin() {
           </div>
           {serverTab === 'api' ? <Shopviaclone22Manager onComplete={refresh} /> : <SupplierAutomation />}
         </div>
+      )}
+      {viewing==='api-manager' && (
+        <ApiManager
+          initialTab={tab === 'server2' ? 'server2' : tab === 'server3' ? 'server3' : tab === 'pricing' ? 'pricing' : 'server1'}
+          onComplete={refresh}
+        />
       )}
       {viewing==='hub'&&<SupplierAutomation/>}
       {viewing==='review'&&<CloudflareCatalog onComplete={refresh}/>}

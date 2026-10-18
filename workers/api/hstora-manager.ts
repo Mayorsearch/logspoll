@@ -8,25 +8,55 @@ import type {ApiEnv,Statement} from './types.ts'
 type Connection={enabled:number;ciphertext:string;nonce:string;revision:number;requested:number;job_id:string|null;page:number;phase:string;total:number|null;next_attempt:number;last_success:number|null}
 export async function hstoraAdmin(request:Request,env:ApiEnv){
  await adminActor(request,env);const db=env.DB!
- if(request.method==='GET')return json({provider:'hstora',connection:await db.prepare("SELECT enabled,revision,requested,page,phase,total,scanned,next_attempt,last_success,last_status,lease_until,fx_rate_minor,(SELECT count(*) FROM hstora_catalog_items) AS imported,(SELECT count(*) FROM hstora_catalog_items WHERE json_array_length(json_extract(metadata,'$.images'))>0) AS with_images,(SELECT count(*) FROM hstora_catalog_items WHERE length(json_extract(metadata,'$.description'))>0) AS with_descriptions FROM hstora_connection WHERE id='hstora'").first()})
+ if(request.method==='GET'){
+  const conn = await db.prepare("SELECT enabled,revision,requested,page,phase,total,scanned,next_attempt,last_success,last_status,lease_until,fx_rate_minor,(SELECT count(*) FROM hstora_catalog_items) AS imported,(SELECT count(*) FROM hstora_catalog_items WHERE json_array_length(json_extract(metadata,'$.images'))>0) AS with_images,(SELECT count(*) FROM hstora_catalog_items WHERE length(json_extract(metadata,'$.description'))>0) AS with_descriptions FROM hstora_connection WHERE id='hstora'").first<Record<string,unknown>>()
+  let baseUrl = 'https://hstora.com'
+  const row = await db.prepare("SELECT ciphertext, nonce FROM hstora_connection WHERE id='hstora'").first<{ciphertext:string;nonce:string}>()
+  if (row?.ciphertext && row?.nonce && env.SUPPLIER_ENCRYPTION_KEY) {
+    try {
+      const creds = JSON.parse(await openCredential(row.ciphertext, row.nonce, 'hstora', env.SUPPLIER_ENCRYPTION_KEY)) as {baseUrl?:string}
+      if (creds.baseUrl) baseUrl = creds.baseUrl
+    } catch {}
+  }
+  return json({provider:'hstora',connection:conn ? {...conn, base_url: baseUrl} : null})
+ }
  if(request.method!=='POST')throw new HttpError(405,'Method not permitted.')
  const body=await bodyJSON(request,4096),row=await db.prepare("SELECT * FROM hstora_connection WHERE id='hstora'").first<Connection>()
  if(body.action==='save'){
-  if(typeof body.enabled!=='boolean')throw new HttpError(400,'Enabled must be boolean.')
+  let baseUrl = typeof body.base_url === 'string' && body.base_url.trim() ? body.base_url.trim().replace(/\/+$/, '') : 'https://hstora.com'
+  if (!baseUrl.startsWith('https://') && !baseUrl.startsWith('http://localhost')) throw new HttpError(400, 'Base URL must use HTTPS.')
   if(body.fx_rate_minor!==undefined&&(!Number.isSafeInteger(body.fx_rate_minor)||Number(body.fx_rate_minor)<=0||Number(body.fx_rate_minor)>1000000000))throw new HttpError(400,'Invalid NGN exchange rate.')
-  if(body.api_key!==undefined||body.api_secret!==undefined){
-   if(typeof body.api_key!=='string'||typeof body.api_secret!=='string')throw new HttpError(400,'Replace both HStora credentials together.')
-   const credentials={key:body.api_key.trim(),secret:body.api_secret.trim(),allowedOrigin:'https://logspoll.com'}
-   let sealed:Awaited<ReturnType<typeof sealCredential>>
-   try{await hstoraHeaders(credentials,'/api/v1/catalog','page=1&limit=1');sealed=await sealCredential(JSON.stringify(credentials),'hstora',env.SUPPLIER_ENCRYPTION_KEY)}
-   catch(error){if(error instanceof HstoraError)throw new HttpError(400,'Invalid HStora credential format. Enter the API key (hs_pk_) and API signing secret (hs_sk_), not the webhook secret.');if(error instanceof CredentialError)throw new HttpError(error.status,error.message);throw error}
-   await db.prepare("INSERT INTO hstora_connection(id,ciphertext,nonce,enabled,fx_rate_minor) VALUES('hstora',?,?,?,?) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext,nonce=excluded.nonce,enabled=excluded.enabled,fx_rate_minor=COALESCE(excluded.fx_rate_minor,hstora_connection.fx_rate_minor),revision=revision+1,lease_owner=NULL,lease_until=NULL,requested=0,phase='idle',job_id=NULL,page=1,total=NULL,scanned=0,last_status='Credentials replaced; test connection'").bind(sealed.ciphertext,sealed.nonce,body.enabled?1:0,body.fx_rate_minor===undefined?null:Number(body.fx_rate_minor)).run()
-   return json({saved:true})
-  }else if(!row)throw new HttpError(400,'Enter key and signing secret first.')
-  if(typeof body.enabled!=='boolean')throw new HttpError(400,'Enabled must be boolean.')
-  await db.prepare("UPDATE hstora_connection SET enabled=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora'").bind(body.enabled?1:0).run()
+  if(body.api_key!==undefined||body.api_secret!==undefined||body.base_url!==undefined){
+   let key = typeof body.api_key === 'string' ? body.api_key.trim() : ''
+   let secret = typeof body.api_secret === 'string' ? body.api_secret.trim() : ''
+   if ((!key || !secret) && row?.ciphertext && row?.nonce && env.SUPPLIER_ENCRYPTION_KEY) {
+    try {
+      const old = JSON.parse(await openCredential(row.ciphertext, row.nonce, 'hstora', env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials
+      if (!key) key = old.key
+      if (!secret) secret = old.secret
+      if (!body.base_url && old.baseUrl) baseUrl = old.baseUrl
+    } catch {}
+   }
+   if (key && secret) {
+    const credentials: HstoraCredentials = {key, secret, allowedOrigin:'https://logspoll.com', baseUrl}
+    let sealed:Awaited<ReturnType<typeof sealCredential>>
+    try{await hstoraHeaders(credentials,'/api/v1/catalog','page=1&limit=1');sealed=await sealCredential(JSON.stringify(credentials),'hstora',env.SUPPLIER_ENCRYPTION_KEY)}
+    catch(error){if(error instanceof HstoraError)throw new HttpError(400,'Invalid HStora credential format. Enter the API key (hs_pk_) and API signing secret (hs_sk_), not the webhook secret.');if(error instanceof CredentialError)throw new HttpError(error.status,error.message);throw error}
+    const nextEnabled = typeof body.enabled === 'boolean' ? (body.enabled ? 1 : 0) : (row?.enabled ?? 0)
+    await db.prepare("INSERT INTO hstora_connection(id,ciphertext,nonce,enabled,fx_rate_minor) VALUES('hstora',?,?,?,?) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext,nonce=excluded.nonce,enabled=excluded.enabled,fx_rate_minor=COALESCE(excluded.fx_rate_minor,hstora_connection.fx_rate_minor),revision=revision+1,lease_owner=NULL,lease_until=NULL,requested=0,phase='idle',job_id=NULL,page=1,total=NULL,scanned=0,last_status='Credentials saved; test connection'").bind(sealed.ciphertext,sealed.nonce,nextEnabled,body.fx_rate_minor===undefined?null:Number(body.fx_rate_minor)).run()
+    return json({saved:true})
+   } else if (!row) throw new HttpError(400, 'Enter API key and signing secret first.')
+  }
+  if(!row)throw new HttpError(400,'Configure HStora credentials first.')
+  if(typeof body.enabled==='boolean')await db.prepare("UPDATE hstora_connection SET enabled=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora'").bind(body.enabled?1:0).run()
   if(body.fx_rate_minor!==undefined)await db.prepare("UPDATE hstora_connection SET fx_rate_minor=? WHERE id='hstora'").bind(Number(body.fx_rate_minor)).run()
   return json({saved:true})
+ }
+ if(body.action==='toggle'){
+  if(!row)throw new HttpError(400,'Configure HStora credentials first.')
+  const nextEnabled = row.enabled ? 0 : 1
+  await db.prepare("UPDATE hstora_connection SET enabled=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora'").bind(nextEnabled).run()
+  return json({saved:true, enabled:Boolean(nextEnabled)})
  }
  if(!row)throw new HttpError(409,'Configure HStora credentials first.')
  if(body.action==='test'){
