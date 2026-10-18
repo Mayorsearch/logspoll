@@ -22,6 +22,7 @@ export type NormalizedProduct = {
   name: string
   description: string
   costMinor: number
+  usdCostMinor?: number
   currency: string
   stock: number
   raw: ShopViaProduct
@@ -77,12 +78,40 @@ export function parseDecimalToMinor(priceStr: string | number): number {
   return cost
 }
 
+export function convertUsdToNgnMinor(usdMinor: number, usdToNgnRate: number): number {
+  if (!Number.isFinite(usdMinor) || usdMinor < 0) {
+    throw new ShopViaError('Invalid USD minor amount for conversion.')
+  }
+  if (!Number.isFinite(usdToNgnRate) || usdToNgnRate <= 0) {
+    throw new ShopViaError('Invalid USD to NGN exchange rate.')
+  }
+  const ngnMinor = Math.round(usdMinor * usdToNgnRate)
+  if (!Number.isSafeInteger(ngnMinor)) {
+    throw new ShopViaError('Converted NGN minor amount exceeds safe integer range.')
+  }
+  return ngnMinor
+}
+
 export function normalizeShopViaCatalog(
   payload: unknown,
-  currency = 'NGN'
+  usdToNgnRateOrCurrency: number | string = 1500,
+  currencyParam = 'NGN'
 ): { categories: { id: string; name: string }[]; products: NormalizedProduct[] } {
   if (!payload || typeof payload !== 'object') {
     throw new ShopViaError('Invalid supplier response schema: object expected.')
+  }
+
+  let rate = 1500
+  let currency = 'NGN'
+
+  if (typeof usdToNgnRateOrCurrency === 'number') {
+    rate = usdToNgnRateOrCurrency > 0 ? usdToNgnRateOrCurrency : 1500
+    currency = currencyParam || 'NGN'
+  } else if (typeof usdToNgnRateOrCurrency === 'string') {
+    currency = usdToNgnRateOrCurrency
+    if (usdToNgnRateOrCurrency === 'NGN') {
+      rate = 1
+    }
   }
 
   const categories: { id: string; name: string }[] = []
@@ -136,7 +165,8 @@ export function normalizeShopViaCatalog(
 
         const name = safeText(prod.name, 200) || `Product ${prodId}`
         const description = safeText(prod.description, 10000) || name
-        const costMinor = parseDecimalToMinor(prod.price as string | number)
+        const usdCostMinor = parseDecimalToMinor(prod.price as string | number)
+        const costMinor = convertUsdToNgnMinor(usdCostMinor, rate)
         const rawStock = Number(prod.amount)
         const stock = Number.isSafeInteger(rawStock) && rawStock >= 0 && rawStock <= 1_000_000 ? rawStock : 0
 
@@ -147,6 +177,7 @@ export function normalizeShopViaCatalog(
           name,
           description,
           costMinor,
+          usdCostMinor,
           currency,
           stock,
           raw: {
@@ -179,7 +210,8 @@ export function normalizeShopViaCatalog(
 
       const name = safeText(prod.name, 200) || `Product ${prodId}`
       const description = safeText(prod.description, 10000) || name
-      const costMinor = parseDecimalToMinor(prod.price as string | number)
+      const usdCostMinor = parseDecimalToMinor(prod.price as string | number)
+      const costMinor = convertUsdToNgnMinor(usdCostMinor, rate)
       const rawStock = Number(prod.amount)
       const stock = Number.isSafeInteger(rawStock) && rawStock >= 0 && rawStock <= 1_000_000 ? rawStock : 0
 
@@ -190,6 +222,7 @@ export function normalizeShopViaCatalog(
         name,
         description,
         costMinor,
+        usdCostMinor,
         currency,
         stock,
         raw: {

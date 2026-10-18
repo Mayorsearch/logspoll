@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   parseDecimalToMinor,
+  convertUsdToNgnMinor,
   normalizeShopViaCatalog,
   fetchShopViaProfile,
   fetchShopViaCatalog,
@@ -223,3 +224,74 @@ test('purchaseShopViaProduct validates parameters and does not purchase on test'
     /Invalid purchase amount/
   )
 })
+
+test('ShopViaClone22 USD-to-NGN conversion and 50% markup calculate accurately', () => {
+  // $2.70 USD = 270 cents
+  const usdMinor = 270
+  const rate = 1500
+  const ngnCostMinor = convertUsdToNgnMinor(usdMinor, rate)
+  // $2.70 × 1,500 = ₦4,050.00 = 405,000 kobo
+  assert.equal(ngnCostMinor, 405000)
+
+  // 50% markup = 5000 bps
+  const selling = calculateSellingPrice(ngnCostMinor, {
+    id: 'markup',
+    enabled: true,
+    mode: 'markup',
+    rateBps: 5000,
+    fixedMinor: 0,
+    minProfitMinor: 0,
+    feeBps: 0,
+    feeFixedMinor: 0,
+    fxBufferBps: 0,
+    roundingMinor: 1,
+  })
+  // ₦4,050 × 1.50 = ₦6,075.00 = 607,500 kobo
+  assert.equal(selling.sellingPriceMinor, 607500)
+
+  // Additional examples from supplier catalog:
+  // Product 103: $2.20 × 1500 = ₦3,300 (330,000 kobo) -> ₦4,950 (495,000 kobo)
+  assert.equal(convertUsdToNgnMinor(220, 1500), 330000)
+  // Product 147: $1.60 × 1500 = ₦2,400 (240,000 kobo) -> ₦3,600 (360,000 kobo)
+  assert.equal(convertUsdToNgnMinor(160, 1500), 240000)
+  // Product 184: $2.30 × 1500 = ₦3,450 (345,000 kobo) -> ₦5,175 (517,500 kobo)
+  assert.equal(convertUsdToNgnMinor(230, 1500), 345000)
+  // Product 210: $0.90 × 1500 = ₦1,350 (135,000 kobo) -> ₦2,025 (202,500 kobo)
+  assert.equal(convertUsdToNgnMinor(90, 1500), 135000)
+
+  // Error cases
+  assert.throws(() => convertUsdToNgnMinor(-10, 1500), ShopViaError)
+  assert.throws(() => convertUsdToNgnMinor(100, 0), ShopViaError)
+  assert.throws(() => convertUsdToNgnMinor(100, -5), ShopViaError)
+  assert.throws(() => convertUsdToNgnMinor(NaN, 1500), ShopViaError)
+})
+
+test('normalizeShopViaCatalog converts USD prices to NGN at configured rate', () => {
+  const usdPayload = {
+    categories: [
+      {
+        id: '1',
+        name: 'Accounts',
+        products: [
+          {
+            id: '5',
+            name: 'PURE random country FB ( 30-1k friend )',
+            description: 'Year 2012-2017 aged account',
+            price: '2.7',
+            amount: 351,
+          },
+        ],
+      },
+    ],
+  }
+
+  const result = normalizeShopViaCatalog(usdPayload, 1500, 'NGN')
+  assert.equal(result.products.length, 1)
+  const item = result.products[0]
+  assert.equal(item.id, '5')
+  assert.equal(item.usdCostMinor, 270) // $2.70
+  assert.equal(item.costMinor, 405000) // ₦4,050.00
+  assert.equal(item.currency, 'NGN')
+  assert.equal(item.stock, 351)
+})
+

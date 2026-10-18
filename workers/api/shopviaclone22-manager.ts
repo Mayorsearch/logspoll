@@ -219,10 +219,6 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
   try {
     const apiKey = await openCredential(row.ciphertext, row.nonce, 'shopviaclone22', env.SUPPLIER_ENCRYPTION_KEY)
     const rawData = await fetchShopViaCatalog(apiKey, row.base_url)
-    const { categories, products } = normalizeShopViaCatalog(rawData, 'NGN')
-
-    const jobId = crypto.randomUUID()
-    const writes: Statement[] = []
 
     // 1. Map/create categories
     const defaultCat = (
@@ -231,9 +227,15 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
 
     // 2. Query global pricing config (50% markup = 5000 bps) and supplier automation settings
     const globalCfg = await db
-      .prepare("SELECT markup_bps, auto_publish, automatic_pricing, auto_approve FROM global_pricing_config WHERE id='global'")
-      .first<{ markup_bps: number; auto_publish: number; automatic_pricing: number; auto_approve: number }>()
+      .prepare("SELECT markup_bps, auto_publish, automatic_pricing, auto_approve, usd_to_ngn_rate FROM global_pricing_config WHERE id='global'")
+      .first<{ markup_bps: number; auto_publish: number; automatic_pricing: number; auto_approve: number; usd_to_ngn_rate?: number }>()
       .catch(() => null)
+
+    const usdToNgnRate = Number(globalCfg?.usd_to_ngn_rate) > 0 ? Number(globalCfg?.usd_to_ngn_rate) : 1500.0
+    const { categories, products } = normalizeShopViaCatalog(rawData, usdToNgnRate, 'NGN')
+
+    const jobId = crypto.randomUUID()
+    const writes: Statement[] = []
 
     const pol = await db
       .prepare("SELECT markup_bps, automatic_pricing, auto_publish, auto_approve FROM supplier_automation WHERE provider='shopviaclone22'")
