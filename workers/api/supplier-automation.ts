@@ -183,7 +183,7 @@ export async function getGlobalPricing(db: Database): Promise<GlobalPricingConfi
  const row = await db.prepare("SELECT * FROM global_pricing_config WHERE id='global'").first<GlobalPricingConfig>().catch(() => null)
  return row || {
   id: 'global',
-  markup_bps: 5000,
+  markup_bps: 7000,
   auto_publish: 0,
   automatic_pricing: 0,
   auto_approve: 0,
@@ -198,7 +198,7 @@ export async function bulkPublishYoungpg(db: Database, markup_bps: number, actor
  const now = Date.now()
  const defaultCat = (await db.prepare("SELECT id FROM categories WHERE active=1 ORDER BY sort_order,name LIMIT 1").first<{id:string}>())?.id
  const pol = await db.prepare("SELECT * FROM supplier_automation WHERE provider='youngpg'").first<Policy>().catch(()=>null)
- const markup = markup_bps > 0 ? markup_bps : (pol?.markup_bps ?? 5000)
+ const markup = markup_bps > 0 ? markup_bps : (pol?.markup_bps ?? 7000)
  const delType = pol?.delivery_type || 'Subscription activation'
  const ref = pol?.review_reference || 'YoungPG authorized reseller permission'
 
@@ -275,7 +275,7 @@ export async function bulkPublishHstora(db: Database, markup_bps: number, usdRat
  const now = Date.now()
  const hstoraCat = (await db.prepare("SELECT id FROM categories WHERE slug='server1' OR active=1 ORDER BY CASE WHEN slug='server1' THEN 0 ELSE 1 END LIMIT 1").first<{id:string}>())?.id
  const pol = await db.prepare("SELECT markup_bps FROM supplier_automation WHERE provider='hstora'").first<{markup_bps:number}>().catch(()=>null)
- const markup = markup_bps > 0 ? markup_bps : (pol?.markup_bps ?? 5000)
+ const markup = markup_bps > 0 ? markup_bps : (pol?.markup_bps ?? 7000)
  if (!hstoraCat) return 0
 
  const hstoraWrites = [
@@ -340,7 +340,7 @@ export async function bulkPublishShopViaClone22(db: Database, markup_bps: number
  const now = Date.now()
  const s3Cat = (await db.prepare("SELECT id FROM categories WHERE slug='server3' OR active=1 ORDER BY CASE WHEN slug='server3' THEN 0 ELSE 1 END LIMIT 1").first<{id:string}>())?.id
  const pol = await db.prepare("SELECT markup_bps FROM supplier_automation WHERE provider='shopviaclone22'").first<{markup_bps:number}>().catch(()=>null)
- const markup = markup_bps > 0 ? markup_bps : (pol?.markup_bps ?? 5000)
+ const markup = markup_bps > 0 ? markup_bps : (pol?.markup_bps ?? 7000)
  if (!s3Cat) return 0
 
  const s3Writes = [
@@ -402,7 +402,7 @@ export async function bulkPublishShopViaClone22(db: Database, markup_bps: number
  return (await db.prepare("SELECT count(*) n FROM shopviaclone22_catalog_items WHERE approval_status='approved'").first<{n:number}>())?.n ?? 0
 }
 
-export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000, usdRate = 1500.0) {
+export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 7000, usdRate = 1500.0) {
  if (!env.DB) return 0
  const db = env.DB
  let systemAdminId = (await db.prepare("SELECT user_id FROM user_roles WHERE role='admin' LIMIT 1").first<{user_id:string}>().catch(()=>null))?.user_id
@@ -564,7 +564,7 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
 
  // Save global pricing settings
  if(body.action==='save_global_pricing'){
-  const markup_bps=Number.isSafeInteger(body.markup_bps)?Number(body.markup_bps):5000
+  const markup_bps=Number.isSafeInteger(body.markup_bps)?Number(body.markup_bps):7000
   if(markup_bps<0||markup_bps>1000000)throw new HttpError(400,'Valid markup percentage required.')
   const auto_publish=body.auto_publish===false||body.auto_publish===0?0:1
   const automatic_pricing=body.automatic_pricing===false||body.automatic_pricing===0?0:1
@@ -593,7 +593,7 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
 
  // Global preview across all suppliers
  if(body.action==='global_preview'||(body.action==='preview'&&body.provider==='all')){
-  const markup_bps=Number.isSafeInteger(body.markup_bps)?Number(body.markup_bps):5000
+  const markup_bps=Number.isSafeInteger(body.markup_bps)?Number(body.markup_bps):7000
   const usdRate=typeof body.usd_to_ngn_rate==='number'&&body.usd_to_ngn_rate>0?body.usd_to_ngn_rate:1500.0
   const restore=body.restore_overrides===true
   const catRules=(await db.prepare('SELECT * FROM supplier_category_rules').all<CategoryRule>().catch(()=>({results:[]}))).results
@@ -677,7 +677,7 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
 
  // Global apply & publish all products
  if(body.action==='global_apply_and_publish'||(body.action==='approve_all'&&body.provider==='all')){
-  const markup_bps=Number.isSafeInteger(body.markup_bps)?Number(body.markup_bps):5000
+  const markup_bps=Number.isSafeInteger(body.markup_bps)?Number(body.markup_bps):7000
   const usdRate=typeof body.usd_to_ngn_rate==='number'&&body.usd_to_ngn_rate>0?body.usd_to_ngn_rate:1500.0
   const restore=body.restore_overrides===true
   const now=Date.now()

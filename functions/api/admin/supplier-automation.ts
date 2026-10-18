@@ -11,7 +11,7 @@ export async function onRequest({request,env}:{request:Request;env:ApiEnv}){
     const status = isHttp ? error.status : 500;
     const message = isHttp
       ? error.message
-      : 'Supplier automation temporarily unavailable due to an internal server error. Please retry or check server logs.';
+      : (error instanceof Error && error.message ? error.message : 'Supplier automation temporarily unavailable due to an internal server error. Please retry or check server logs.');
     console.error('supplier-automation diagnostic:', {
       status,
       error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : error,

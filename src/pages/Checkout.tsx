@@ -336,7 +336,7 @@ export function Checkout() {
               <span>Ref: {orderStatus.reference}</span>
             </div>
 
-            <div style={{ display: 'flex', gap: 12, width: '100%', marginTop: 12 }}>
+            <div className="order-success-actions">
               {isPending && (
                 <button
                   type="button"
@@ -452,16 +452,16 @@ export function Checkout() {
                     Secure Naira checkout powered by Bachs. Orders are created with atomic D1 inventory holds and verified cryptographic webhooks.
                   </p>
 
-                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: '0.75rem', color: 'var(--lp-text-muted)', borderTop: '1px solid var(--lp-border-subtle)', paddingTop: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div className="checkout-payment-channels">
+                    <div className="checkout-channel-item">
                       <Building2 size={13} color="#ff6500" />
                       <span>Direct Bank Transfer</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div className="checkout-channel-item">
                       <CreditCard size={13} color="#ff6500" />
                       <span>Debit & Credit Cards</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div className="checkout-channel-item">
                       <PhoneCall size={13} color="#ff6500" />
                       <span>USSD Channels</span>
                     </div>

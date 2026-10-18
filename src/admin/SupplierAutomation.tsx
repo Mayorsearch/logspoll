@@ -102,7 +102,7 @@ function formatCurrency(kobo: number) {
 export default function SupplierAutomation() {
   const [globalConfig, setGlobalConfig] = useState<GlobalPricingConfig>({
     id: 'global',
-    markup_bps: 5000,
+    markup_bps: 7000,
     auto_publish: 1,
     automatic_pricing: 1,
     auto_approve: 1,
@@ -110,7 +110,7 @@ export default function SupplierAutomation() {
     delivery_type: 'Subscription activation',
     updated_at: Date.now()
   })
-  const [globalPercent, setGlobalPercent] = useState('50')
+  const [globalPercent, setGlobalPercent] = useState('70')
   const [usdRate, setUsdRate] = useState('1500')
   const [autoPublish, setAutoPublish] = useState(true)
   const [autoPricing, setAutoPricing] = useState(true)
@@ -300,7 +300,7 @@ export default function SupplierAutomation() {
           </div>
           <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 700 }}>Supplier Pricing & Product Publishing Hub</h2>
           <p className="cf-muted" style={{ margin: '6px 0 0', maxWidth: 720, fontSize: '0.9rem' }}>
-            Permanent, fully automated pricing and publishing system for LogsPoll. All suppliers inherit the global 50% markup with automatic price updates on cost changes and continuous 24/7 background sync.
+            Permanent, fully automated pricing and publishing system for LogsPoll. All suppliers inherit the global 70% markup with automatic price updates on cost changes and continuous 24/7 background sync.
           </p>
         </div>
 
@@ -333,7 +333,7 @@ export default function SupplierAutomation() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.25)', padding: '12px 18px', borderRadius: 10, marginBottom: 20 }}>
         <Clock size={20} color="#10b981" style={{ flexShrink: 0 }} />
         <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
-          <strong style={{ color: '#10b981' }}>24/7 Cloudflare Background Automation Active:</strong> Cloudflare Cron Trigger (<code>* * * * *</code>) executes continuously in the background, automatically importing new supplier listings, applying the 50% markup rule, and publishing in-stock products live to marketplace without requiring manual clicks.
+          <strong style={{ color: '#10b981' }}>24/7 Cloudflare Background Automation Active:</strong> Cloudflare Cron Trigger (<code>* * * * *</code>) executes continuously in the background, automatically importing new supplier listings, applying the 70% markup rule, and publishing in-stock products live to marketplace without requiring manual clicks.
         </div>
       </div>
 
@@ -892,7 +892,7 @@ function Controls({
   stat?: Stats
   reload: () => void
 }) {
-  const [percent, setPercent] = useState(String((initial?.markup_bps ?? 5000) / 100))
+  const [percent, setPercent] = useState(String((initial?.markup_bps ?? 7000) / 100))
   const [pricing, setPricing] = useState(initial?.automatic_pricing !== 0)
   const [publish, setPublish] = useState(initial?.auto_publish !== 0)
   const [approve, setApprove] = useState(initial?.auto_approve !== 0)
@@ -902,7 +902,7 @@ function Controls({
 
   useEffect(() => {
     if (initial) {
-      setPercent(String((initial.markup_bps ?? 5000) / 100))
+      setPercent(String((initial.markup_bps ?? 7000) / 100))
       setPricing(initial.automatic_pricing !== 0)
       setPublish(initial.auto_publish !== 0)
       setApprove(initial.auto_approve !== 0)
