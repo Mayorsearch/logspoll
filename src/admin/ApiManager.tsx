@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import HstoraManager from './HstoraManager'
 import Shopviaclone22Manager from './Shopviaclone22Manager'
-import DigitalTopManager from './DigitalTopManager'
+import DigitalCoreManager from './DigitalCoreManager'
 import ExchangeRateManager from './ExchangeRateManager'
 import CloudflareCatalog from './CloudflareCatalog'
 import SupplierAutomation from './SupplierAutomation'
@@ -38,7 +38,7 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
       .then((res) => setS3Status(res.connection))
       .catch(() => {})
 
-    void cloudflareRequest<{ connection: { enabled: number; imported: number; in_stock: number; last_status: string } | null }>('/api/admin/digitaltop')
+    void cloudflareRequest<{ connection: { enabled: number; imported: number; in_stock: number; last_status: string } | null }>('/api/admin/digitalcore')
       .then((res) => setS4Status(res.connection))
       .catch(() => {})
   }, [activeTab])
@@ -215,7 +215,7 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
             }}
           >
             <Cpu size={15} />
-            <span>Server 4 · DigitalTop (AI Tools)</span>
+            <span>Server 4 — DigitalCore</span>
             {s4Status && (
               <span
                 style={{
@@ -332,7 +332,7 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
 
       {activeTab === 'server4' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <DigitalTopManager onComplete={onComplete} />
+          <DigitalCoreManager onComplete={onComplete} />
         </div>
       )}
 

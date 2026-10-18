@@ -30,7 +30,6 @@ export type StorefrontProduct = {
   featured: number
   available_quantity: number
   server_number?: number | null
-  supplier_name?: string | null
   created_at?: string | null
   category_name?: string | null
   category_slug?: string | null
@@ -129,7 +128,6 @@ function parseProductRow(row: Record<string, unknown>): StorefrontProduct {
     featured: Number(row.featured ?? 0),
     available_quantity: Number(row.available_quantity ?? 0),
     server_number: row.server_number !== undefined && row.server_number !== null ? Number(row.server_number) : null,
-    supplier_name: row.supplier_name ? String(row.supplier_name) : null,
     created_at: row.created_at ? String(row.created_at) : null,
     category_name: row.category_name ? String(row.category_name) : null,
     category_slug: row.category_slug ? String(row.category_slug) : null,
@@ -290,7 +288,7 @@ export async function handleStorefrontDiscovery(request: Request, env: ApiEnv): 
   const querySql = `
     SELECT p.id, p.category_id, p.slug, p.name, p.brand, p.description, p.price_minor,
            p.currency, p.delivery_type, p.image_path, p.term, p.features, p.supplier_image_urls,
-           p.featured, p.available_quantity, p.server_number, p.supplier_name, p.created_at,
+           p.featured, p.available_quantity, p.server_number, p.created_at,
            c.name AS category_name, c.slug AS category_slug
     FROM storefront_products p
     JOIN categories c ON c.id = p.category_id

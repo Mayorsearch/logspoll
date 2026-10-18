@@ -14,6 +14,7 @@ import AdminRecords from './AdminRecords'
 import HstoraReview from './HstoraReview'
 import HstoraManager from './HstoraManager'
 import Shopviaclone22Manager from './Shopviaclone22Manager'
+import DigitalCoreManager from './DigitalCoreManager'
 import SupplierAutomation from './SupplierAutomation'
 import ApiManager from './ApiManager'
 import StorefrontDiscoveryManager from './StorefrontDiscoveryManager'
@@ -53,7 +54,8 @@ const d1Nav = [
   { slug: 'discovery', label: 'Storefront Discovery', Icon: Sparkles },
   { slug: 'server1', label: 'Server 1 · HStora', Icon: Plug },
   { slug: 'server2', label: 'Server 2 · YoungPG', Icon: Plug },
-  { slug: 'server3', label: 'Server 3 · Shopviaclone22', Icon: Plug },
+  { slug: 'server3', label: 'Server 3 · ShopViaClone22', Icon: Plug },
+  { slug: 'server4', label: 'Server 4 · DigitalCore', Icon: Plug },
   { slug: 'integrations', label: 'Supplier Hub & Pricing', Icon: RefreshCw },
   { slug: 'support', label: 'Support tickets', Icon: LifeBuoy },
   { slug: 'settings', label: 'Website settings', Icon: Settings },
@@ -109,6 +111,7 @@ export default function CloudflareAdmin() {
     section === 'server1' ? 'server1' :
     section === 'server2' ? 'server2' :
     section === 'server3' ? 'server3' :
+    section === 'server4' ? 'server4' :
     section === 'api-manager' ? 'api-manager' :
     section === 'discovery' ? 'discovery' :
     ['integrations','supplier-hub'].includes(section??'') ? 'hub' :
@@ -337,7 +340,7 @@ export default function CloudflareAdmin() {
     </aside>
     {open && <button type="button" className="demo-backdrop" aria-label="Close navigation overlay" onClick={() => setOpen(false)}/>}
     <div className="demo-main"><main className="demo-content">
-      <header className="cf-header demo-heading"><div><div className="cf-eyebrow">LOGSPOLL CONTROL CENTER</div><h1>{viewing === 'overview' ? 'Platform Command Center' : viewing === 'server1' ? 'Server 1 · HStora' : viewing === 'server2' ? 'Server 2 · YoungPG' : viewing === 'server3' ? 'Server 3 · Shopviaclone22' : viewing === 'hub' ? 'Supplier Hub & Pricing' : viewing === 'review' ? 'Supplier reviews' : viewing==='records'?section:'Payment status'}</h1><p>Verified admin session: {session?.user.email ?? '—'}</p></div><button className="cf-btn secondary" onClick={() => void refresh()} disabled={busy || loading}>Refresh</button></header>
+      <header className="cf-header demo-heading"><div><div className="cf-eyebrow">LOGSPOLL CONTROL CENTER</div><h1>{viewing === 'overview' ? 'Platform Command Center' : viewing === 'server1' ? 'Server 1 · HStora' : viewing === 'server2' ? 'Server 2 · YoungPG' : viewing === 'server3' ? 'Server 3 · ShopViaClone22' : viewing === 'server4' ? 'Server 4 · DigitalCore' : viewing === 'hub' ? 'Supplier Hub & Pricing' : viewing === 'review' ? 'Supplier reviews' : viewing==='records'?section:'Payment status'}</h1><p>Verified admin session: {session?.user.email ?? '—'}</p></div><button className="cf-btn secondary" onClick={() => void refresh()} disabled={busy || loading}>Refresh</button></header>
       <p className="cf-warning" role="status">Cloudflare D1 production database. Supplier sync auto-approves and publishes live immediately. Payments remain disabled.</p>
       {loading && <p role="status">Loading administrator records…</p>}
       {error && <p className="cf-error" role="alert">{error}</p>}
@@ -428,6 +431,11 @@ export default function CloudflareAdmin() {
             </div>
           </div>
           {serverTab === 'api' ? <Shopviaclone22Manager onComplete={refresh} /> : <SupplierAutomation />}
+        </div>
+      )}
+      {viewing==='server4' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <DigitalCoreManager onComplete={refresh} />
         </div>
       )}
       {viewing==='api-manager' && (

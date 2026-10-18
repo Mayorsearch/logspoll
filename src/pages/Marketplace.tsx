@@ -253,16 +253,7 @@ export function Marketplace() {
     const isAffordable = product.price_minor <= affordableThresholdMinor;
 
     const serverNumber = product.server_number ?? 1;
-    const serverLabel =
-      serverNumber === 1
-        ? 'SERVER 1 · HStora'
-        : serverNumber === 2
-          ? 'SERVER 2 · YoungPG'
-          : serverNumber === 3
-            ? 'SERVER 3 · ShopViaClone22'
-            : serverNumber === 4
-              ? 'SERVER 4 · DigitalTop'
-              : 'SERVER 1';
+    const serverLabel = `SERVER ${serverNumber}`;
 
     return (
       <article className="compact-product-card" key={product.id}>
@@ -546,7 +537,7 @@ export function Marketplace() {
                   setParams(next, { replace: true });
                 }}
               >
-                <span>Server 1 · HStora</span>
+                <span>Server 1</span>
               </button>
 
               <button
@@ -561,7 +552,7 @@ export function Marketplace() {
                   setParams(next, { replace: true });
                 }}
               >
-                <span>Server 2 · YoungPG</span>
+                <span>Server 2</span>
               </button>
 
               <button
@@ -576,7 +567,7 @@ export function Marketplace() {
                   setParams(next, { replace: true });
                 }}
               >
-                <span>Server 3 · ShopViaClone22</span>
+                <span>Server 3</span>
               </button>
 
               <button
@@ -591,7 +582,7 @@ export function Marketplace() {
                   setParams(next, { replace: true });
                 }}
               >
-                <span>Server 4 · AI Tools</span>
+                <span>Server 4</span>
               </button>
             </div>
 

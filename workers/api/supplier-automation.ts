@@ -2,6 +2,7 @@ import {adminActor,bodyJSON} from './admin.ts'
 import {calculateSellingPrice} from '../../server/pricing.ts'
 import {nativeCostMinor,approveHstoraAutomatically} from './hstora-review.ts'
 import {approveYoungpgAutomatically} from './supplier-review.ts'
+import {bulkPublishDigitalCore} from './digitalcore-manager.ts'
 import {bulkPublishDigitalTop} from './digitaltop-manager.ts'
 import {restrictedCatalogText} from '../../server/youngpg.ts'
 import {HttpError,json} from './http.ts'
@@ -426,6 +427,14 @@ export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000
   totalPublished += await bulkPublishShopViaClone22(db, markup_bps, systemAdminId, false).catch(()=>0)
  }
 
+ const dcoreExists = await db.prepare("SELECT 1 FROM sqlite_master WHERE name='digitalcore_catalog_items'").first().catch(()=>null)
+ if (dcoreExists) {
+  const pendingS4 = (await db.prepare("SELECT count(*) n FROM digitalcore_catalog_items WHERE approval_status='pending' AND stock>0").first<{n:number}>().catch(()=>({n:0})))?.n ?? 0
+  if (pendingS4 > 0) {
+   totalPublished += await bulkPublishDigitalCore(db, markup_bps, usdRate, systemAdminId, false).catch(()=>0)
+  }
+ }
+
  const dtopExists = await db.prepare("SELECT 1 FROM sqlite_master WHERE name='digitaltop_catalog_items'").first().catch(()=>null)
  if (dtopExists) {
   const pendingS4 = (await db.prepare("SELECT count(*) n FROM digitaltop_catalog_items WHERE approval_status='pending' AND stock>0").first<{n:number}>().catch(()=>({n:0})))?.n ?? 0
@@ -536,6 +545,11 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
     approved:(await db.prepare("SELECT count(*) n FROM shopviaclone22_catalog_items WHERE approval_status='approved'").first<{n:number}>().catch(()=>({n:0})))?.n??0,
     published:(await db.prepare("SELECT count(*) n FROM products WHERE server_number=3 AND status='active' AND publication_verified=1").first<{n:number}>().catch(()=>({n:0})))?.n??0
    },
+   digitalcore:{
+    total:(await db.prepare("SELECT count(*) n FROM digitalcore_catalog_items").first<{n:number}>().catch(()=>({n:0})))?.n??0,
+    approved:(await db.prepare("SELECT count(*) n FROM digitalcore_catalog_items WHERE approval_status='approved'").first<{n:number}>().catch(()=>({n:0})))?.n??0,
+    published:(await db.prepare("SELECT count(*) n FROM products WHERE server_number=4 AND status='active' AND publication_verified=1").first<{n:number}>().catch(()=>({n:0})))?.n??0
+   },
    digitaltop:{
     total:(await db.prepare("SELECT count(*) n FROM digitaltop_catalog_items").first<{n:number}>().catch(()=>({n:0})))?.n??0,
     approved:(await db.prepare("SELECT count(*) n FROM digitaltop_catalog_items WHERE approval_status='approved'").first<{n:number}>().catch(()=>({n:0})))?.n??0,
@@ -593,13 +607,19 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
   // 3. ShopViaClone22 sample
   const s3Rows=(await db.prepare(`SELECT s.external_id id,s.name,3 server_number,'Server 3 · ShopViaClone22' server_name,s.category_id,cat.name category_name,s.cost_minor,s.selling_price_minor old_price_minor,s.stock,p.pricing_mode,p.price_minor override_price FROM shopviaclone22_catalog_items s LEFT JOIN categories cat ON cat.id=s.category_id LEFT JOIN products p ON p.id=s.product_id WHERE s.cost_minor>0 LIMIT 50`).all<any>().catch(()=>({results:[]}))).results
 
-  // 4. DigitalTop sample
+  // 4. DigitalCore sample (Server 4)
   let s4Rows: any[] = []
   let s4Total = 0
-  const dtopExists = await db.prepare("SELECT 1 FROM sqlite_master WHERE name='digitaltop_catalog_items'").first().catch(()=>null)
-  if (dtopExists) {
-   s4Rows = (await db.prepare(`SELECT s.external_id id,s.name,4 server_number,'Server 4 · DigitalTop' server_name,s.category_id,'AI Tools' category_name,s.cost_minor,s.selling_price_minor old_price_minor,s.stock,p.pricing_mode,p.price_minor override_price FROM digitaltop_catalog_items s LEFT JOIN products p ON p.id=s.product_id WHERE s.cost_minor>0 LIMIT 50`).all<any>().catch(()=>({results:[]}))).results
-   s4Total = (await db.prepare('SELECT count(*) n FROM digitaltop_catalog_items WHERE cost_minor>0').first<{n:number}>().catch(()=>({n:0})))?.n??0
+  const dcoreExists = await db.prepare("SELECT 1 FROM sqlite_master WHERE name='digitalcore_catalog_items'").first().catch(()=>null)
+  if (dcoreExists) {
+   s4Rows = (await db.prepare(`SELECT s.external_id id,s.name,4 server_number,'Server 4 — DigitalCore' server_name,s.category_id,'AI Tools' category_name,s.cost_minor,s.selling_price_minor old_price_minor,s.stock,p.pricing_mode,p.price_minor override_price FROM digitalcore_catalog_items s LEFT JOIN products p ON p.id=s.product_id WHERE s.cost_minor>0 LIMIT 50`).all<any>().catch(()=>({results:[]}))).results
+   s4Total = (await db.prepare('SELECT count(*) n FROM digitalcore_catalog_items WHERE cost_minor>0').first<{n:number}>().catch(()=>({n:0})))?.n??0
+  } else {
+   const dtopExists = await db.prepare("SELECT 1 FROM sqlite_master WHERE name='digitaltop_catalog_items'").first().catch(()=>null)
+   if (dtopExists) {
+    s4Rows = (await db.prepare(`SELECT s.external_id id,s.name,4 server_number,'Server 4 — DigitalCore' server_name,s.category_id,'AI Tools' category_name,s.cost_minor,s.selling_price_minor old_price_minor,s.stock,p.pricing_mode,p.price_minor override_price FROM digitaltop_catalog_items s LEFT JOIN products p ON p.id=s.product_id WHERE s.cost_minor>0 LIMIT 50`).all<any>().catch(()=>({results:[]}))).results
+    s4Total = (await db.prepare('SELECT count(*) n FROM digitaltop_catalog_items WHERE cost_minor>0').first<{n:number}>().catch(()=>({n:0})))?.n??0
+   }
   }
 
   const ypgTotal=(await db.prepare('SELECT count(*) n FROM staging_supplier_feed_items WHERE supplier_cost_minor>0').first<{n:number}>().catch(()=>({n:0})))?.n??0
@@ -612,7 +632,7 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
   let totalCalculatedProfit=0
 
   const items=allFeed.map(item=>{
-   const provider=item.server_number===1?'hstora':item.server_number===2?'youngpg':item.server_number===3?'shopviaclone22':'digitaltop'
+   const provider=item.server_number===1?'hstora':item.server_number===2?'youngpg':item.server_number===3?'shopviaclone22':'digitalcore'
    const catRule=item.category_id?catRules.find(r=>r.category_id===item.category_id&&r.provider===provider):null
    const effMarkup=catRule&&catRule.markup_bps>0?catRule.markup_bps:markup_bps
    const calculatedPrice=calculateSellingPrice(item.cost_minor,{id:'preview',enabled:true,mode:'markup',rateBps:effMarkup,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
@@ -680,6 +700,11 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
   totalApproved += await bulkPublishYoungpg(db, markup_bps, actor.id, restore)
   totalApproved += await bulkPublishHstora(db, markup_bps, usdRate, actor.id, restore)
   totalApproved += await bulkPublishShopViaClone22(db, markup_bps, actor.id, restore)
+
+  const dcoreExists = await db.prepare("SELECT 1 FROM sqlite_master WHERE name='digitalcore_catalog_items'").first().catch(()=>null)
+  if (dcoreExists) {
+   totalApproved += await bulkPublishDigitalCore(db, markup_bps, usdRate, actor.id, restore).catch(()=>0)
+  }
 
   const dtopExists = await db.prepare("SELECT 1 FROM sqlite_master WHERE name='digitaltop_catalog_items'").first().catch(()=>null)
   if (dtopExists) {

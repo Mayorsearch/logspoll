@@ -379,7 +379,7 @@ export function CustomerRecords({
           </div>
           <h1>Support &amp; Help Center</h1>
           <p className="dashboard-intro">
-            Need help with an order, account credentials, or supplier fulfillment? Our team is available 24/7.
+            Need help with an order, account credentials, or automated fulfillment? Our team is available 24/7.
           </p>
         </div>
 
@@ -505,7 +505,7 @@ export function CustomerRecords({
                 </details>
                 <details className="faq-accordion-item">
                   <summary>What if my order is marked pending?</summary>
-                  <p>Pending orders are automatically synchronized with supplier fulfillment APIs every 60 seconds. If not completed within 10 minutes, submit a ticket above.</p>
+                  <p>Pending orders are automatically synchronized with fulfillment networks every 60 seconds. If not completed within 10 minutes, submit a ticket above.</p>
                 </details>
                 <details className="faq-accordion-item">
                   <summary>How are credentials structured?</summary>
@@ -753,7 +753,7 @@ export function CustomerRecords({
           </div>
           <h1>My Orders</h1>
           <p className="dashboard-intro">
-            Track payment reconciliation, supplier processing, and order fulfillment status.
+            Track payment reconciliation, automated processing, and order fulfillment status.
           </p>
         </div>
 
@@ -1060,7 +1060,7 @@ export function CustomerRecords({
         <div className="section-header-row">
           <div>
             <h2>Recent Orders</h2>
-            <p className="section-subtitle">Real-time payment and supplier reconciliation log.</p>
+            <p className="section-subtitle">Real-time payment and order fulfillment status log.</p>
           </div>
           <Link to="/dashboard/orders" className="text-link">
             View All Orders →

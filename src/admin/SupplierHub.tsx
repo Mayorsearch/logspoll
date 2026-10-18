@@ -53,6 +53,7 @@ export default function SupplierHub() {
   const [hstora, setHstora] = useState<Hstora | null>(null)
   const [youngpg, setYoungpg] = useState<Supplier | null>(null)
   const [shopviaclone22, setShopviaclone22] = useState<ShopVia | null>(null)
+  const [digitalcore, setDigitalcore] = useState<any | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState<Record<string, boolean>>({})
@@ -63,6 +64,7 @@ export default function SupplierHub() {
       cloudflareRequest<{ connection: Hstora | null }>('/api/admin/hstora'),
       cloudflareRequest<{ suppliers: Supplier[] }>('/api/admin/catalog'),
       cloudflareRequest<{ connection: ShopVia | null }>('/api/admin/shopviaclone22'),
+      cloudflareRequest<{ connection: any | null }>('/api/admin/digitalcore'),
     ])
 
     if (results[0].status === 'fulfilled') {
@@ -77,11 +79,16 @@ export default function SupplierHub() {
       setShopviaclone22(results[2].value.connection)
       setLoaded((v) => ({ ...v, shopviaclone22: true }))
     }
+    if (results[3].status === 'fulfilled') {
+      setDigitalcore(results[3].value.connection)
+      setLoaded((v) => ({ ...v, digitalcore: true }))
+    }
 
     setErrors({
       hstora: results[0].status === 'rejected' ? (results[0].reason instanceof Error ? results[0].reason.message : 'Unavailable') : '',
       youngpg: results[1].status === 'rejected' ? (results[1].reason instanceof Error ? results[1].reason.message : 'Unavailable') : '',
       shopviaclone22: results[2].status === 'rejected' ? (results[2].reason instanceof Error ? results[2].reason.message : 'Unavailable') : '',
+      digitalcore: results[3].status === 'rejected' ? (results[3].reason instanceof Error ? results[3].reason.message : 'Unavailable') : '',
     })
 
     const rejectedMsgs = results
@@ -99,17 +106,17 @@ export default function SupplierHub() {
   }, [])
 
   async function action(prov: string, act: string) {
-    const row = prov === 'hstora' ? hstora : prov === 'shopviaclone22' ? shopviaclone22 : youngpg
+    const row = prov === 'hstora' ? hstora : prov === 'shopviaclone22' ? shopviaclone22 : prov === 'digitalcore' ? digitalcore : youngpg
     if (!row) return
     if (act === 'toggle' && row.enabled && !confirm(`Disable ${prov.toUpperCase()}? New syncs and purchases stop. Existing products remain.`)) return
 
     setBusy(true)
     try {
-      const endpoint = prov === 'hstora' ? '/api/admin/hstora' : prov === 'shopviaclone22' ? '/api/admin/shopviaclone22' : act === 'test' ? '/api/admin/supplier-manager' : '/api/admin/catalog'
+      const endpoint = prov === 'hstora' ? '/api/admin/hstora' : prov === 'shopviaclone22' ? '/api/admin/shopviaclone22' : prov === 'digitalcore' ? '/api/admin/digitalcore' : act === 'test' ? '/api/admin/supplier-manager' : '/api/admin/catalog'
       let body: Record<string, unknown>
       if (prov === 'hstora') {
         body = act === 'toggle' ? { action: 'save', enabled: !row.enabled } : { action: act }
-      } else if (prov === 'shopviaclone22') {
+      } else if (prov === 'shopviaclone22' || prov === 'digitalcore') {
         body = act === 'toggle' ? { action: 'toggle' } : { action: act }
       } else {
         body = act === 'toggle' ? { action: 'save', id: youngpg!.id, name: youngpg!.name, revision: youngpg!.revision, enabled: !youngpg!.enabled } : { action: act, id: youngpg!.id }
@@ -185,6 +192,7 @@ export default function SupplierHub() {
                 { id: 'hstora', name: 'Server 1 · HStora', row: hstora, count: hstora?.imported ?? 0 },
                 { id: 'youngpg', name: 'Server 2 · YoungPG', row: youngpg, count: youngpg?.scanned ?? youngpg?.total ?? 0 },
                 { id: 'shopviaclone22', name: 'Server 3 · ShopViaClone22', row: shopviaclone22, count: shopviaclone22?.imported ?? 0 },
+                { id: 'digitalcore', name: 'Server 4 — DigitalCore', row: digitalcore, count: digitalcore?.imported ?? 0 },
               ].map((item) => (
                 <section className="supplier-card" key={item.id}>
                   <div className="supplier-card-top">

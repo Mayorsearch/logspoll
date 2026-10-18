@@ -70,7 +70,24 @@ export async function recalculateAllUsdProducts(db: Database, usdRate: number, m
         AND EXISTS (SELECT 1 FROM hstora_catalog_items h WHERE h.product_id=products.id AND json_extract(h.metadata, '$.currency') = 'USD' AND h.selling_price_minor > 0 AND h.selling_price_minor <> products.price_minor)`)
   )
 
-  // 3. DigitalTop items (Server 4 AI tools, where raw_metadata contains price_usd)
+  // 3. DigitalCore & DigitalTop items (Server 4 AI tools, where raw_metadata contains USD price)
+  const dcoreExists = await db.prepare("SELECT 1 FROM sqlite_master WHERE name='digitalcore_catalog_items'").first().catch(() => null)
+  if (dcoreExists) {
+    statements.push(
+      db.prepare(`UPDATE digitalcore_catalog_items
+        SET
+          cost_minor = CAST(ROUND(CAST(json_extract(raw_metadata, '$.price') AS REAL) * ? * 100.0) AS INTEGER),
+          selling_price_minor = CAST(ROUND(
+            CAST(ROUND(CAST(json_extract(raw_metadata, '$.price') AS REAL) * ? * 100.0) AS INTEGER) * (1.0 + ? / 10000.0)
+          ) AS INTEGER)
+        WHERE json_valid(raw_metadata) AND CAST(json_extract(raw_metadata, '$.price') AS REAL) > 0`).bind(usdRate, usdRate, markupBps),
+      db.prepare(`UPDATE products
+        SET price_minor = (SELECT s4.selling_price_minor FROM digitalcore_catalog_items s4 WHERE s4.product_id=products.id)
+        WHERE server_number = 4 AND pricing_mode = 'auto'
+          AND EXISTS (SELECT 1 FROM digitalcore_catalog_items s4 WHERE s4.product_id=products.id AND s4.selling_price_minor > 0 AND s4.selling_price_minor <> products.price_minor)`)
+    )
+  }
+
   const dtopExists = await db.prepare("SELECT 1 FROM sqlite_master WHERE name='digitaltop_catalog_items'").first().catch(() => null)
   if (dtopExists) {
     statements.push(

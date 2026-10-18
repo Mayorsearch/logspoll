@@ -317,6 +317,7 @@ export function SiteLayout() {
             <Link to="/marketplace?server=1">Server 1 Products</Link>
             <Link to="/marketplace?server=2">Server 2 Products</Link>
             <Link to="/marketplace?server=3">Server 3 Products</Link>
+            <Link to="/marketplace?server=4">Server 4 Products</Link>
             <Link to="/marketplace?favorites=1">Favorites</Link>
           </nav>
 

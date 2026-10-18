@@ -132,7 +132,7 @@ export function Home() {
             <span className="feature-icon"><Zap size={24} /></span>
             <h3>Fast Access</h3>
             <p>
-              Immediate account credentials and digital access delivered automatically with transparent inventory across Server 1, Server 2, and Server 3.
+              Immediate account credentials and digital access delivered automatically with transparent inventory across Server 1, Server 2, Server 3, and Server 4.
             </p>
           </article>
 
@@ -205,7 +205,7 @@ export function Home() {
             <h2>Logical Server Network</h2>
           </div>
           <p>
-            LogsPoll coordinates products across three distinct logical server tiers to guarantee inventory diversity and high availability.
+            LogsPoll coordinates products across four distinct logical server tiers to guarantee inventory diversity and high availability.
           </p>
         </div>
 
@@ -281,11 +281,11 @@ export function Home() {
           {[
             {
               q: 'What is LogsPoll?',
-              a: 'LogsPoll is a premium digital marketplace offering verified accounts, subscriptions, and digital tools organized across three logical server tiers: Server 1, Server 2, and Server 3.'
+              a: 'LogsPoll is a premium digital marketplace offering verified accounts, subscriptions, and digital tools organized across four logical server tiers: Server 1, Server 2, Server 3, and Server 4.'
             },
             {
               q: 'How does server grouping work?',
-              a: 'Products from Server 1, Server 2, and Server 3 belonging to the same category (such as Facebook or Instagram) appear unified in that category, while maintaining independent server filters and verified stock.'
+              a: 'Products from Server 1, Server 2, Server 3, and Server 4 belonging to the same category (such as Facebook or Instagram) appear unified in that category, while maintaining independent server filters and verified stock.'
             },
             {
               q: 'How do I complete a purchase?',

@@ -8,6 +8,7 @@ import {supplierManager} from './supplier-manager.ts'
 import {hstoraReview} from './hstora-review.ts'
 import {hstoraAdmin,syncHstoraBatch} from './hstora-manager.ts'
 import {shopviaclone22Admin,syncShopViaClone22Batch} from './shopviaclone22-manager.ts'
+import {digitalcoreAdmin,syncDigitalCoreBatch} from './digitalcore-manager.ts'
 import {digitaltopAdmin,syncDigitalTopBatch} from './digitaltop-manager.ts'
 import {exchangeRateAdmin,refreshExchangeRateCron} from './exchange-rate.ts'
 import {handleStorefrontDiscovery,handleAdminStorefrontDiscovery} from './storefront-discovery.ts'
@@ -75,7 +76,8 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     if (url.pathname === '/api/admin/hstora-review') return await hstoraReview(request,env)
     if (url.pathname === '/api/admin/hstora') return await hstoraAdmin(request,env)
     if (url.pathname === '/api/admin/shopviaclone22') return await shopviaclone22Admin(request, env)
-    if (url.pathname === '/api/admin/digitaltop') return await digitaltopAdmin(request, env)
+    if (url.pathname === '/api/admin/digitalcore') return await digitalcoreAdmin(request, env)
+    if (url.pathname === '/api/admin/digitaltop') return await digitalcoreAdmin(request, env)
     if (url.pathname === '/api/admin/exchange-rate') return await exchangeRateAdmin(request, env)
     if (url.pathname === '/api/admin/storefront-discovery') return await handleAdminStorefrontDiscovery(request, env)
     if (url.pathname === '/api/storefront/discovery') return await handleStorefrontDiscovery(request, env)
@@ -152,6 +154,7 @@ export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, cont
     await requireRuntime(env)
     await syncHstoraBatch(env).catch(()=>{})
     await syncShopViaClone22Batch(env).catch(()=>{})
+    await syncDigitalCoreBatch(env).catch(()=>{})
     await syncDigitalTopBatch(env).catch(()=>{})
     await env.DB!.prepare("INSERT INTO migration_metadata(key,value) VALUES('catalog_scheduler_heartbeat',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run()
     for(let batch=0;batch<4;batch++) {
