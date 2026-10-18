@@ -92,6 +92,7 @@ const providers = [
   ['hstora', 'Server 1 · HStora', 1],
   ['youngpg', 'Server 2 · YoungPG', 2],
   ['shopviaclone22', 'Server 3 · Shopviaclone22', 3],
+  ['digitalcore', 'Server 4 · DigitalCore', 4],
 ] as const
 
 function formatCurrency(kobo: number) {

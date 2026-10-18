@@ -515,7 +515,7 @@ export function Checkout() {
                           <span>Qty: {item.quantity}</span>
                           {product?.server_number && (
                             <span className={`cart-server-badge s${product.server_number}`} style={{ fontSize: '0.65rem', padding: '1px 5px' }}>
-                              Server {product.server_number}
+                              Server {product.server_number}{product.server_number === 4 ? ' (AI Tools)' : ''}
                             </span>
                           )}
                         </div>

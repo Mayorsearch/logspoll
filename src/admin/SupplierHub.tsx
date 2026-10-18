@@ -4,6 +4,7 @@ import HstoraManager from './HstoraManager'
 import HstoraReview from './HstoraReview'
 import CloudflareCatalog from './CloudflareCatalog'
 import Shopviaclone22Manager from './Shopviaclone22Manager'
+import DigitalCoreManager from './DigitalCoreManager'
 import { cloudflareRequest } from '../lib/cloudflare-auth'
 
 type Supplier = {
@@ -299,6 +300,8 @@ export default function SupplierHub() {
                   <CloudflareCatalog showHstora={false} onComplete={refresh} />
                 ) : managed === 'shopviaclone22' ? (
                   <Shopviaclone22Manager onComplete={refresh} />
+                ) : managed === 'digitalcore' ? (
+                  <DigitalCoreManager onComplete={refresh} />
                 ) : null}
               </section>
             )}
@@ -306,13 +309,28 @@ export default function SupplierHub() {
         ) : (
           <>
             <div className="supplier-tabs" role="tablist" aria-label="Supplier products">
-              {['hstora', 'youngpg', 'shopviaclone22'].map((id) => (
+              {['hstora', 'youngpg', 'shopviaclone22', 'digitalcore'].map((id) => (
                 <button role="tab" aria-selected={provider === id} key={id} onClick={() => setProvider(id)}>
-                  {id === 'hstora' ? 'SERVER 1 · HSTORA' : id === 'youngpg' ? 'SERVER 2 · YOUNGPG' : 'SERVER 3 · SHOPVIACLONE22'}
+                  {id === 'hstora' ? 'SERVER 1 · HSTORA' : id === 'youngpg' ? 'SERVER 2 · YOUNGPG' : id === 'shopviaclone22' ? 'SERVER 3 · SHOPVIACLONE22' : 'SERVER 4 · DIGITALCORE'}
                 </button>
               ))}
             </div>
-            {provider === 'shopviaclone22' ? (
+            {provider === 'digitalcore' ? (
+              <section className="supplier-card">
+                <h2>Server 4 · DigitalCore AI Tools Products</h2>
+                <p>
+                  {digitalcore?.imported ?? 0} products imported ({digitalcore?.in_stock ?? 0} in stock).
+                </p>
+                <div className="cf-actions">
+                  <button className="cf-btn" onClick={() => setManaged('digitalcore')}>
+                    Configure API
+                  </button>
+                  <button className="cf-btn secondary" disabled={busy || !digitalcore?.enabled} onClick={() => void action('digitalcore', 'sync')}>
+                    Sync Now
+                  </button>
+                </div>
+              </section>
+            ) : provider === 'shopviaclone22' ? (
               <section className="supplier-card">
                 <h2>Server 3 · ShopViaClone22 Products</h2>
                 <p>

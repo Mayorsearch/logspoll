@@ -1,3 +1,15 @@
+export interface OrderItem {
+  id: string
+  product_id?: string
+  product_name: string
+  category_name?: string
+  quantity: number
+  unit_price_minor?: number
+  server_number?: number | null
+  product_slug?: string | null
+  product_entitlements?: { instructions: string } | null
+}
+
 export interface Order {
   id: string
   reference: string
@@ -6,5 +18,5 @@ export interface Order {
   total_minor: number
   currency: string
   created_at: string
-  order_items?: { id: string; product_name: string; quantity: number; product_entitlements: { instructions: string } | null }[]
+  order_items?: OrderItem[]
 }

@@ -76,10 +76,41 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
   }
   if (url.pathname === '/api/orders' || url.pathname === '/api/v1/orders') {
     if (!user) throw new HttpError(401, 'Verified sign-in required.')
-    const rows = await db.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,created_at FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<{ id: string; payment_status: string; fulfillment_status: string }>()
-    if (url.searchParams.get('purchases') !== 'true') return json({ records: rows.results })
-    const items = await db.prepare("SELECT i.id,i.order_id,i.product_name,i.quantity,e.instructions FROM order_items i JOIN orders o ON o.id=i.order_id LEFT JOIN product_entitlements e ON e.order_item_id=i.id WHERE o.customer_id=? AND o.payment_status='paid' AND o.fulfillment_status='delivered' AND o.id IN (SELECT id FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 50)").bind(user.id, user.id).all<{ id: string; order_id: string; product_name: string; quantity: number; instructions: string | null }>()
-    return json({ records: rows.results.filter(o => o.payment_status === 'paid' && o.fulfillment_status === 'delivered').map(o => ({ ...o, order_items: items.results.filter(i => i.order_id === o.id).map(i => ({ id: i.id, product_name: i.product_name, quantity: i.quantity, product_entitlements: i.instructions ? { instructions: i.instructions } : null })) })) })
+    const isPurchases = url.searchParams.get('purchases') === 'true'
+    const rows = await db.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,created_at FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<{ id: string; reference: string; payment_status: string; fulfillment_status: string; total_minor: number; currency: string; created_at: string }>()
+
+    const hasServer = Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('products') WHERE name='server_number'").first().catch(() => null))
+    const serverCol = hasServer ? 'p.server_number' : 'NULL AS server_number'
+
+    const items = await db.prepare(
+      `SELECT i.id, i.order_id, i.product_id, i.product_name, i.category_name, i.quantity, i.unit_price_minor, ${serverCol}, p.slug AS product_slug
+              ${isPurchases ? ', CASE WHEN o.payment_status=\'paid\' AND o.fulfillment_status=\'delivered\' THEN e.instructions ELSE NULL END AS instructions' : ''}
+       FROM order_items i
+       JOIN orders o ON o.id = i.order_id
+       LEFT JOIN products p ON p.id = i.product_id
+       ${isPurchases ? 'LEFT JOIN product_entitlements e ON e.order_item_id = i.id' : ''}
+       WHERE o.customer_id = ? AND o.id IN (SELECT id FROM orders WHERE customer_id = ? ORDER BY created_at DESC LIMIT 50)`
+    ).bind(user.id, user.id).all<{ id: string; order_id: string; product_id: string; product_name: string; category_name: string; quantity: number; unit_price_minor: number; server_number: number | null; product_slug: string | null; instructions?: string | null }>()
+
+    const mappedOrders = rows.results.map(o => ({
+      ...o,
+      order_items: items.results.filter(i => i.order_id === o.id).map(i => ({
+        id: i.id,
+        product_id: i.product_id,
+        product_name: i.product_name,
+        category_name: i.category_name,
+        quantity: i.quantity,
+        unit_price_minor: i.unit_price_minor,
+        server_number: i.server_number,
+        product_slug: i.product_slug,
+        ...(isPurchases ? { product_entitlements: i.instructions ? { instructions: i.instructions } : null } : {}),
+      }))
+    }))
+
+    if (isPurchases) {
+      return json({ records: mappedOrders.filter(o => o.payment_status === 'paid' && o.fulfillment_status === 'delivered') })
+    }
+    return json({ records: mappedOrders })
   }
   return null
 }

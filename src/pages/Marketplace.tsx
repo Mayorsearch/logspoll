@@ -253,7 +253,7 @@ export function Marketplace() {
     const isAffordable = product.price_minor <= affordableThresholdMinor;
 
     const serverNumber = product.server_number ?? 1;
-    const serverLabel = `SERVER ${serverNumber}`;
+    const serverLabel = serverNumber === 4 ? 'SERVER 4 (AI TOOLS)' : `SERVER ${serverNumber}`;
 
     return (
       <article className="compact-product-card" key={product.id}>
@@ -395,7 +395,7 @@ export function Marketplace() {
               <div>
                 <h1 className="store-title">Products Store</h1>
                 <p className="store-subtitle">
-                  Browse our multi-server catalog of verified digital accounts and tools across Server 1, Server 2, Server 3, and Server 4.
+                  Browse our multi-server catalog of verified digital accounts and tools across Server 1, Server 2, Server 3, and Server 4 (AI Tools).
                 </p>
               </div>
             </div>
@@ -582,7 +582,7 @@ export function Marketplace() {
                   setParams(next, { replace: true });
                 }}
               >
-                <span>Server 4</span>
+                <span>Server 4 (AI Tools)</span>
               </button>
             </div>
 

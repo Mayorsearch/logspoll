@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link, NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { 
   LogOut, PackageOpen, House, UserRound, 
   ShoppingBag, ShieldCheck, ArrowRight, Heart, BookOpen, 
@@ -176,13 +176,51 @@ export function DashboardLayout() {
   )
 }
 
-function CopyableInstruction({ text }: { text: string }) {
+function CopyableInstruction({
+  text,
+  productName,
+  orderRef,
+}: {
+  text: string
+  productName?: string
+  orderRef?: string
+}) {
   const [copied, setCopied] = useState(false)
+  const [showInstructions, setShowInstructions] = useState(false)
 
   const handleCopy = () => {
     void navigator.clipboard.writeText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handleDownload = () => {
+    const content = [
+      '========================================',
+      'LOGSPOLL DIGITAL DELIVERY VAULT',
+      '========================================',
+      `Product: ${productName || 'Digital Product'}`,
+      orderRef ? `Order Reference: ${orderRef}` : '',
+      `Delivered: ${new Date().toISOString()}`,
+      '----------------------------------------',
+      'CREDENTIALS / ACCESS INSTRUCTIONS:',
+      text,
+      '----------------------------------------',
+      'Keep this information confidential. Delivered securely by LogsPoll (https://logspoll.com).',
+      '========================================',
+    ]
+      .filter(Boolean)
+      .join('\n')
+
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${(orderRef || 'delivery').toLowerCase()}-credentials.txt`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
   }
 
   return (
@@ -191,12 +229,62 @@ function CopyableInstruction({ text }: { text: string }) {
         <span className="credential-title">
           <Key size={13} /> Delivery Credentials &amp; Access Details
         </span>
-        <button onClick={handleCopy} className="credential-copy-btn" type="button">
-          {copied ? <Check size={13} className="text-green-500" /> : <Copy size={13} />}
-          <span>{copied ? 'Copied' : 'Copy'}</span>
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setShowInstructions((v) => !v)}
+            className="credential-copy-btn"
+            type="button"
+            title="View Usage Instructions"
+            style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+          >
+            <BookOpen size={12} />
+            <span>{showInstructions ? 'Hide Guide' : 'Instructions'}</span>
+          </button>
+          <button
+            onClick={handleDownload}
+            className="credential-copy-btn"
+            type="button"
+            title="Download credentials as text file"
+            style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+          >
+            <Download size={12} />
+            <span>Download</span>
+          </button>
+          <button
+            onClick={handleCopy}
+            className="credential-copy-btn"
+            type="button"
+            style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+          >
+            {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+            <span>{copied ? 'Copied' : 'Copy'}</span>
+          </button>
+        </div>
       </div>
       <pre className="delivery-instructions">{text}</pre>
+      {showInstructions && (
+        <div
+          style={{
+            marginTop: 8,
+            padding: '10px 12px',
+            background: 'var(--lp-page-bg)',
+            borderRadius: 8,
+            border: '1px solid var(--lp-border)',
+            fontSize: '0.775rem',
+            lineHeight: 1.5,
+            color: 'var(--lp-text-muted)',
+          }}
+        >
+          <strong style={{ display: 'block', color: 'var(--lp-text-main)', marginBottom: 3 }}>
+            💡 Usage &amp; Access Guide:
+          </strong>
+          <ul style={{ margin: 0, paddingLeft: 16 }}>
+            <li>Standard account format: <code>Username/Email | Password | 2FA / Backup Key</code>.</li>
+            <li>For software/AI tools licenses, copy the activation code into the platform's subscription screen.</li>
+            <li>Do not share access details. If you experience activation issues, use the <strong>Contact Support</strong> button below.</li>
+          </ul>
+        </div>
+      )}
     </div>
   )
 }
@@ -233,6 +321,17 @@ export function CustomerRecords({
 
   // Wallet state (check if wallet functionality is enabled)
   const [walletEnabled] = useState(false) // Set to false: wallet ledger not active, direct payment used
+
+  const [searchParams] = useSearchParams()
+
+  // Pre-fill support ticket from order reference in query parameter
+  useEffect(() => {
+    const ref = searchParams.get('ref')
+    if (ref) {
+      setSupportOrderRef(ref)
+      setSupportSubject(`Order Support: ${ref}`)
+    }
+  }, [searchParams])
 
   // Fetch orders from D1
   useEffect(() => {
@@ -561,7 +660,7 @@ export function CustomerRecords({
                   />
                   {product.server_number ? (
                     <span className={`server-badge server-badge-${product.server_number}`}>
-                      Server {product.server_number}
+                      Server {product.server_number}{product.server_number === 4 ? ' (AI Tools)' : ''}
                     </span>
                   ) : null}
                 </div>
@@ -717,11 +816,22 @@ export function CustomerRecords({
                     <div className="target-purchase-expanded-vault">
                       {items.map((item) => (
                         <div key={item.id} className="vault-item-block">
-                          <h4 className="vault-item-name">
-                            {item.product_name} <span className="item-qty">× {item.quantity}</span>
-                          </h4>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+                            <h4 className="vault-item-name" style={{ margin: 0 }}>
+                              {item.product_name} <span className="item-qty">× {item.quantity}</span>
+                            </h4>
+                            {item.server_number ? (
+                              <span className={`server-badge server-badge-${item.server_number}`} style={{ fontSize: '0.7rem', padding: '2px 8px' }}>
+                                Server {item.server_number}{item.server_number === 4 ? ' (AI Tools)' : ''}
+                              </span>
+                            ) : null}
+                          </div>
                           {item.product_entitlements?.instructions ? (
-                            <CopyableInstruction text={item.product_entitlements.instructions} />
+                            <CopyableInstruction
+                              text={item.product_entitlements.instructions}
+                              productName={item.product_name}
+                              orderRef={order.reference}
+                            />
                           ) : (
                             <p className="delivery-pending-note">
                               Access details are being processed or delivered via secure email. Contact support if needed.
@@ -732,6 +842,17 @@ export function CustomerRecords({
                       ))}
                     </div>
                   )}
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+                    <Link
+                      to={`/dashboard/support?ref=${encodeURIComponent(order.reference)}`}
+                      className="button button-outline button-small"
+                      style={{ fontSize: '0.75rem', gap: 6 }}
+                    >
+                      <HelpCircle size={13} />
+                      <span>Need Help With This Order?</span>
+                    </Link>
+                  </div>
                 </article>
               )
             })}
@@ -855,7 +976,8 @@ export function CustomerRecords({
                       <span className={`status-pill payment-${order.payment_status}`}>
                         {order.payment_status === 'paid' && <CheckCircle2 size={12} />}
                         {order.payment_status === 'pending' && <Clock size={12} />}
-                        {order.payment_status === 'failed' && <XCircle size={12} />}
+                        {(order.payment_status === 'failed' || order.payment_status === 'cancelled') && <XCircle size={12} />}
+                        {order.payment_status === 'refunded' && <ShieldCheck size={12} />}
                         <span className="capitalize">{order.payment_status}</span>
                       </span>
                     </div>
@@ -864,31 +986,95 @@ export function CustomerRecords({
                       <span className="status-label">Fulfillment:</span>
                       <span className={`status-pill delivery-${order.fulfillment_status}`}>
                         {order.fulfillment_status === 'delivered' && <CheckCircle2 size={12} />}
+                        {order.fulfillment_status === 'processing' && <RefreshCw size={12} className="spin-slow" />}
                         {order.fulfillment_status === 'pending' && <Clock size={12} />}
-                        {order.fulfillment_status === 'failed' && <XCircle size={12} />}
+                        {order.fulfillment_status === 'failed' && <AlertCircle size={12} />}
                         <span className="capitalize">{order.fulfillment_status}</span>
                       </span>
                     </div>
                   </div>
 
-                  <div className="order-card-footer">
-                    {isDelivered && (
-                      <Link to="/dashboard/purchases" className="button button-orange button-small">
-                        <Download size={14} />
-                        <span>View Downloads &amp; Vault</span>
-                      </Link>
-                    )}
-                    {isPending && (
-                      <span className="pending-status-note">
-                        <Clock size={14} className="spin-slow" /> Supplier sync in progress...
-                      </span>
-                    )}
-                    {isFailed && (
-                      <Link to={`/dashboard/support`} className="button button-outline button-small">
-                        <HelpCircle size={14} />
-                        <span>Report Issue / Support</span>
-                      </Link>
-                    )}
+                  {/* Detailed Items Breakdown */}
+                  {order.order_items && order.order_items.length > 0 && (
+                    <div className="order-items-breakdown" style={{ marginTop: 14, borderTop: '1px solid var(--lp-border)', paddingTop: 10 }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--lp-text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        Purchased Items ({order.order_items.length})
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {order.order_items.map((item) => (
+                          <div
+                            key={item.id}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: 12,
+                              padding: '8px 12px',
+                              background: 'var(--lp-page-bg)',
+                              borderRadius: 8,
+                              fontSize: '0.825rem',
+                            }}
+                          >
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                {item.product_slug ? (
+                                  <Link
+                                    to={`/products/${item.product_slug}`}
+                                    style={{ fontWeight: 600, color: 'var(--lp-text-main)', textDecoration: 'none' }}
+                                    className="hover-underline"
+                                  >
+                                    {item.product_name}
+                                  </Link>
+                                ) : (
+                                  <span style={{ fontWeight: 600, color: 'var(--lp-text-main)' }}>{item.product_name}</span>
+                                )}
+                                {item.server_number ? (
+                                  <span className={`server-badge server-badge-${item.server_number}`} style={{ fontSize: '0.65rem', padding: '1px 6px' }}>
+                                    Server {item.server_number}{item.server_number === 4 ? ' (AI Tools)' : ''}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div style={{ fontSize: '0.725rem', color: 'var(--lp-text-muted)', marginTop: 2 }}>
+                                Qty: {item.quantity} · Unit Price: {formatPrice(item.unit_price_minor ?? 0)}
+                              </div>
+                            </div>
+                            <div style={{ fontWeight: 700, color: 'var(--lp-text-main)', flexShrink: 0, fontSize: '0.85rem' }}>
+                              {formatPrice((item.unit_price_minor ?? 0) * item.quantity)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="order-card-footer" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginTop: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      {isDelivered && (
+                        <Link to="/dashboard/purchases" className="button button-orange button-small">
+                          <Download size={14} />
+                          <span>View Downloads &amp; Vault</span>
+                        </Link>
+                      )}
+                      {isPending && (
+                        <span className="pending-status-note">
+                          <Clock size={14} className="spin-slow" /> Supplier sync in progress...
+                        </span>
+                      )}
+                      {isFailed && (
+                        <span className="pending-status-note" style={{ color: '#ef4444' }}>
+                          <AlertCircle size={14} /> Delivery issue — our team is on it
+                        </span>
+                      )}
+                    </div>
+
+                    <Link
+                      to={`/dashboard/support?ref=${encodeURIComponent(order.reference)}`}
+                      className="button button-outline button-small"
+                      style={{ fontSize: '0.75rem', gap: 6 }}
+                    >
+                      <HelpCircle size={13} />
+                      <span>Contact Support</span>
+                    </Link>
                   </div>
                 </article>
               )
@@ -1208,7 +1394,7 @@ function TrendingSection() {
                   <span className="product-category-badge">{product.category_name || 'Tool'}</span>
                   {product.server_number ? (
                     <span className={`server-badge server-badge-${product.server_number}`}>
-                      Server {product.server_number}
+                      Server {product.server_number}{product.server_number === 4 ? ' (AI Tools)' : ''}
                     </span>
                   ) : null}
                 </div>

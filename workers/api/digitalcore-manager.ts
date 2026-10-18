@@ -333,17 +333,37 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
       )
 
       if ((autoApprove || autoPublish) && item.stock > 0) {
+        const logo = typeof item.raw?.logo === 'string' ? item.raw.logo : ''
+        const logoArray = logo ? JSON.stringify([logo]) : '[]'
+        const term = typeof item.raw?.warranty === 'string' ? item.raw.warranty : ''
+        const delivery = typeof item.raw?.type === 'string' ? item.raw.type : 'Subscription activation'
+        const featuresList: string[] = []
+        if (item.raw?.type) featuresList.push(`Type: ${item.raw.type}`)
+        if (item.raw?.warranty) featuresList.push(`Warranty: ${item.raw.warranty}`)
+        if (item.raw?.region) featuresList.push(`Region: ${item.raw.region}`)
+        if (Array.isArray(item.tiers)) {
+          for (const t of item.tiers) {
+            const range = t.maxQty ? `${t.minQty}–${t.maxQty}` : `${t.minQty}+`
+            featuresList.push(`Tier (${range} units): $${t.price.toFixed(2)} USD`)
+          }
+        }
+        const featuresJson = JSON.stringify(featuresList)
+
         writes.push(
           db
             .prepare(
-              `INSERT INTO products(id, category_id, slug, name, description, price_minor, supplier_name, authorized_resale, status, delivery_type, supplier_image_urls, pricing_mode, publication_verified, server_number)
-               VALUES(?, ?, ?, ?, ?, ?, 'DigitalCore', 1, 'active', 'Subscription activation', '[]', 'auto', 1, 4)
+              `INSERT INTO products(id, category_id, slug, name, description, price_minor, supplier_name, authorized_resale, status, delivery_type, term, features, supplier_image_urls, pricing_mode, publication_verified, server_number)
+               VALUES(?, ?, ?, ?, ?, ?, 'DigitalCore', 1, 'active', ?, ?, ?, ?, 'auto', 1, 4)
                ON CONFLICT(slug) DO UPDATE SET
                  status='active',
                  publication_verified=1,
                  authorized_resale=1,
                  price_minor=CASE WHEN pricing_mode='override' THEN products.price_minor ELSE excluded.price_minor END,
-                 category_id=excluded.category_id`
+                 category_id=excluded.category_id,
+                 term=excluded.term,
+                 features=excluded.features,
+                 supplier_image_urls=excluded.supplier_image_urls,
+                 delivery_type=excluded.delivery_type`
             )
             .bind(
               crypto.randomUUID(),
@@ -351,7 +371,11 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
               slug,
               item.name.slice(0, 200),
               item.description.slice(0, 10000),
-              price
+              price,
+              delivery,
+              term,
+              featuresJson,
+              logoArray
             ),
           db
             .prepare(

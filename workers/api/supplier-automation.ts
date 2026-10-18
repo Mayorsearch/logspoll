@@ -38,7 +38,7 @@ export type GlobalPricingConfig = {
 
 type Policy={restore_pending:number;run_requested:number;auto_approve:number;review_reference:string;delivery_type:string;approval_cursor:string;provider:string;markup_bps:number;automatic_pricing:number;auto_publish:number;updated_by:string;revision:number;cursor:string;lease_owner:string}
 type Row={id:string;category_id?:string;category_slug?:string;category_name?:string;price_minor:number;pricing_mode:string;description:string;status:string;publication_verified:number;available_quantity:number;enabled:number;checked_at:number;stock:number;approval:string;authorized_resale:number;evidence:string|null;category_active:number;cost_minor:number|null;native_price:string|null;native_currency:string|null;removed?:number}
-const providers=['youngpg','hstora','shopviaclone22']
+const providers=['youngpg','hstora','shopviaclone22','digitalcore']
 const source=`FROM products p JOIN categories cat ON cat.id=p.category_id JOIN verified_product_stock v ON v.id=p.id LEFT JOIN product_authorizations a ON a.product_id=p.id LEFT JOIN supplier_products sp ON sp.product_id=p.id LEFT JOIN staging_supplier_feed_items f ON f.connection_id=sp.connection_id AND f.external_id=sp.external_id LEFT JOIN staging_supplier_connections c ON c.id=sp.connection_id LEFT JOIN hstora_catalog_items h ON h.product_id=p.id LEFT JOIN hstora_connection hc ON hc.id='hstora' LEFT JOIN shopviaclone22_catalog_items s3 ON s3.product_id=p.id LEFT JOIN shopviaclone22_connection sc ON sc.id='shopviaclone22'`
 const providerWhere="((?='youngpg' AND c.provider='youngpg') OR (?='hstora' AND h.product_id IS NOT NULL) OR (?='shopviaclone22' AND s3.product_id IS NOT NULL))"
 
@@ -582,7 +582,7 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
    await db.prepare(`INSERT INTO supplier_automation(provider,markup_bps,automatic_pricing,auto_publish,auto_approve,review_reference,delivery_type,updated_by)
      VALUES(?,?,?,?,?,?,?,?)
      ON CONFLICT(provider) DO UPDATE SET markup_bps=excluded.markup_bps,automatic_pricing=excluded.automatic_pricing,auto_publish=excluded.auto_publish,auto_approve=excluded.auto_approve,updated_by=excluded.updated_by,revision=revision+1`)
-    .bind(p,markup_bps,automatic_pricing,auto_publish,auto_approve,p==='hstora'?'HStora authorized partner':p==='shopviaclone22'?'ShopViaClone22 authorized supplier':'YoungPG authorized reseller permission',deliveryType,actor.id).run().catch(()=>{})
+    .bind(p,markup_bps,automatic_pricing,auto_publish,auto_approve,p==='hstora'?'HStora authorized partner':p==='shopviaclone22'?'ShopViaClone22 authorized supplier':p==='digitalcore'?'DigitalCore authorized partner':'YoungPG authorized reseller permission',deliveryType,actor.id).run().catch(()=>{})
   }
 
   await db.prepare(`INSERT INTO global_publishing_events(id,event_type,markup_bps,items_count,actor_id,status,details,created_at) VALUES(?,?,?,?,?,?,?,?)`)
@@ -784,6 +784,15 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
        SET price_minor=(SELECT s3.selling_price_minor FROM shopviaclone22_catalog_items s3 WHERE s3.product_id=products.id)
        WHERE category_id=? AND server_number=3 AND (pricing_mode='auto' OR pricing_mode IS NULL)`).bind(catId)
     ])
+   }else if(provider==='digitalcore'){
+    await db.batch([
+     db.prepare(`UPDATE digitalcore_catalog_items
+       SET selling_price_minor=CAST(ROUND(cost_minor * (1.0 + ? / 10000.0)) AS INTEGER)
+       WHERE cost_minor>0`).bind(markup_bps),
+     db.prepare(`UPDATE products
+       SET price_minor=(SELECT dc.selling_price_minor FROM digitalcore_catalog_items dc WHERE dc.product_id=products.id)
+       WHERE server_number=4 AND (pricing_mode='auto' OR pricing_mode IS NULL)`)
+    ])
    }
   }
   return json({saved:true,id:ruleId,provider,category_id:catId,markup_bps})
@@ -866,20 +875,40 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
    ])
    updated+=(await db.prepare('SELECT count(*) n FROM shopviaclone22_catalog_items WHERE cost_minor>0').first<{n:number}>())?.n??0
   }
+  if(provider==='digitalcore'||provider==='all'){
+   await db.batch([
+    db.prepare(`UPDATE digitalcore_catalog_items
+      SET selling_price_minor=CAST(ROUND(
+        cost_minor * (1.0 + COALESCE(
+          (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='digitalcore' AND r.category_id=digitalcore_catalog_items.category_id AND r.markup_bps>0),
+          ?
+         ) / 10000.0)
+      ) AS INTEGER)
+      WHERE cost_minor>0`).bind(markup_bps),
+    db.prepare(`UPDATE products
+      SET price_minor=(SELECT dc.selling_price_minor FROM digitalcore_catalog_items dc WHERE dc.product_id=products.id)
+      WHERE server_number=4 AND (pricing_mode='auto' OR pricing_mode IS NULL)`)
+   ])
+   updated+=(await db.prepare('SELECT count(*) n FROM digitalcore_catalog_items WHERE cost_minor>0').first<{n:number}>())?.n??0
+  }
   return json({saved:true,provider,markup_bps,updated})
  }
 
  if(body.action==='approve_all'){
   const restore=body.restore_overrides===true
+  const usdRate=typeof body.usd_to_ngn_rate==='number'&&body.usd_to_ngn_rate>0?body.usd_to_ngn_rate:1500.0
   let count=0
   if(provider==='youngpg'||provider==='all'){
    count += await bulkPublishYoungpg(db, 0, actor.id, restore)
   }
   if(provider==='hstora'||provider==='all'){
-   count += await bulkPublishHstora(db, 0, 1500.0, actor.id, restore)
+   count += await bulkPublishHstora(db, 0, usdRate, actor.id, restore)
   }
   if(provider==='shopviaclone22'||provider==='all'){
    count += await bulkPublishShopViaClone22(db, 0, actor.id, restore)
+  }
+  if(provider==='digitalcore'||provider==='all'){
+   count += await bulkPublishDigitalCore(db, 0, usdRate, actor.id, restore)
   }
   await db.prepare("UPDATE products SET status='active',publication_verified=1,authorized_resale=1 WHERE status<>'active' OR publication_verified=0").run()
   const publishedCount=(await db.prepare("SELECT count(*) n FROM products WHERE status='active' AND publication_verified=1").first<{n:number}>())?.n??0
@@ -976,6 +1005,31 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
    })
    return json({items,total:totalCount,eligible_count:totalCount,boundedBatch:25})
   }
+  if(provider==='digitalcore'){
+   const feed=(await db.prepare(`SELECT s.external_id id,s.name,s.category_id,s.cost_minor,s.selling_price_minor,cat.name category_name,p.pricing_mode,p.price_minor override_price FROM digitalcore_catalog_items s LEFT JOIN categories cat ON cat.id=s.category_id LEFT JOIN products p ON p.id=s.product_id WHERE s.cost_minor>0 LIMIT 100`).all<{id:string;name:string;category_id:string|null;cost_minor:number;selling_price_minor:number|null;category_name:string|null;pricing_mode:string|null;override_price:number|null}>()).results
+   const totalCount=(await db.prepare('SELECT count(*) n FROM digitalcore_catalog_items WHERE cost_minor>0').first<{n:number}>())?.n??feed.length
+   const items=feed.map(item=>{
+    const isOverride=item.pricing_mode==='override'&&body.restore_overrides!==true
+    const effMarkup=(item.category_id&&catMarkupMap.has(item.category_id)&&catMarkupMap.get(item.category_id)!>0)?catMarkupMap.get(item.category_id)!:markup_bps
+    const calculatedPrice=calculateSellingPrice(item.cost_minor,{id:'preview',enabled:true,mode:'markup',rateBps:effMarkup,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
+    const price=isOverride?(item.override_price??calculatedPrice):calculatedPrice
+    return {
+     id:item.id,
+     name:item.name,
+     category_name:item.category_name||'AI Tools',
+     cost_minor:item.cost_minor,
+     old_price_minor:item.selling_price_minor??item.cost_minor,
+     price,
+     markup_bps:effMarkup,
+     profit_minor:price-item.cost_minor,
+     eligible:true,
+     managed:!isOverride,
+     publish:true,
+     reasons:isOverride?['Manual price override preserved']:[]
+    }
+   })
+   return json({items,total:totalCount,eligible_count:totalCount,boundedBatch:25})
+  }
 
   const publishedRows=await rows(env,provider)
   if(publishedRows.length>0){
@@ -993,7 +1047,7 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
 
  if(body.action==='save'){
   if(!Number.isSafeInteger(body.markup_bps)||Number(body.markup_bps)<0||Number(body.markup_bps)>1000000||typeof body.automatic_pricing!=='boolean'||typeof body.auto_publish!=='boolean'||typeof body.auto_approve!=='boolean')throw new HttpError(400,'Valid percentage and explicit switches required.')
-  const ref=typeof body.review_reference==='string'&&body.review_reference.trim().length>=5?body.review_reference.trim():(provider==='shopviaclone22'?'ShopViaClone22 authorized supplier':'YoungPG authorized reseller permission')
+  const ref=typeof body.review_reference==='string'&&body.review_reference.trim().length>=5?body.review_reference.trim():(provider==='shopviaclone22'?'ShopViaClone22 authorized supplier':provider==='digitalcore'?'DigitalCore authorized partner':'YoungPG authorized reseller permission')
   const del=['Licensed digital download','Redemption code','Subscription activation','Manual fulfillment'].includes(String(body.delivery_type))?String(body.delivery_type):'Manual fulfillment'
   const saved=await db.prepare("INSERT INTO supplier_automation(provider,markup_bps,automatic_pricing,auto_publish,auto_approve,review_reference,delivery_type,updated_by) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET markup_bps=excluded.markup_bps,automatic_pricing=excluded.automatic_pricing,auto_publish=excluded.auto_publish,auto_approve=excluded.auto_approve,review_reference=excluded.review_reference,delivery_type=excluded.delivery_type,approval_cursor='',updated_by=excluded.updated_by,revision=revision+1,cursor='' WHERE lease_until IS NULL OR lease_until<=? RETURNING provider").bind(provider,Number(body.markup_bps),body.automatic_pricing?1:0,body.auto_publish?1:0,body.auto_approve?1:0,ref,del,actor.id,Date.now()).first()
   if(!saved)throw new HttpError(409,'Automation is running; retry Save shortly.')

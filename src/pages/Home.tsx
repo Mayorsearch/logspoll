@@ -132,7 +132,7 @@ export function Home() {
             <span className="feature-icon"><Zap size={24} /></span>
             <h3>Fast Access</h3>
             <p>
-              Immediate account credentials and digital access delivered automatically with transparent inventory across Server 1, Server 2, Server 3, and Server 4.
+              Immediate account credentials and digital access delivered automatically with transparent inventory across Server 1, Server 2, Server 3, and Server 4 (AI Tools).
             </p>
           </article>
 
@@ -250,14 +250,14 @@ export function Home() {
           </article>
 
           <article className="server-card">
-            <div className="server-card-badge server-badge-4">Server 4</div>
-            <h3>Server 4</h3>
+            <div className="server-card-badge server-badge-4">Server 4 (AI Tools)</div>
+            <h3>Server 4 (AI Tools)</h3>
             <p>
               Authorized AI software licenses, ChatGPT Plus, Midjourney subscriptions, developer tools, and high-performance utility accounts.
             </p>
             <div className="server-card-footer">
               <Link to="/marketplace?server=4" className="text-link">
-                View Server 4 Products <ArrowRight size={14} />
+                View Server 4 (AI Tools) Products <ArrowRight size={14} />
               </Link>
             </div>
           </article>
@@ -281,11 +281,11 @@ export function Home() {
           {[
             {
               q: 'What is LogsPoll?',
-              a: 'LogsPoll is a premium digital marketplace offering verified accounts, subscriptions, and digital tools organized across four logical server tiers: Server 1, Server 2, Server 3, and Server 4.'
+              a: 'LogsPoll is a premium digital marketplace offering verified accounts, subscriptions, and digital tools organized across four logical server tiers: Server 1, Server 2, Server 3, and Server 4 (AI Tools).'
             },
             {
               q: 'How does server grouping work?',
-              a: 'Products from Server 1, Server 2, Server 3, and Server 4 belonging to the same category (such as Facebook or Instagram) appear unified in that category, while maintaining independent server filters and verified stock.'
+              a: 'Products from Server 1, Server 2, Server 3, and Server 4 (AI Tools) belonging to the same category (such as Facebook or Instagram) appear unified in that category, while maintaining independent server filters and verified stock.'
             },
             {
               q: 'How do I complete a purchase?',

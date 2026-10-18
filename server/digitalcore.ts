@@ -62,9 +62,16 @@ const safeText = (val: unknown, maxLen = 200): string => {
   return trimmed.slice(0, maxLen)
 }
 
-const safeId = (val: unknown): string => {
-  const s = String(val ?? '').trim()
-  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(s)) throw new DigitalCoreError('Invalid identifier in DigitalCore supplier data.')
+export const safeId = (val: unknown, fallbackName?: unknown): string => {
+  let s = String(val ?? '').trim()
+  if (!s && fallbackName) {
+    s = String(fallbackName).trim()
+  }
+  // Sanitize: convert spaces, plus, dots, slashes, and special characters to underscores
+  s = s.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 128)
+  if (!s) {
+    s = 'item_' + Math.random().toString(36).slice(2, 10)
+  }
   return s
 }
 
@@ -105,15 +112,16 @@ export function normalizeDigitalCoreCatalog(
   for (const item of rawList) {
     if (!item || typeof item !== 'object') continue
     const prod = item as Record<string, unknown>
-    const prodId = safeId(prod.id ?? '')
+    const rawId = prod.id ?? prod.slug ?? prod.external_id ?? prod.product_id
+    const prodId = safeId(rawId, prod.name ?? prod.title)
     if (seenProductIds.has(prodId)) continue
     seenProductIds.add(prodId)
 
-    const name = safeText(prod.name, 200) || `AI Tool ${prodId}`
-    const description = safeText(prod.description, 10000) || name
+    const name = safeText(prod.name ?? prod.title, 200) || `AI Tool ${prodId}`
+    const description = safeText(prod.description ?? prod.desc ?? prod.desc_tg ?? prod.details, 10000) || name
 
     // DigitalCore prices are in USD (e.g. 0.55 = $0.55, 13.50 = $13.50)
-    const rawPriceVal = prod.price ?? prod.priceFrom ?? '0'
+    const rawPriceVal = prod.price ?? prod.priceFrom ?? (Array.isArray(prod.tiers) && prod.tiers[0]?.price) ?? '0'
     const rawPriceStr = typeof rawPriceVal === 'number' ? rawPriceVal.toFixed(2) : String(rawPriceVal).trim()
     const rawPriceMinor = parseDecimalToMinor(rawPriceStr)
 
@@ -138,6 +146,11 @@ export function normalizeDigitalCoreCatalog(
       }
     }
 
+    let logoUrl = typeof prod.logo === 'string' ? prod.logo.trim() : ''
+    if (logoUrl && !logoUrl.startsWith('http')) {
+      logoUrl = `https://digitalcore.top${logoUrl.startsWith('/') ? '' : '/'}${logoUrl}`
+    }
+
     products.push({
       id: prodId,
       categoryId,
@@ -157,6 +170,10 @@ export function normalizeDigitalCoreCatalog(
         priceFrom: prod.priceFrom as any,
         stock,
         tiers,
+        logo: logoUrl,
+        type: prod.type,
+        warranty: prod.warranty,
+        region: prod.region,
       },
     })
   }
@@ -252,16 +269,34 @@ export async function fetchDigitalCoreProducts(credentials: DigitalCoreCredentia
     throw new DigitalCoreError('DigitalCore unauthorized: invalid API key.', response.status, 'unauthorized')
   }
 
+  const data = await response.json().catch(() => null)
+  if (Array.isArray(data) && data.length > 0) {
+    return data as DigitalCoreProduct[]
+  }
+
+  // Gracefully fallback to /api/public/products
+  try {
+    const pubRes = await fetch(`${baseUrl}/api/public/products`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) LogsPoll/2.0',
+      },
+      signal: AbortSignal.timeout(10000),
+    })
+    if (pubRes.ok) {
+      const pubData = await pubRes.json().catch(() => null)
+      if (Array.isArray(pubData) && pubData.length > 0) {
+        return pubData as DigitalCoreProduct[]
+      }
+    }
+  } catch {}
+
   if (!response.ok) {
     throw new DigitalCoreError(`DigitalCore products returned HTTP ${response.status}.`, response.status, 'http_error')
   }
 
-  const data = await response.json().catch(() => null)
-  if (!Array.isArray(data)) {
-    throw new DigitalCoreError('DigitalCore products response was not an array.', 502, 'invalid_schema')
-  }
-
-  return data as DigitalCoreProduct[]
+  throw new DigitalCoreError('DigitalCore products response was empty or not an array.', 502, 'invalid_schema')
 }
 
 /**

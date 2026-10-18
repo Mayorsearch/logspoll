@@ -218,7 +218,7 @@ export function Cart() {
                           {product?.server_number ? (
                             <span className={`cart-server-badge s${product.server_number}`}>
                               <ServerIcon size={10} />
-                              Server {product.server_number}
+                              Server {product.server_number}{product.server_number === 4 ? ' (AI Tools)' : ''}
                             </span>
                           ) : (
                             <span className="cart-server-badge">
