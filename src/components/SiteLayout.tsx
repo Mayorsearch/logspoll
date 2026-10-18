@@ -114,7 +114,11 @@ export function SiteLayout() {
       <header className={`site-header${isHome ? ' homepage-header' : ''}`}>
         <div className="container header-inner">
           <Link to="/" className="brand" aria-label="LOGSPOLL home">
-            Logs<span>Poll</span><i />
+            <img 
+              src={theme === 'dark' ? '/logo-dark.png' : '/logo-light.png'} 
+              alt="LogsPoll" 
+              className="brand-logo" 
+            />
           </Link>
           
           <nav className="desktop-nav" aria-label="Main navigation">
@@ -190,7 +194,11 @@ export function SiteLayout() {
             >
               <div className="mobile-menu-heading">
                 <div className="mobile-brand">
-                  Logs<span>Poll</span>
+                  <img 
+                    src={theme === 'dark' ? '/logo-dark.png' : '/logo-light.png'} 
+                    alt="LogsPoll" 
+                    className="brand-logo" 
+                  />
                 </div>
                 <button 
                   className="icon-button" 
@@ -287,8 +295,12 @@ export function SiteLayout() {
       <footer className="site-footer">
         <div className="container footer-top">
           <div className="footer-col footer-brand-col">
-            <Link className="brand" to="/">
-              Logs<span>Poll</span><i />
+            <Link className="brand" to="/" aria-label="LOGSPOLL home">
+              <img 
+                src="/logo-dark.png" 
+                alt="LogsPoll" 
+                className="brand-logo" 
+              />
             </Link>
             <p>
               Your premier digital essentials marketplace. Explore verified digital products, accounts, 

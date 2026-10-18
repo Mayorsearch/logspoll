@@ -10,7 +10,13 @@ export async function enqueueMail(env: ApiEnv, event: string, kind: EmailKind, u
   const message = renderEmail(kind, { firstName:user.name, appOrigin:env.APP_ORIGIN??env.AUTH_ORIGIN, ...(otp?{verificationCode:otp}:{}), ...(extraData??{}) })
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await key(env), new TextEncoder().encode(JSON.stringify({ from: 'LogsPoll <no-reply@logspoll.com>', to: [user.email], ...message })))
-  const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))
+  const encode = (bytes: Uint8Array) => {
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
+    }
+    return btoa(binary)
+  }
   const id = await digest(event)
   const now = Date.now()
   const insert = env.DB!.prepare('INSERT OR IGNORE INTO auth_mail_outbox(id,payload,iv,created_at,next_attempt,expires_at,otp_subject) VALUES(?,?,?,?,?,?,?)')
