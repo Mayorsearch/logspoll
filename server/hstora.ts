@@ -23,8 +23,20 @@ export async function hstoraHeaders(credentials:HstoraCredentials,path:string,qu
  if(!/^\/api\/v1\/(?:catalog|products\/[1-9]\d{0,15})$/.test(path)||/[\r\n#]/.test(query))throw new HstoraError('Unsupported HStora resource.',400)
  const canonical=['GET',path,query,timestamp,nonce,''].join('\n')
  const imported=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign'])
- const headers=new Headers({'X-API-Key':key,'X-Timestamp':timestamp,'X-Nonce':nonce,'X-Signature':hex(await crypto.subtle.sign('HMAC',imported,new TextEncoder().encode(canonical))),Accept:'application/json','User-Agent':'LogsPoll/1.0 (+https://logspoll.com; support@logspoll.com)'})
- if(credentials.allowedOrigin){const url=new URL(credentials.allowedOrigin);if(url.protocol!=='https:'||url.origin!==credentials.allowedOrigin)throw new HstoraError('Invalid supplier allowed origin.',400);headers.set('Origin',url.origin)}
+ const headers=new Headers({
+   'X-API-Key':key,
+   'X-Timestamp':timestamp,
+   'X-Nonce':nonce,
+   'X-Signature':hex(await crypto.subtle.sign('HMAC',imported,new TextEncoder().encode(canonical))),
+   Accept:'application/json',
+   'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 LogsPoll/2.0'
+ })
+ if(credentials.allowedOrigin){
+   try {
+     const url=new URL(credentials.allowedOrigin)
+     if(url.protocol==='https:'||url.protocol==='http:') headers.set('Origin',url.origin)
+   } catch {}
+ }
  return headers
 }
 export async function hstoraRejection(response:Response){

@@ -8,6 +8,8 @@ import {supplierManager} from './supplier-manager.ts'
 import {hstoraReview} from './hstora-review.ts'
 import {hstoraAdmin,syncHstoraBatch} from './hstora-manager.ts'
 import {shopviaclone22Admin,syncShopViaClone22Batch} from './shopviaclone22-manager.ts'
+import {digitaltopAdmin,syncDigitalTopBatch} from './digitaltop-manager.ts'
+import {exchangeRateAdmin,refreshExchangeRateCron} from './exchange-rate.ts'
 import { requireRuntime } from './runtime.ts'
 import { HttpError, json } from './http.ts'
 import { supplierReview } from './supplier-review.ts'
@@ -72,6 +74,8 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     if (url.pathname === '/api/admin/hstora-review') return await hstoraReview(request,env)
     if (url.pathname === '/api/admin/hstora') return await hstoraAdmin(request,env)
     if (url.pathname === '/api/admin/shopviaclone22') return await shopviaclone22Admin(request, env)
+    if (url.pathname === '/api/admin/digitaltop') return await digitaltopAdmin(request, env)
+    if (url.pathname === '/api/admin/exchange-rate') return await exchangeRateAdmin(request, env)
     if (url.pathname === '/api/admin/catalog') return await catalogAdmin(request, env)
     if (url.pathname === '/api/checkout' || url.pathname === '/api/v1/checkout') return await bachsCheckout(request, env)
     if (url.pathname === '/api/bachs/order' || url.pathname === '/api/v1/order' || /^\/api\/(?:v1\/)?orders\/[^/]+\/status$/.test(url.pathname)) {
@@ -139,11 +143,13 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
 }
 export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, context: Execution) => {
   context.waitUntil(requireRuntime(env).then(()=>drainBusinessMail(env)).then(()=>drainMail(env)).catch(()=>{}))
+  context.waitUntil(requireRuntime(env).then(()=>refreshExchangeRateCron(env)).catch(()=>{}))
   context.waitUntil(requireRuntime(env).then(()=>runSupplierAutomation(env)).catch(()=>{}))
   if (catalogWritesReady(env)) context.waitUntil((async()=>{
     await requireRuntime(env)
     await syncHstoraBatch(env).catch(()=>{})
     await syncShopViaClone22Batch(env).catch(()=>{})
+    await syncDigitalTopBatch(env).catch(()=>{})
     await env.DB!.prepare("INSERT INTO migration_metadata(key,value) VALUES('catalog_scheduler_heartbeat',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run()
     for(let batch=0;batch<4;batch++) {
       try { if((await refreshPublishedStock(env)).skipped) { const result=await syncCatalogBatch(env); if(result.skipped && (await refreshSupplierTaxonomy(env)).skipped) break } }

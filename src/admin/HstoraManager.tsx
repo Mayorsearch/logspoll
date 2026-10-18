@@ -23,15 +23,17 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
   const [isError, setIsError] = useState(false)
   const [busy, setBusy] = useState(false)
   const [baseUrl, setBaseUrl] = useState('https://hstora.com')
+  const [allowedOrigin, setAllowedOrigin] = useState('')
   const [rate, setRate] = useState('1500')
   const key = useRef<HTMLInputElement>(null)
   const secret = useRef<HTMLInputElement>(null)
 
   async function refresh() {
     try {
-      const result = await cloudflareRequest<{ connection: Status | null }>('/api/admin/hstora')
+      const result = await cloudflareRequest<{ connection: Status & { allowed_origin?: string } | null }>('/api/admin/hstora')
       setStatus(result.connection)
       if (result.connection?.base_url) setBaseUrl(result.connection.base_url)
+      if (result.connection?.allowed_origin) setAllowedOrigin(result.connection.allowed_origin)
       if (result.connection?.fx_rate_minor) setRate(String(result.connection.fx_rate_minor / 100))
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Supplier settings unavailable.')
@@ -58,6 +60,7 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
         body = {
           action: 'save',
           base_url: baseUrl.trim(),
+          allowed_origin: allowedOrigin.trim() || undefined,
           enabled: Boolean(status?.enabled),
           fx_rate_minor: Math.round(Number(rate) * 100),
           ...(apiKey ? { api_key: apiKey } : {}),
@@ -147,6 +150,19 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder="https://hstora.com"
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--admin-border, #cbd5e1)', fontSize: '0.875rem' }}
+            />
+          </label>
+
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '0.85rem', fontWeight: 600 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Globe size={14} color="#f97316" /> Allowed Origin (Optional)
+            </span>
+            <input
+              type="url"
+              value={allowedOrigin}
+              onChange={(e) => setAllowedOrigin(e.target.value)}
+              placeholder="Leave blank for standard headers"
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--admin-border, #cbd5e1)', fontSize: '0.875rem' }}
             />
           </label>

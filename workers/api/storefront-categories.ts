@@ -20,7 +20,7 @@ export async function storefrontCategories(request:Request,env:ApiEnv):Promise<R
  const conditions=['main_category=?'],values:(string|number)[]=[category],params=url.searchParams,q=(params.get('q')??'').trim().slice(0,200)
  if(q){conditions.push('(instr(lower(name),lower(?))>0 OR instr(lower(description),lower(?))>0)');values.push(q,q)}
  const availability=params.get('availability');if(availability==='in-stock')conditions.push('available_quantity>0');if(availability==='out-of-stock')conditions.push('available_quantity=0')
- const server=params.get('server');if(server&&['1','2','3'].includes(server)){conditions.push('server_number=?');values.push(Number(server))}
+ const server=params.get('server');if(server&&['1','2','3','4'].includes(server)){conditions.push('server_number=?');values.push(Number(server))}
  const ids=params.get('ids');if(ids){const list=[...new Set(ids.split(','))];if(list.length>100||list.some(id=>!/^[a-f\d-]{36}$/i.test(id)))throw new HttpError(400,'Invalid product selection.');conditions.push(`id IN (${list.map(()=>'?').join(',')})`);values.push(...list)}
  const page=Math.min(10000,Math.max(1,Math.floor(Number(params.get('page'))||1))),limit=ids?100:20,where=conditions.join(' AND '),order=({'price-asc':'price_minor ASC,id','price-desc':'price_minor DESC,id',newest:'id DESC',name:'name,id'} as Record<string,string>)[params.get('sort')??'']??'featured DESC,name,id'
  const total=Number((await env.DB.prepare(`${catalog} SELECT count(*) n FROM grouped WHERE ${where}`).bind(...values).first<{n:number}>())!.n)

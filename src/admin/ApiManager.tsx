@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 import HstoraManager from './HstoraManager'
 import Shopviaclone22Manager from './Shopviaclone22Manager'
+import DigitalTopManager from './DigitalTopManager'
+import ExchangeRateManager from './ExchangeRateManager'
 import CloudflareCatalog from './CloudflareCatalog'
 import SupplierAutomation from './SupplierAutomation'
-import { Server, TrendingUp, Layers } from 'lucide-react'
+import { Server, TrendingUp, Layers, Cpu, DollarSign } from 'lucide-react'
 import { cloudflareRequest } from '../lib/cloudflare-auth'
 
-export type ApiManagerTab = 'server1' | 'server2' | 'server3' | 'pricing'
+export type ApiManagerTab = 'server1' | 'server2' | 'server3' | 'server4' | 'exchange-rate' | 'pricing'
 
 interface ApiManagerProps {
   initialTab?: ApiManagerTab
@@ -17,6 +19,7 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
   const [activeTab, setActiveTab] = useState<ApiManagerTab>(initialTab)
   const [hStatus, setHStatus] = useState<{ enabled: number; imported: number; last_status: string } | null>(null)
   const [s3Status, setS3Status] = useState<{ enabled: number; imported: number; in_stock: number; last_status: string } | null>(null)
+  const [s4Status, setS4Status] = useState<{ enabled: number; imported: number; in_stock: number; last_status: string } | null>(null)
 
   useEffect(() => {
     if (initialTab) {
@@ -32,6 +35,10 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
 
     void cloudflareRequest<{ connection: { enabled: number; imported: number; in_stock: number; last_status: string } | null }>('/api/admin/shopviaclone22')
       .then((res) => setS3Status(res.connection))
+      .catch(() => {})
+
+    void cloudflareRequest<{ connection: { enabled: number; imported: number; in_stock: number; last_status: string } | null }>('/api/admin/digitaltop')
+      .then((res) => setS4Status(res.connection))
       .catch(() => {})
   }, [activeTab])
 
@@ -189,6 +196,68 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
           <button
             type="button"
             role="tab"
+            aria-selected={activeTab === 'server4'}
+            onClick={() => setActiveTab('server4')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              borderRadius: 8,
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              border: 'none',
+              background: activeTab === 'server4' ? '#f97316' : 'var(--admin-subtle, #f1f5f9)',
+              color: activeTab === 'server4' ? '#ffffff' : 'var(--admin-text, #334155)',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <Cpu size={15} />
+            <span>Server 4 · DigitalTop (AI Tools)</span>
+            {s4Status && (
+              <span
+                style={{
+                  fontSize: '0.7rem',
+                  padding: '2px 6px',
+                  borderRadius: 10,
+                  background: activeTab === 'server4' ? 'rgba(255,255,255,0.25)' : s4Status.enabled ? '#10b98120' : '#64748b20',
+                  color: activeTab === 'server4' ? '#ffffff' : s4Status.enabled ? '#10b981' : '#64748b',
+                  fontWeight: 700,
+                }}
+              >
+                {s4Status.enabled ? 'ON' : 'OFF'}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'exchange-rate'}
+            onClick={() => setActiveTab('exchange-rate')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              borderRadius: 8,
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              border: 'none',
+              background: activeTab === 'exchange-rate' ? '#f97316' : 'var(--admin-subtle, #f1f5f9)',
+              color: activeTab === 'exchange-rate' ? '#ffffff' : 'var(--admin-text, #334155)',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <DollarSign size={15} />
+            <span>Bybit P2P Dynamic FX Rates</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
             aria-selected={activeTab === 'pricing'}
             onClick={() => setActiveTab('pricing')}
             style={{
@@ -233,6 +302,18 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
       {activeTab === 'server3' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <Shopviaclone22Manager onComplete={onComplete} />
+        </div>
+      )}
+
+      {activeTab === 'server4' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <DigitalTopManager onComplete={onComplete} />
+        </div>
+      )}
+
+      {activeTab === 'exchange-rate' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <ExchangeRateManager />
         </div>
       )}
 

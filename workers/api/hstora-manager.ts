@@ -11,14 +11,16 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
  if(request.method==='GET'){
   const conn = await db.prepare("SELECT enabled,revision,requested,page,phase,total,scanned,next_attempt,last_success,last_status,lease_until,fx_rate_minor,(SELECT count(*) FROM hstora_catalog_items) AS imported,(SELECT count(*) FROM hstora_catalog_items WHERE json_array_length(json_extract(metadata,'$.images'))>0) AS with_images,(SELECT count(*) FROM hstora_catalog_items WHERE length(json_extract(metadata,'$.description'))>0) AS with_descriptions FROM hstora_connection WHERE id='hstora'").first<Record<string,unknown>>()
   let baseUrl = 'https://hstora.com'
+  let allowedOrigin = ''
   const row = await db.prepare("SELECT ciphertext, nonce FROM hstora_connection WHERE id='hstora'").first<{ciphertext:string;nonce:string}>()
   if (row?.ciphertext && row?.nonce && env.SUPPLIER_ENCRYPTION_KEY) {
     try {
-      const creds = JSON.parse(await openCredential(row.ciphertext, row.nonce, 'hstora', env.SUPPLIER_ENCRYPTION_KEY)) as {baseUrl?:string}
+      const creds = JSON.parse(await openCredential(row.ciphertext, row.nonce, 'hstora', env.SUPPLIER_ENCRYPTION_KEY)) as {baseUrl?:string;allowedOrigin?:string}
       if (creds.baseUrl) baseUrl = creds.baseUrl
+      if (creds.allowedOrigin) allowedOrigin = creds.allowedOrigin
     } catch {}
   }
-  return json({provider:'hstora',connection:conn ? {...conn, base_url: baseUrl} : null})
+  return json({provider:'hstora',connection:conn ? {...conn, base_url: baseUrl, allowed_origin: allowedOrigin} : null})
  }
  if(request.method!=='POST')throw new HttpError(405,'Method not permitted.')
  const body=await bodyJSON(request,4096),row=await db.prepare("SELECT * FROM hstora_connection WHERE id='hstora'").first<Connection>()
@@ -26,19 +28,21 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
   let baseUrl = typeof body.base_url === 'string' && body.base_url.trim() ? body.base_url.trim().replace(/\/+$/, '') : 'https://hstora.com'
   if (!baseUrl.startsWith('https://') && !baseUrl.startsWith('http://localhost')) throw new HttpError(400, 'Base URL must use HTTPS.')
   if(body.fx_rate_minor!==undefined&&(!Number.isSafeInteger(body.fx_rate_minor)||Number(body.fx_rate_minor)<=0||Number(body.fx_rate_minor)>1000000000))throw new HttpError(400,'Invalid NGN exchange rate.')
-  if(body.api_key!==undefined||body.api_secret!==undefined||body.base_url!==undefined){
+  if(body.api_key!==undefined||body.api_secret!==undefined||body.base_url!==undefined||body.allowed_origin!==undefined){
    let key = typeof body.api_key === 'string' ? body.api_key.trim() : ''
    let secret = typeof body.api_secret === 'string' ? body.api_secret.trim() : ''
+   let allowedOrigin = typeof body.allowed_origin === 'string' && body.allowed_origin.trim() ? body.allowed_origin.trim() : undefined
    if ((!key || !secret) && row?.ciphertext && row?.nonce && env.SUPPLIER_ENCRYPTION_KEY) {
     try {
       const old = JSON.parse(await openCredential(row.ciphertext, row.nonce, 'hstora', env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials
       if (!key) key = old.key
       if (!secret) secret = old.secret
       if (!body.base_url && old.baseUrl) baseUrl = old.baseUrl
+      if (!body.allowed_origin && old.allowedOrigin) allowedOrigin = old.allowedOrigin
     } catch {}
    }
    if (key && secret) {
-    const credentials: HstoraCredentials = {key, secret, allowedOrigin:'https://logspoll.com', baseUrl}
+    const credentials: HstoraCredentials = {key, secret, baseUrl, ...(allowedOrigin ? {allowedOrigin} : {})}
     let sealed:Awaited<ReturnType<typeof sealCredential>>
     try{await hstoraHeaders(credentials,'/api/v1/catalog','page=1&limit=1');sealed=await sealCredential(JSON.stringify(credentials),'hstora',env.SUPPLIER_ENCRYPTION_KEY)}
     catch(error){if(error instanceof HstoraError)throw new HttpError(400,'Invalid HStora credential format. Enter the API key (hs_pk_) and API signing secret (hs_sk_), not the webhook secret.');if(error instanceof CredentialError)throw new HttpError(error.status,error.message);throw error}
@@ -60,8 +64,21 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
  }
  if(!row)throw new HttpError(409,'Configure HStora credentials first.')
  if(body.action==='test'){
-  try{const credentials=JSON.parse(await openCredential(row.ciphertext,row.nonce,'hstora',env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials;const page=await readHstoraPage(credentials,1,1);return json({connected:true,total:page.total})}
-  catch(error){if(error instanceof HstoraError){console.warn('hstora_test_failure',JSON.stringify({layer:'supplier',provider_status:error.status,error:error.message}));return json({error:error.message,layer:'supplier',provider_status:error.status,connected:false},424);}if(error instanceof CredentialError)throw new HttpError(error.status,error.message);throw error}
+  try{
+    const credentials=JSON.parse(await openCredential(row.ciphertext,row.nonce,'hstora',env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials;
+    const page=await readHstoraPage(credentials,1,1);
+    await db.prepare("UPDATE hstora_connection SET last_status='Connected successfully' WHERE id='hstora'").run();
+    return json({connected:true,total:page.total})
+  }
+  catch(error){
+    if(error instanceof HstoraError){
+      console.warn('hstora_test_failure',JSON.stringify({layer:'supplier',provider_status:error.status,error:error.message}));
+      await db.prepare("UPDATE hstora_connection SET last_status=? WHERE id='hstora'").bind(`Test failed: ${error.message.slice(0, 200)}`).run().catch(()=>{});
+      return json({error:error.message,layer:'supplier',provider_status:error.status,connected:false},424);
+    }
+    if(error instanceof CredentialError)throw new HttpError(error.status,error.message);
+    throw error
+  }
  }
  if(body.action==='sync'){
   if(!row.enabled)throw new HttpError(409,'Enable HStora first.')
