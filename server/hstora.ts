@@ -76,9 +76,16 @@ export async function hstoraRejection(response:Response){
  }
  return `HStora HTTP ${response.status}: ${reason}.${identifier}${extra}`
 }
+export function normalizeHstoraBaseUrl(raw?: string): string {
+  if (!raw || !raw.trim()) return HSTORA_ORIGIN
+  let clean = raw.trim().replace(/\/+$/, '')
+  clean = clean.replace(/\/api\/v1\/?$/, '').replace(/\/api\/?$/, '')
+  return clean || HSTORA_ORIGIN
+}
+
 async function get(credentials:HstoraCredentials,path:string,query='',timeout=20000){
  const headers=await hstoraHeaders(credentials,path,query)
- const origin = (credentials.baseUrl?.trim().replace(/\/+$/, '') || HSTORA_ORIGIN)
+ const origin = normalizeHstoraBaseUrl(credentials.baseUrl)
  let response:Response
  try{response=await fetch(origin+path+(query?'?'+query:''),{method:'GET',headers,redirect:'manual',signal:AbortSignal.timeout(timeout)})}
  catch(error){throw new HstoraError(error instanceof Error&&['TimeoutError','AbortError'].includes(error.name)?'HStora request timed out.':'HStora connection failed.')}

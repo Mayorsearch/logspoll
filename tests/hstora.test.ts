@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import{createHmac}from'node:crypto'
-import{hstoraHeaders,hstoraCatalogPages,readHstoraPage,readHstoraDetail,readHstoraBalance,generateHstoraNonce,normalizeHstoraProduct}from'../server/hstora.ts'
+import{hstoraHeaders,hstoraCatalogPages,readHstoraPage,readHstoraDetail,readHstoraBalance,generateHstoraNonce,normalizeHstoraProduct,normalizeHstoraBaseUrl}from'../server/hstora.ts'
 const credentials={key:'hs_pk_test_only',secret:'hs_sk_test_only'}
 const product=(id:number)=>({id,name:'VPN subscription '+id,price:'0.02',currency:'USD',stock_available:5,description:'Supplier provided subscription description',price_tiers:[{min_quantity:100,unit_price:'0.019'}]})
 test('HStora signs exact documented GET path and raw query; never signs purchase endpoints',async()=>{
@@ -79,4 +79,13 @@ test('HStora gateway failure retains safe request identifier but never response 
   const headers=await hstoraHeaders({...credentials,allowedOrigin:'https://logspoll.com'},'/api/v1/catalog','page=1&limit=20','1792000000','fresh-nonce')
   assert.equal(headers.get('Origin'),'https://logspoll.com');assert.equal(headers.get('Referer'),null)
   assert.equal(headers.get('X-Signature'),createHmac('sha256',credentials.secret).update(['GET','/api/v1/catalog','page=1&limit=20','1792000000','fresh-nonce',''].join('\n')).digest('hex'))
+ })
+ test('normalizeHstoraBaseUrl strips trailing /api/v1 and slashes to prevent duplicate path concatenation', () => {
+  assert.equal(normalizeHstoraBaseUrl('https://hstora.com/api/v1'), 'https://hstora.com')
+  assert.equal(normalizeHstoraBaseUrl('https://hstora.com/api/v1/'), 'https://hstora.com')
+  assert.equal(normalizeHstoraBaseUrl('https://hstora.com/api'), 'https://hstora.com')
+  assert.equal(normalizeHstoraBaseUrl('https://hstora.com/'), 'https://hstora.com')
+  assert.equal(normalizeHstoraBaseUrl('https://hstora.com'), 'https://hstora.com')
+  assert.equal(normalizeHstoraBaseUrl(''), 'https://hstora.com')
+  assert.equal(normalizeHstoraBaseUrl(undefined), 'https://hstora.com')
  })

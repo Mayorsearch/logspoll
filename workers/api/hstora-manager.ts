@@ -2,7 +2,7 @@ import {adminActor,bodyJSON} from './admin.ts'
 import {HttpError,json} from './http.ts'
 import {HttpError as CredentialError} from '../../server/auth.ts'
 import {openCredential,sealCredential} from '../../server/supplier-crypto.ts'
-import {HstoraError,hstoraHeaders,readHstoraPage,readHstoraDetail,readHstoraBalance} from '../../server/hstora.ts'
+import {HstoraError,hstoraHeaders,readHstoraPage,readHstoraDetail,readHstoraBalance,normalizeHstoraBaseUrl} from '../../server/hstora.ts'
 import type {HstoraCredentials} from '../../server/hstora.ts'
 import type {ApiEnv,Statement} from './types.ts'
 type Connection={enabled:number;ciphertext:string;nonce:string;revision:number;requested:number;job_id:string|null;page:number;phase:string;total:number|null;next_attempt:number;last_success:number|null}
@@ -21,7 +21,7 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
   if (row?.ciphertext && row?.nonce && env.SUPPLIER_ENCRYPTION_KEY) {
     try {
       const creds = JSON.parse(await openCredential(row.ciphertext, row.nonce, 'hstora', env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials
-      if (creds.baseUrl) baseUrl = creds.baseUrl
+      if (creds.baseUrl) baseUrl = normalizeHstoraBaseUrl(creds.baseUrl)
       if (creds.allowedOrigin) allowedOrigin = creds.allowedOrigin
       if (creds.key) {
         keyConfigured = true
@@ -53,7 +53,7 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
  if(request.method!=='POST')throw new HttpError(405,'Method not permitted.')
  const body=await bodyJSON(request,4096),row=await db.prepare("SELECT * FROM hstora_connection WHERE id='hstora'").first<Connection>()
  if(body.action==='save'){
-  let baseUrl = typeof body.base_url === 'string' && body.base_url.trim() ? body.base_url.trim().replace(/\/+$/, '') : 'https://hstora.com'
+  let baseUrl = normalizeHstoraBaseUrl(typeof body.base_url === 'string' && body.base_url.trim() ? body.base_url : 'https://hstora.com')
   if (!baseUrl.startsWith('https://') && !baseUrl.startsWith('http://localhost')) throw new HttpError(400, 'Base URL must use HTTPS.')
   if(body.fx_rate_minor!==undefined&&(!Number.isSafeInteger(body.fx_rate_minor)||Number(body.fx_rate_minor)<=0||Number(body.fx_rate_minor)>1000000000))throw new HttpError(400,'Invalid NGN exchange rate.')
   if(body.api_key!==undefined||body.api_secret!==undefined||body.base_url!==undefined||body.allowed_origin!==undefined){
@@ -68,14 +68,15 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
       const old = JSON.parse(await openCredential(row.ciphertext, row.nonce, 'hstora', env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials
       key = old.key
       secret = old.secret
-      if (!body.base_url && old.baseUrl) baseUrl = old.baseUrl
+      if (!body.base_url && old.baseUrl) baseUrl = normalizeHstoraBaseUrl(old.baseUrl)
       if (body.allowed_origin === undefined && old.allowedOrigin) allowedOrigin = old.allowedOrigin
     } catch {
       // Ignore old credential decryption error
     }
    }
+   if (!allowedOrigin) allowedOrigin = 'https://logspoll.com'
    if (key && secret) {
-    const credentials: HstoraCredentials = {key, secret, baseUrl, ...(allowedOrigin ? {allowedOrigin} : {})}
+    const credentials: HstoraCredentials = {key, secret, baseUrl, allowedOrigin}
     let sealed:Awaited<ReturnType<typeof sealCredential>>
     try{
       await hstoraHeaders(credentials,'/api/v1/balance','')
@@ -111,14 +112,16 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
     if (!passedKey || !passedSecret) {
       throw new HttpError(400, 'Enter both API key (hs_pk_) and signing secret (hs_sk_) to test new credentials.')
     }
-    const baseUrl = typeof body.base_url === 'string' && body.base_url.trim() ? body.base_url.trim().replace(/\/+$/, '') : 'https://hstora.com'
-    const allowedOrigin = typeof body.allowed_origin === 'string' && body.allowed_origin.trim() ? body.allowed_origin.trim() : undefined
-    credentials = { key: passedKey, secret: passedSecret, baseUrl, ...(allowedOrigin ? { allowedOrigin } : {}) }
+    const baseUrl = normalizeHstoraBaseUrl(typeof body.base_url === 'string' && body.base_url.trim() ? body.base_url : 'https://hstora.com')
+    const allowedOrigin = typeof body.allowed_origin === 'string' && body.allowed_origin.trim() ? body.allowed_origin.trim() : 'https://logspoll.com'
+    credentials = { key: passedKey, secret: passedSecret, baseUrl, allowedOrigin }
     testingUnsaved = true
   } else {
     if(!row)throw new HttpError(409,'Configure HStora credentials first.')
     try {
       credentials = JSON.parse(await openCredential(row.ciphertext,row.nonce,'hstora',env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials
+      if (credentials.baseUrl) credentials.baseUrl = normalizeHstoraBaseUrl(credentials.baseUrl)
+      if (!credentials.allowedOrigin) credentials.allowedOrigin = 'https://logspoll.com'
     } catch (error) {
       if (error instanceof CredentialError) throw new HttpError(error.status, error.message)
       throw error
@@ -281,6 +284,18 @@ export async function hstoraInternalDiag(request: Request, env: ApiEnv) {
   ]
 
   const results = await Promise.all(variations.map(v => testVar(v.name, v.url, v.template, v.secret, v.headers, v.sigTransform, v.noAuth)))
+  let adapter_balance = null
+  let adapter_page = null
+  try {
+    adapter_balance = await readHstoraBalance(creds)
+  } catch (e) {
+    adapter_balance = { error: e instanceof Error ? e.message : String(e) }
+  }
+  try {
+    adapter_page = await readHstoraPage(creds, 1, 5)
+  } catch (e) {
+    adapter_page = { error: e instanceof Error ? e.message : String(e) }
+  }
   return json({
     key_prefix: key.slice(0, 10),
     key_len: key.length,
@@ -288,6 +303,9 @@ export async function hstoraInternalDiag(request: Request, env: ApiEnv) {
     secret_prefix: secret.slice(0, 8),
     stored_allowed_origin: creds.allowedOrigin ?? null,
     stored_base_url: creds.baseUrl ?? null,
+    normalized_base_url: normalizeHstoraBaseUrl(creds.baseUrl),
+    adapter_balance,
+    adapter_page: adapter_page && 'items' in adapter_page ? { total: adapter_page.total, items_count: adapter_page.items.length } : adapter_page,
     results
   })
 }
