@@ -1,5 +1,5 @@
 import { HttpError, json } from './http.ts'
-import { createBachsSession, getBachsSession } from '../../server/bachs.ts'
+import { createBachsSession, getBachsSession, extractBachsBankTransferDetails, type BachsBankTransferDetails } from '../../server/bachs.ts'
 import { checkedPaidSandboxSession, parseNGNMinor } from '../../server/bachs-flow.ts'
 import { assertAutomationQuotes } from './supplier-automation.ts'
 import { runFulfillment } from './fulfillment.ts'
@@ -47,6 +47,7 @@ export interface FundingAttemptRecord {
   credited_minor: number
   idempotency_key: string
   status: 'initiating' | 'open' | 'paid' | 'failed' | 'expired' | 'cancelled'
+  bank_details?: string | null
   created_at: number
   updated_at: number
 }
@@ -98,7 +99,7 @@ export async function getWalletOverview(db: Database, customerId: string, env?: 
   ).bind(customerId).all<WalletTransactionRecord & { order_reference?: string | null }>()
 
   const pendingAttempts = await db.prepare(
-    `SELECT id, reference, checkout_id, amount_minor, fee_minor, credited_minor, status, created_at
+    `SELECT id, reference, checkout_id, amount_minor, fee_minor, credited_minor, status, bank_details, created_at
      FROM wallet_funding_attempts
      WHERE customer_id = ? AND status IN ('initiating', 'open')
      ORDER BY created_at DESC LIMIT 10`
@@ -120,19 +121,29 @@ export async function getWalletOverview(db: Database, customerId: string, env?: 
       balance_before: tx.balance_before_minor / 100,
       balance_after: tx.balance_after_minor / 100,
     })),
-    pending_deposits: pendingAttempts.results.map((p) => ({
-      ...p,
-      amount: p.amount_minor / 100,
-      fee: p.fee_minor / 100,
-      credited_amount: p.credited_minor / 100,
-    })),
+    pending_deposits: pendingAttempts.results.map((p) => {
+      let bankTransfer = null
+      if (p.bank_details) {
+        try { bankTransfer = JSON.parse(p.bank_details) } catch { bankTransfer = null }
+      }
+      return {
+        ...p,
+        amount: p.amount_minor / 100,
+        fee: p.fee_minor / 100,
+        credited_amount: p.credited_minor / 100,
+        bankTransfer,
+      }
+    }),
     virtual_account: {
       status: 'UNVERIFIED',
       reason: 'Dedicated virtual accounts have not been verified for this merchant.',
     },
     funding: {
       enabled: Boolean(env && (() => { try { return fundingMode(env) === 'sandbox' || env.WALLET_LIVE_FUNDING_ENABLED === 'true' } catch { return false } })()),
-      reason: 'Wallet funding requires verified provider configuration and prepaid-wallet approval. Existing balances remain available.',
+      mode: (() => { try { return env ? fundingMode(env) : 'disabled' } catch { return 'disabled' } })(),
+      reason: (env?.WALLET_LIVE_FUNDING_ENABLED === 'true' || (Boolean(env) && (() => { try { return env ? fundingMode(env) === 'sandbox' : false } catch { return false } })()))
+        ? 'Bachs live online checkout & bank transfer enabled.'
+        : 'Wallet funding requires verified provider configuration and prepaid-wallet approval. Existing balances remain available.',
     },
     deposit_limits: {
       min_ngn: MIN_WALLET_FUND_MINOR / 100,
@@ -219,9 +230,20 @@ export async function initiateWalletFunding(request: Request, env: ApiEnv, user:
     }, mode)
   if (previous?.checkout_id && previous.checkout_id !== session.checkoutId) throw new HttpError(503,'Provider checkout identity changed; reconciliation required.')
 
+  let bankTransfer = session.bankTransfer ?? null
+  if (!bankTransfer && session.checkoutId) {
+    try {
+      const detailed = await getBachsSession(key, session.checkoutId)
+      bankTransfer = extractBachsBankTransferDetails(detailed)
+    } catch {
+      // Non-fatal if session query fails or has no bank details
+    }
+  }
+  const bankDetailsJson = bankTransfer ? JSON.stringify(bankTransfer) : null
+
   await db.prepare(
-    "UPDATE wallet_funding_attempts SET checkout_id=?, status='open', updated_at=? WHERE id=? AND status IN ('initiating','open')"
-  ).bind(session.checkoutId, Date.now(), attemptId).run()
+    "UPDATE wallet_funding_attempts SET checkout_id=?, status='open', bank_details=?, updated_at=? WHERE id=? AND status IN ('initiating','open')"
+  ).bind(session.checkoutId, bankDetailsJson, Date.now(), attemptId).run()
 
   return json({
     ok: true,
@@ -229,6 +251,7 @@ export async function initiateWalletFunding(request: Request, env: ApiEnv, user:
     reference,
     checkoutId: session.checkoutId,
     checkoutUrl: session.checkoutUrl,
+    bankTransfer: bankTransfer ?? null,
     amountMinor,
     feeMinor,
     creditedMinor,
@@ -272,6 +295,7 @@ export async function reconcileWalletFundingAttempt(
   if (eventType.startsWith('refund.') || eventType.startsWith('dispute.') || ['refunded','partially_refunded'].includes(String(session.payment_status))) {
     // Never interpret a refund as a new credit. Freeze spending until authoritative reversal review.
     await db.prepare("UPDATE wallets SET status='frozen',updated_at=? WHERE id=? AND status='active'").bind(now,attempt.wallet_id).run()
+    await db.prepare("UPDATE wallet_funding_attempts SET bank_details=NULL,updated_at=? WHERE id=?").bind(now,attempt.id).run().catch(()=>undefined)
     if (eventId) await db.prepare("UPDATE bachs_webhook_events SET processing_status='needs_review',processed_at=? WHERE event_id=?").bind(now,eventId).run()
     return {status:'needs_review'}
   }
@@ -284,7 +308,7 @@ export async function reconcileWalletFundingAttempt(
       if (!Number.isSafeInteger(after)) throw new HttpError(409, 'Wallet balance limit exceeded.')
       // The CHECK constraint on balance_after_minor aborts the entire batch if either CAS misses.
       const writes = [
-        db.prepare("UPDATE wallet_funding_attempts SET status='paid',updated_at=? WHERE id=? AND status IN ('initiating','open') AND EXISTS(SELECT 1 FROM wallets WHERE id=? AND customer_id=? AND status='active' AND balance_minor=?)").bind(now, attempt.id, wallet.id, attempt.customer_id, wallet.balance_minor),
+        db.prepare("UPDATE wallet_funding_attempts SET status='paid', bank_details=NULL, updated_at=? WHERE id=? AND status IN ('initiating','open') AND EXISTS(SELECT 1 FROM wallets WHERE id=? AND customer_id=? AND status='active' AND balance_minor=?)").bind(now, attempt.id, wallet.id, attempt.customer_id, wallet.balance_minor),
         db.prepare("UPDATE wallets SET balance_minor=?,updated_at=? WHERE id=? AND status='active' AND balance_minor=? AND changes()=1").bind(after, now, wallet.id, wallet.balance_minor),
         db.prepare(`INSERT INTO wallet_transactions(id,wallet_id,customer_id,reference,type,direction,amount_minor,balance_before_minor,balance_after_minor,status,funding_attempt_id,reason,created_at)
           VALUES(?,?,?,?,'funding','credit',?,?,CASE WHEN changes()=1 THEN ? ELSE -1 END,'completed',?,'Wallet funding via Bachs',?)`).bind(crypto.randomUUID(),wallet.id,attempt.customer_id,'TX-FND-'+attempt.id,attempt.credited_minor,wallet.balance_minor,after,attempt.id,now),
@@ -303,7 +327,7 @@ export async function reconcileWalletFundingAttempt(
     }
     return { status: 'paid' }
   } else if (terminal) {
-    await db.prepare("UPDATE wallet_funding_attempts SET status='failed', updated_at=? WHERE id=? AND status IN ('initiating', 'open')").bind(now, attempt.id).run()
+    await db.prepare("UPDATE wallet_funding_attempts SET status='failed', bank_details=NULL, updated_at=? WHERE id=? AND status IN ('initiating', 'open')").bind(now, attempt.id).run()
     if (eventId) {
       await db.prepare("UPDATE bachs_webhook_events SET processing_status='processed', processed_at=? WHERE event_id=?").bind(now, eventId).run()
     }

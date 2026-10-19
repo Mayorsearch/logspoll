@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { 
   Wallet, ArrowUpRight, ArrowDownLeft, RefreshCw, 
   Clock, AlertCircle, CheckCircle2, Copy, Check, 
-  CreditCard, X, ArrowRight, Search, PlusCircle
+  CreditCard, X, ArrowRight, Search, PlusCircle, ExternalLink
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { cloudflareRequest } from '../lib/cloudflare-auth'
@@ -36,6 +36,20 @@ interface WalletTransaction {
   created_at: number
 }
 
+export interface BankTransferDetails {
+  bankName?: string
+  bank_name?: string
+  accountNumber?: string
+  account_number?: string
+  accountName?: string
+  account_name?: string
+  amount?: string | number
+  currency?: string
+  reference?: string
+  expiresAt?: string | number | null
+  expires_at?: string | number | null
+}
+
 interface PendingDeposit {
   id: string
   reference: string
@@ -46,6 +60,17 @@ interface PendingDeposit {
   credited_amount: number
   status: string
   created_at: number
+  bankTransfer?: BankTransferDetails | null
+}
+
+export interface ActiveFundingSession {
+  attemptId: string
+  reference: string
+  amountMinor: number
+  amount: number
+  checkoutUrl?: string
+  bankTransfer?: BankTransferDetails | null
+  status: 'awaiting_payment' | 'checking' | 'paid' | 'failed'
 }
 
 interface WalletOverviewResponse {
@@ -56,7 +81,7 @@ interface WalletOverviewResponse {
     status: 'AVAILABLE' | 'UNAVAILABLE' | 'UNVERIFIED'
     reason?: string
   }
-  funding?: { enabled: boolean; reason: string }
+  funding?: { enabled: boolean; mode?: string; reason: string }
   deposit_limits: {
     min_ngn: number
     max_ngn: number
@@ -70,7 +95,7 @@ export function WalletPage() {
   const { session } = useAuth()
   const formatPrice = (minor: number) => new Intl.NumberFormat('en-NG', {style:'currency',currency:'NGN'}).format(minor / 100)
   const fundingRequest = useRef<{amount:number;id:string} | null>(null)
-  const [funding, setFunding] = useState({enabled:false,reason:'Wallet funding is unavailable until provider approval and verification are complete.'})
+  const [funding, setFunding] = useState<{enabled:boolean;mode?:string;reason:string}>({enabled:false,mode:'unknown',reason:'Wallet funding is unavailable until provider approval and verification are complete.'})
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [wallet, setWallet] = useState<WalletInfo | null>(null)
@@ -84,6 +109,10 @@ export function WalletPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [notification, setNotification] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null)
+
+  // Active funding modal & polling state
+  const [activeFunding, setActiveFunding] = useState<ActiveFundingSession | null>(null)
+  const [reconcilingId, setReconcilingId] = useState<string | null>(null)
 
   // Transaction filter & search state
   const [txFilter, setTxFilter] = useState<'all' | 'credit' | 'debit'>('all')
@@ -199,6 +228,60 @@ export function WalletPage() {
     }
   }
 
+  // Auto-polling for active deposit reconciliation every 4 seconds
+  useEffect(() => {
+    if (!activeFunding || activeFunding.status === 'paid' || activeFunding.status === 'failed') return
+    const interval = setInterval(async () => {
+      try {
+        const res = await cloudflareRequest<{ status: string }>(`/api/wallet/reconcile?attempt_id=${encodeURIComponent(activeFunding.attemptId)}`)
+        if (res.status === 'paid') {
+          setActiveFunding((prev) => (prev ? { ...prev, status: 'paid' } : null))
+          void fetchWallet(true)
+        } else if (res.status === 'failed' || res.status === 'cancelled') {
+          setActiveFunding((prev) => (prev ? { ...prev, status: 'failed' } : null))
+          void fetchWallet(true)
+        }
+      } catch {
+        // Silently continue polling
+      }
+    }, 4000)
+    return () => clearInterval(interval)
+  }, [activeFunding, fetchWallet])
+
+  const handleCheckStatus = async (attemptId: string) => {
+    setReconcilingId(attemptId)
+    try {
+      const res = await cloudflareRequest<{ status: string }>(`/api/wallet/reconcile?attempt_id=${encodeURIComponent(attemptId)}`)
+      if (res.status === 'paid') {
+        setActiveFunding((prev) => (prev && prev.attemptId === attemptId ? { ...prev, status: 'paid' } : prev))
+        setNotification({
+          type: 'success',
+          message: 'Deposit confirmed! Your wallet balance has been credited successfully.'
+        })
+        void fetchWallet(true)
+      } else if (res.status === 'failed' || res.status === 'cancelled') {
+        setActiveFunding((prev) => (prev && prev.attemptId === attemptId ? { ...prev, status: 'failed' } : prev))
+        setNotification({
+          type: 'info',
+          message: 'This payment attempt has expired or failed.'
+        })
+        void fetchWallet(true)
+      } else {
+        setNotification({
+          type: 'info',
+          message: 'Payment verification is still pending. Your wallet will credit as soon as Bachs confirms receipt.'
+        })
+      }
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Unable to verify payment status.'
+      })
+    } finally {
+      setReconcilingId(null)
+    }
+  }
+
   const handleInitiateFunding = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!session || fundingBusy || !funding.enabled) return
@@ -222,21 +305,25 @@ export function WalletPage() {
         checkoutUrl?: string
         reference: string
         attemptId: string
+        bankTransfer?: BankTransferDetails | null
+        amountMinor?: number
+        amount?: number
       }>('/api/wallet/fund', {
         amount: customAmountStr,
         requestId: fundingRequest.current.id,
       })
 
-      if (res.checkoutUrl) {
-        window.location.assign(res.checkoutUrl)
-      } else {
-        setShowFundModal(false)
-        setNotification({
-          type: 'info',
-          message: `Funding transaction created (${res.reference}). Complete the payment prompt to credit your wallet.`
-        })
-        void fetchWallet(true)
-      }
+      setShowFundModal(false)
+      setActiveFunding({
+        attemptId: res.attemptId,
+        reference: res.reference,
+        amountMinor: res.amountMinor ?? Math.round(depositAmount * 100),
+        amount: res.amount ?? depositAmount,
+        checkoutUrl: res.checkoutUrl,
+        bankTransfer: res.bankTransfer ?? null,
+        status: 'awaiting_payment',
+      })
+      void fetchWallet(true)
     } catch (err) {
       setFundingError(err instanceof Error ? err.message : 'Unable to initiate wallet deposit. Please try again.')
     } finally {
@@ -351,7 +438,7 @@ export function WalletPage() {
                 <small>Cards (Mastercard, Visa, Verve), Bank Transfer &amp; USSD</small>
               </div>
               <span className={`channel-badge ${funding.enabled ? 'supported' : 'safeguard'}`}>
-                {funding.enabled ? 'Supported' : 'Sandbox / Safeguard'}
+                {funding.enabled ? (funding.mode === 'live' ? 'Live' : 'Supported') : 'Sandbox / Safeguard'}
               </span>
             </div>
             <p className="channel-note">
@@ -392,12 +479,41 @@ export function WalletPage() {
           {pendingDeposits.map((deposit) => (
             <div className="wallet-pending-row" key={deposit.id}>
               <Clock size={16} className="spin-slow" />
-              <div>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <strong>Deposit Ref: {deposit.reference}</strong>
                 <small>{dateLabel(deposit.created_at)}</small>
               </div>
-              <strong>{formatPrice(deposit.amount_minor)}</strong>
-              <span className="status-pill warning">{deposit.status}</span>
+              <strong style={{ margin: '0 10px', whiteSpace: 'nowrap' }}>{formatPrice(deposit.amount_minor)}</strong>
+              <div className="pending-deposit-actions">
+                <span className="status-pill warning">{deposit.status}</span>
+                <button
+                  type="button"
+                  className="button button-outline button-small"
+                  onClick={() => {
+                    setActiveFunding({
+                      attemptId: deposit.id,
+                      reference: deposit.reference,
+                      amountMinor: deposit.amount_minor,
+                      amount: deposit.amount,
+                      bankTransfer: deposit.bankTransfer ?? null,
+                      status: 'awaiting_payment',
+                    })
+                  }}
+                  style={{ padding: '4px 8px', fontSize: 11 }}
+                >
+                  View Details
+                </button>
+                <button
+                  type="button"
+                  className="button button-outline button-small"
+                  disabled={reconcilingId === deposit.id}
+                  onClick={() => handleCheckStatus(deposit.id)}
+                  style={{ padding: '4px 8px', fontSize: 11 }}
+                  title="Check confirmation with Bachs"
+                >
+                  <RefreshCw size={12} className={reconcilingId === deposit.id ? 'spin-icon' : ''} />
+                </button>
+              </div>
             </div>
           ))}
         </section>
@@ -576,6 +692,253 @@ export function WalletPage() {
                 {fundingBusy ? 'Preparing Bachs Checkout…' : 'Proceed to Secure Payment'}
               </button>
             </form>
+          </section>
+        </div>
+      )}
+
+      {/* Active Temporary Bank Transfer Modal */}
+      {activeFunding && (
+        <div className="wallet-modal-backdrop" onClick={() => {
+          if (activeFunding.status === 'paid' || activeFunding.status === 'failed') {
+            setActiveFunding(null)
+          }
+        }}>
+          <section 
+            role="dialog" 
+            aria-modal="true" 
+            aria-labelledby="active-funding-title" 
+            className="wallet-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="section-header-row">
+              <h2 id="active-funding-title">
+                {activeFunding.status === 'paid' ? 'Deposit Completed' : 'Temporary Bank Transfer'}
+              </h2>
+              <button 
+                type="button" 
+                className="wallet-icon-button" 
+                aria-label="Close dialog" 
+                onClick={() => {
+                  setActiveFunding(null)
+                  void fetchWallet(true)
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {activeFunding.status === 'paid' ? (
+              <div className="deposit-success-view">
+                <div className="success-icon-wrap">
+                  <CheckCircle2 size={32} />
+                </div>
+                <h3>Wallet Credited Successfully!</h3>
+                <p className="wallet-subtext" style={{ margin: '8px 0 16px' }}>
+                  {formatPrice(activeFunding.amountMinor)} has been added to your LogsPoll wallet balance.
+                </p>
+                <dl className="wallet-receipt-lines" style={{ textAlign: 'left', marginBottom: 16 }}>
+                  <div>
+                    <dt>Deposit Reference</dt>
+                    <dd>{activeFunding.reference}</dd>
+                  </div>
+                  <div>
+                    <dt>Amount Credited</dt>
+                    <dd>{formatPrice(activeFunding.amountMinor)}</dd>
+                  </div>
+                  <div className="receipt-total-row">
+                    <dt>Current Wallet Balance</dt>
+                    <dd>{wallet ? formatPrice(wallet.balance_minor) : 'Updated'}</dd>
+                  </div>
+                </dl>
+                <button
+                  type="button"
+                  className="button button-orange"
+                  style={{ width: '100%' }}
+                  onClick={() => {
+                    setActiveFunding(null)
+                    void fetchWallet(true)
+                  }}
+                >
+                  Done
+                </button>
+              </div>
+            ) : activeFunding.status === 'failed' ? (
+              <div className="deposit-success-view">
+                <div className="success-icon-wrap" style={{ background: '#fee2e2', color: '#dc2626' }}>
+                  <AlertCircle size={32} />
+                </div>
+                <h3>Deposit Window Closed</h3>
+                <p className="wallet-subtext" style={{ margin: '8px 0 16px' }}>
+                  This payment session was cancelled or expired. Any uncompleted transfer will not debit your account or can be re-initiated anytime.
+                </p>
+                <button
+                  type="button"
+                  className="button button-outline"
+                  style={{ width: '100%' }}
+                  onClick={() => setActiveFunding(null)}
+                >
+                  Close
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <span className="transfer-status-badge awaiting">
+                    <span className="pulse-amber" />
+                    <span>Awaiting Payment</span>
+                  </span>
+                  <small style={{ color: 'var(--dash-text-muted)', fontSize: 11 }}>
+                    Ref: {activeFunding.reference}
+                  </small>
+                </div>
+
+                {activeFunding.bankTransfer ? (
+                  <div className="bank-transfer-card">
+                    <div className="bank-transfer-row">
+                      <span className="label">Bank Name</span>
+                      <span className="value">
+                        {activeFunding.bankTransfer.bank_name || activeFunding.bankTransfer.bankName || 'Bachs Settlement Bank'}
+                      </span>
+                    </div>
+
+                    <div className="bank-transfer-row">
+                      <span className="label">Account Number</span>
+                      <div className="value-group">
+                        <span className="value monospace">
+                          {activeFunding.bankTransfer.account_number || activeFunding.bankTransfer.accountNumber}
+                        </span>
+                        <button
+                          type="button"
+                          className="copy-mini-btn"
+                          aria-label="Copy Account Number"
+                          onClick={() => copyToClipboard(
+                            activeFunding.bankTransfer!.account_number || activeFunding.bankTransfer!.accountNumber || '',
+                            'acc_num'
+                          )}
+                        >
+                          {copiedRef === 'acc_num' ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+                          <span>{copiedRef === 'acc_num' ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bank-transfer-row">
+                      <span className="label">Account Name</span>
+                      <div className="value-group">
+                        <span className="value">
+                          {activeFunding.bankTransfer.account_name || activeFunding.bankTransfer.accountName || 'LogsPoll Checkout'}
+                        </span>
+                        <button
+                          type="button"
+                          className="copy-mini-btn"
+                          aria-label="Copy Account Name"
+                          onClick={() => copyToClipboard(
+                            activeFunding.bankTransfer!.account_name || activeFunding.bankTransfer!.accountName || '',
+                            'acc_name'
+                          )}
+                        >
+                          {copiedRef === 'acc_name' ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bank-transfer-row">
+                      <span className="label">Amount to Transfer</span>
+                      <div className="value-group">
+                        <span className="value" style={{ color: '#16a34a' }}>
+                          {formatPrice(activeFunding.amountMinor)}
+                        </span>
+                        <button
+                          type="button"
+                          className="copy-mini-btn"
+                          aria-label="Copy Amount"
+                          onClick={() => copyToClipboard(String(activeFunding.amountMinor / 100), 'amt')}
+                        >
+                          {copiedRef === 'amt' ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bank-transfer-row">
+                      <span className="label">Payment Reference</span>
+                      <div className="value-group">
+                        <span className="value monospace" style={{ fontSize: 11 }}>
+                          {activeFunding.reference}
+                        </span>
+                        <button
+                          type="button"
+                          className="copy-mini-btn"
+                          aria-label="Copy Reference"
+                          onClick={() => copyToClipboard(activeFunding.reference, 'ref')}
+                        >
+                          {copiedRef === 'ref' ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bank-transfer-card" style={{ textAlign: 'center', padding: '20px 14px' }}>
+                    <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--dash-text-dark)' }}>
+                      Payment session initialized for <strong>{formatPrice(activeFunding.amountMinor)}</strong>.
+                    </p>
+                    {activeFunding.checkoutUrl && (
+                      <a 
+                        href={activeFunding.checkoutUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="button button-orange button-small"
+                        style={{ display: 'inline-flex', gap: 6, margin: '4px 0' }}
+                      >
+                        <span>Open Bachs Secure Checkout</span>
+                        <ExternalLink size={13} />
+                      </a>
+                    )}
+                  </div>
+                )}
+
+                <div className="transfer-instructions-note">
+                  <strong>Important:</strong> Send the exact amount ({formatPrice(activeFunding.amountMinor)}) using the temporary bank details above. This account is single-use for this deposit and will be cleared automatically once payment is verified.
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
+                  <button
+                    type="button"
+                    className="button button-orange"
+                    disabled={reconcilingId === activeFunding.attemptId}
+                    onClick={() => handleCheckStatus(activeFunding.attemptId)}
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                  >
+                    <RefreshCw size={14} className={reconcilingId === activeFunding.attemptId ? 'spin-icon' : ''} />
+                    <span>{reconcilingId === activeFunding.attemptId ? 'Verifying with Bachs…' : 'I Have Sent The Funds / Check Status'}</span>
+                  </button>
+
+                  {activeFunding.checkoutUrl && activeFunding.bankTransfer && (
+                    <a
+                      href={activeFunding.checkoutUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="button button-outline button-small"
+                      style={{ textAlign: 'center', justifyContent: 'center', display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <span>Pay with Card via Bachs Checkout</span>
+                      <ExternalLink size={13} />
+                    </a>
+                  )}
+
+                  <button
+                    type="button"
+                    className="button button-outline button-small"
+                    onClick={() => {
+                      setActiveFunding(null)
+                      void fetchWallet(true)
+                    }}
+                    style={{ justifyContent: 'center' }}
+                  >
+                    Close (Keeps Awaiting in Background)
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       )}

@@ -37,6 +37,7 @@ function fixture() {
     '0025_structured_product_delivery.sql',
     '0026_customer_wallet_system.sql',
     '0027_wallet_admin_audit.sql',
+    '0028_wallet_temporary_accounts.sql',
   ]
   for (const name of migrations) {
     sql.exec(readFileSync(new URL('../workers/api/migrations/' + name, import.meta.url), 'utf8'))
@@ -790,3 +791,243 @@ test('unconfirmed charge and refund never create wallet credit',async t=>{
   assert.equal((sql.prepare('SELECT status FROM wallets WHERE id=?').get(wallet.id) as {status:string}).status,'frozen')
   assert.equal((sql.prepare('SELECT count(*) n FROM wallet_transactions').get() as {n:number}).n,0)
 })
+
+// ============================================================================
+// 8. TEMPORARY BANK ACCOUNTS, EXPIRY CLEARING & LIVE FUNDING LIFECYCLE
+// ============================================================================
+
+test('initiateWalletFunding saves temporary bank details and getWalletOverview exposes them for open attempts', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+
+  const wallet = await getOrCreateWallet(env.DB!, customer)
+  const attemptId = crypto.randomUUID()
+  const reference = 'WF-TEST-TEMP-001'
+  const bankDetails = JSON.stringify({
+    bankName: 'Providus Bank',
+    accountNumber: '9928374650',
+    accountName: 'LogsPoll - John Doe',
+    expiresAt: Date.now() + 1800000,
+  })
+
+  // Insert an open funding attempt with temporary bank details
+  sql.prepare(`
+    INSERT INTO wallet_funding_attempts (
+      id, customer_id, wallet_id, reference, checkout_id, provider_mode,
+      amount_minor, fee_minor, credited_minor, idempotency_key, status, bank_details, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'chk_temp_bank_01', 'sandbox', 200000, 0, 200000, 'wf_temp_01', 'open', ?, ?, ?)
+  `).run(attemptId, customer, wallet.id, reference, bankDetails, Date.now(), Date.now())
+
+  // Verify getWalletOverview parses and returns the bank details
+  const overviewRes = await getWalletOverview(env.DB!, customer, env)
+  assert.equal(overviewRes.status, 200)
+  const body = await overviewRes.json() as any
+  assert.equal(body.pending_deposits.length, 1)
+  assert.equal(body.pending_deposits[0].reference, reference)
+  assert.equal(body.pending_deposits[0].amount, 2000)
+  assert.ok(body.pending_deposits[0].bankTransfer)
+  assert.equal(body.pending_deposits[0].bankTransfer.bankName, 'Providus Bank')
+  assert.equal(body.pending_deposits[0].bankTransfer.accountNumber, '9928374650')
+  assert.equal(body.pending_deposits[0].bankTransfer.accountName, 'LogsPoll - John Doe')
+})
+
+test('reconcileWalletFundingAttempt clears bank_details on payment completion', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+
+  const wallet = await getOrCreateWallet(env.DB!, customer)
+  const attemptId = crypto.randomUUID()
+  const checkoutId = 'chk_temp_reconcile_paid'
+  const bankDetails = JSON.stringify({
+    bankName: 'Providus Bank',
+    accountNumber: '9928374650',
+    accountName: 'LogsPoll - John Doe',
+  })
+
+  sql.prepare(`
+    INSERT INTO wallet_funding_attempts (
+      id, customer_id, wallet_id, reference, checkout_id, provider_mode,
+      amount_minor, fee_minor, credited_minor, idempotency_key, status, bank_details, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'sandbox', 100000, 0, 100000, 'wf_rec_01', 'open', ?, ?, ?)
+  `).run(attemptId, customer, wallet.id, 'WF-REC-01', checkoutId, bankDetails, Date.now(), Date.now())
+
+  const attempt = sql.prepare('SELECT * FROM wallet_funding_attempts WHERE id=?').get(attemptId) as any
+
+  const session = {
+    checkout_id: checkoutId,
+    reference: attemptId,
+    currency: 'NGN',
+    amount: '1000.00',
+    status: 'completed',
+    payment_status: 'succeeded',
+    source_type: 'API',
+    session_mode: null,
+    products: null,
+    recurring: null,
+    metadata: { order_id: attemptId },
+    charge: { status: 'succeeded' },
+  }
+
+  // Reconcile as paid
+  const res = await reconcileWalletFundingAttempt(env, attempt, '', '', session)
+  assert.equal(res.status, 'paid')
+
+  // Verify bank_details is cleared (NULL) upon successful payment
+  const updated = sql.prepare('SELECT status, bank_details FROM wallet_funding_attempts WHERE id=?').get(attemptId) as any
+  assert.equal(updated.status, 'paid')
+  assert.equal(updated.bank_details, null)
+
+  // Verify wallet is credited
+  const updatedWallet = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(wallet.id) as any
+  assert.equal(updatedWallet.balance_minor, 100000)
+
+  // Verify getWalletOverview has 0 pending deposits now
+  const overview = await (await getWalletOverview(env.DB!, customer, env)).json() as any
+  assert.equal(overview.pending_deposits.length, 0)
+  assert.equal(overview.wallet.balance_minor, 100000)
+})
+
+test('reconcileWalletFundingAttempt clears bank_details on session expiry or cancellation', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+
+  const wallet = await getOrCreateWallet(env.DB!, customer)
+  const attemptId = crypto.randomUUID()
+  const checkoutId = 'chk_temp_expired'
+  const bankDetails = JSON.stringify({
+    bankName: 'Providus Bank',
+    accountNumber: '9928374650',
+    accountName: 'LogsPoll - John Doe',
+  })
+
+  sql.prepare(`
+    INSERT INTO wallet_funding_attempts (
+      id, customer_id, wallet_id, reference, checkout_id, provider_mode,
+      amount_minor, fee_minor, credited_minor, idempotency_key, status, bank_details, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'sandbox', 50000, 0, 50000, 'wf_exp_01', 'open', ?, ?, ?)
+  `).run(attemptId, customer, wallet.id, 'WF-EXP-01', checkoutId, bankDetails, Date.now(), Date.now())
+
+  const attempt = sql.prepare('SELECT * FROM wallet_funding_attempts WHERE id=?').get(attemptId) as any
+
+  const session = {
+    checkout_id: checkoutId,
+    reference: attemptId,
+    currency: 'NGN',
+    amount: '500.00',
+    status: 'expired',
+    payment_status: 'failed',
+    source_type: 'API',
+    session_mode: null,
+    products: null,
+    recurring: null,
+    metadata: { order_id: attemptId },
+  }
+
+  // Reconcile terminal expired session
+  const res = await reconcileWalletFundingAttempt(env, attempt, '', '', session)
+  assert.equal(res.status, 'failed')
+
+  // Verify bank_details is cleared (NULL)
+  const updated = sql.prepare('SELECT status, bank_details FROM wallet_funding_attempts WHERE id=?').get(attemptId) as any
+  assert.equal(updated.status, 'failed')
+  assert.equal(updated.bank_details, null)
+
+  // Wallet balance remains 0
+  const updatedWallet = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(wallet.id) as any
+  assert.equal(updatedWallet.balance_minor, 0)
+})
+
+test('customer funds wallet and then purchases digital product with atomic debit', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+  env.AUTO_FULFILLMENT_ENABLED = 'false'
+
+  // 1. Initial wallet state: ₦0.00
+  const wallet = await getOrCreateWallet(env.DB!, customer)
+  assert.equal(wallet.balance_minor, 0)
+
+  // 2. Fund wallet with ₦5,000 (500,000 kobo)
+  const attemptId = crypto.randomUUID()
+  const checkoutId = 'chk_deposit_then_buy'
+  sql.prepare(`
+    INSERT INTO wallet_funding_attempts (
+      id, customer_id, wallet_id, reference, checkout_id, provider_mode,
+      amount_minor, fee_minor, credited_minor, idempotency_key, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'sandbox', 500000, 0, 500000, 'wf_dtb_01', 'open', ?, ?)
+  `).run(attemptId, customer, wallet.id, 'WF-DTB-01', checkoutId, Date.now(), Date.now())
+
+  const attempt = sql.prepare('SELECT * FROM wallet_funding_attempts WHERE id=?').get(attemptId) as any
+  const session = {
+    checkout_id: checkoutId,
+    reference: attemptId,
+    currency: 'NGN',
+    amount: '5000.00',
+    status: 'completed',
+    payment_status: 'succeeded',
+    source_type: 'API',
+    session_mode: null,
+    products: null,
+    recurring: null,
+    metadata: { order_id: attemptId },
+    charge: { status: 'succeeded' },
+  }
+  await reconcileWalletFundingAttempt(env, attempt, '', '', session)
+
+  // Balance is now ₦5,000
+  const fundedWallet = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(wallet.id) as any
+  assert.equal(fundedWallet.balance_minor, 500000)
+
+  // 3. Purchase PIA VPN product priced at ₦5,000 (500,000 kobo)
+  const orderReq = new Request('https://test.example/api/wallet/pay-order', {
+    method: 'POST',
+    body: JSON.stringify({
+      requestId: crypto.randomUUID(),
+      items: [{ id: product, quantity: 1 }],
+    }),
+  })
+
+  const orderRes = await payOrderWithWallet(orderReq, env, { id: customer, email: 'customer@example.com' })
+  assert.equal(orderRes.status, 201)
+  const orderData = await orderRes.json() as any
+  assert.equal(orderData.totalMinor, 500000)
+  assert.equal(orderData.balanceAfterMinor, 0)
+  assert.equal(orderData.paymentMethod, 'wallet')
+
+  // Verify wallet balance is now ₦0.00
+  const afterWallet = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(wallet.id) as any
+  assert.equal(afterWallet.balance_minor, 0)
+
+  // Verify order in database is marked paid
+  const savedOrder = sql.prepare('SELECT payment_status, payment_method, total_minor FROM orders WHERE id=?').get(orderData.orderId) as any
+  assert.equal(savedOrder.payment_status, 'paid')
+  assert.equal(savedOrder.payment_method, 'wallet')
+  assert.equal(savedOrder.total_minor, 500000)
+
+  // Verify both funding and purchase transactions exist in ledger
+  const txs = sql.prepare('SELECT type, direction, amount_minor, balance_after_minor FROM wallet_transactions WHERE wallet_id=? ORDER BY created_at ASC').all(wallet.id) as any[]
+  assert.equal(txs.length, 2)
+  assert.equal(txs[0].type, 'funding')
+  assert.equal(txs[0].direction, 'credit')
+  assert.equal(txs[0].amount_minor, 500000)
+  assert.equal(txs[0].balance_after_minor, 500000)
+  assert.equal(txs[1].type, 'purchase')
+  assert.equal(txs[1].direction, 'debit')
+  assert.equal(txs[1].amount_minor, 500000)
+  assert.equal(txs[1].balance_after_minor, 0)
+})
+
+test('live wallet funding is enabled when WALLET_LIVE_FUNDING_ENABLED is true and live key configured', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+
+  env.ENVIRONMENT = 'production'
+  env.BACHS_API_KEY = 'sk_live_fintech_production_key_abcdef123456'
+  env.BACHS_SANDBOX_ENABLED = 'false'
+  env.WALLET_LIVE_FUNDING_ENABLED = 'true'
+
+  const overview = await (await getWalletOverview(env.DB!, customer, env)).json() as any
+  assert.equal(overview.funding.enabled, true)
+  assert.equal(overview.funding.mode, 'live')
+  assert.match(overview.funding.reason, /live online checkout/i)
+})
+

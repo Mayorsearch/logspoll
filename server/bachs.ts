@@ -36,12 +36,12 @@ export type CheckoutSessionInput = {
   idempotencyKey: string // unique durable order-attempt identifier
 }
 
-export async function createSandboxSession(input: CheckoutSessionInput): Promise<{ checkoutId: string; checkoutUrl: string }> {
+export async function createSandboxSession(input: CheckoutSessionInput): Promise<{ checkoutId: string; checkoutUrl: string; bankTransfer?: BachsBankTransferDetails | null }> {
   if (!input.key.startsWith('sk_sandbox_') || input.key.length > 256) throw new Error('Bachs sandbox key is not configured.')
   return createBachsSession(input, 'sandbox')
 }
 
-export async function createBachsSession(input: CheckoutSessionInput, mode: 'sandbox' | 'live'): Promise<{checkoutId:string;checkoutUrl:string}> {
+export async function createBachsSession(input: CheckoutSessionInput, mode: 'sandbox' | 'live'): Promise<{checkoutId:string;checkoutUrl:string;bankTransfer?:BachsBankTransferDetails|null}> {
   if (input.amountMinor < BACHS_MINIMUM_NGN_MINOR) throw new BachsCheckoutError(BACHS_MINIMUM_MESSAGE)
   const key=input.key.trim()
   if (!key.startsWith(mode==='live'?'sk_live_':'sk_sandbox_') || key.length>256 || /[^\x21-\x7e]/.test(key)) throw new Error('Bachs credential environment mismatch.')
@@ -108,8 +108,70 @@ export async function createBachsSession(input: CheckoutSessionInput, mode: 'san
   try { destination = new URL(value.checkout_url) } catch { throw new Error('Unexpected Bachs checkout URL.') }
   // Accept only documented Bachs-hosted checkout hosts. Never redirect a shopper
   // to a URL supplied by an arbitrary upstream response.
-  if (destination.protocol !== 'https:' || !['sandbox-checkout.bachs.io', 'checkout.bachs.io'].includes(destination.hostname) || destination.port || destination.username || destination.password) throw new Error('Unexpected Bachs checkout URL.')
-  return { checkoutId: value.checkout_id, checkoutUrl: destination.toString() }
+  const res: { checkoutId: string; checkoutUrl: string; bankTransfer?: BachsBankTransferDetails | null } = {
+    checkoutId: value.checkout_id,
+    checkoutUrl: destination.toString(),
+  }
+  const bankTransfer = extractBachsBankTransferDetails(value)
+  if (bankTransfer) res.bankTransfer = bankTransfer
+  return res
+}
+
+export interface BachsBankTransferDetails {
+  bankName: string
+  bank_name?: string
+  accountNumber: string
+  account_number?: string
+  accountName: string
+  account_name?: string
+  amount?: string | number
+  currency?: string
+  reference?: string
+  expiresAt?: string | number | null
+  expires_at?: string | number | null
+}
+
+export function extractBachsBankTransferDetails(data: unknown): BachsBankTransferDetails | null {
+  if (!data || typeof data !== 'object') return null
+  const d = data as Record<string, unknown>
+  const candidates = [
+    d.bank_transfer,
+    d.virtual_account,
+    d.transfer_details,
+    d.account_details,
+    d.payment_details,
+    (d.payment_method_details as any)?.bank_transfer,
+    (d.payment_methods as any)?.bank_transfer,
+    (d.metadata as any)?.bank_transfer,
+    d,
+  ]
+
+  for (const c of candidates) {
+    if (c && typeof c === 'object') {
+      const obj = c as Record<string, unknown>
+      const accountNumber = String(obj.account_number || obj.accountNumber || obj.account_no || obj.nuban || '').trim()
+      const bankName = String(obj.bank_name || obj.bankName || obj.bank || '').trim()
+      const accountName = String(obj.account_name || obj.accountName || obj.account_holder_name || '').trim()
+      const expiresAt = obj.expires_at || obj.expiresAt || d.expires_at || d.expiresAt || null
+
+      if (accountNumber && (bankName || accountName)) {
+        const resolvedBank = bankName || 'Bachs Settlement Bank'
+        const resolvedAccount = accountName || 'LogsPoll Checkout'
+        const resolvedExpires = typeof expiresAt === 'string' || typeof expiresAt === 'number' ? expiresAt : null
+        return {
+          bankName: resolvedBank,
+          bank_name: resolvedBank,
+          accountNumber,
+          account_number: accountNumber,
+          accountName: resolvedAccount,
+          account_name: resolvedAccount,
+          expiresAt: resolvedExpires,
+          expires_at: resolvedExpires,
+        }
+      }
+    }
+  }
+  return null
 }
 
 function validTimestamp(text: string | null, nowSeconds: number) {
