@@ -52,7 +52,7 @@
         "AUTH_ENABLED": "false",
         "CATALOG_SYNC_ENABLED": "true",
         "AUTOMATION_ENABLED": "true",
-        "WALLET_LIVE_FUNDING_ENABLED": "true"
+        "WALLET_LIVE_FUNDING_ENABLED": "false"
       },
       "d1_databases": [
         {
