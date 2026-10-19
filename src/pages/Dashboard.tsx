@@ -6,7 +6,7 @@ import {
   ShoppingBag, ShieldCheck, ArrowRight, Heart, 
   Key, Check, Download, HelpCircle, Search, 
   Clock, CheckCircle2, XCircle, AlertCircle, MessageSquare,
-  ChevronDown, ChevronUp, Wallet, RefreshCw,
+  ChevronDown, ChevronUp, Wallet, RefreshCw, Store,
   Sun, Moon, Bell, Eye, EyeOff, Plus, ChevronRight, ArrowDown, ArrowUp, Send
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
@@ -97,6 +97,13 @@ function DashboardShellInner() {
             <span>Dashboard</span>
           </NavLink>
           <NavLink
+            to="/marketplace"
+            className={({ isActive }) => `side-nav-link ${isActive ? 'active' : ''}`}
+          >
+            <Store size={18} />
+            <span>Shop</span>
+          </NavLink>
+          <NavLink
             to="/dashboard/wallet"
             className={({ isActive }) => `side-nav-link ${isActive ? 'active' : ''}`}
           >
@@ -109,13 +116,6 @@ function DashboardShellInner() {
           >
             <ShoppingBag size={18} />
             <span>My Orders</span>
-          </NavLink>
-          <NavLink
-            to="/dashboard/favorites"
-            className={({ isActive }) => `side-nav-link ${isActive ? 'active' : ''}`}
-          >
-            <Heart size={18} />
-            <span>Saved Items</span>
           </NavLink>
           <NavLink
             to="/dashboard/profile"
@@ -198,7 +198,14 @@ function DashboardShellInner() {
           className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
         >
           <span className="nav-icon"><House size={19} /></span>
-          <span>Home</span>
+          <span>Dashboard</span>
+        </NavLink>
+        <NavLink
+          to="/marketplace"
+          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+        >
+          <span className="nav-icon"><Store size={19} /></span>
+          <span>Shop</span>
         </NavLink>
         <NavLink
           to="/dashboard/wallet"
@@ -213,13 +220,6 @@ function DashboardShellInner() {
         >
           <span className="nav-icon"><ShoppingBag size={19} /></span>
           <span>Orders</span>
-        </NavLink>
-        <NavLink
-          to="/dashboard/favorites"
-          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-        >
-          <span className="nav-icon"><Heart size={19} /></span>
-          <span>Saved</span>
         </NavLink>
         <NavLink
           to="/dashboard/profile"
