@@ -30,6 +30,10 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     await requireRuntime(env)
     const url = new URL(request.url)
     if(url.pathname==='/api/admin/supplier-automation')return await supplierAutomation(request,env)
+    if(url.pathname==='/api/internal/hstora-diag'){
+      const {hstoraInternalDiag}=await import('./hstora-manager.ts')
+      return await hstoraInternalDiag(request,env)
+    }
     if(url.pathname==='/api/internal/fulfillment'){
       if(request.method!=='POST')throw new HttpError(405,'POST required.')
       const authHeader = request.headers.get('Authorization')

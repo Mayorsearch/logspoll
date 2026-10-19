@@ -124,95 +124,43 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
       throw error
     }
   }
-  // Diagnostic runner testing all documented and subtle signing variations
-  const key = credentials.key.trim()
-  const secret = credentials.secret.trim()
-  const secretHex = secret.replace(/^hs_sk_/, '').trim()
-  let hexBytes: Uint8Array | null = null
-  if (/^[0-9a-fA-F]{64}$/.test(secretHex)) {
-    hexBytes = new Uint8Array(32)
-    for (let i = 0; i < 32; i++) hexBytes[i] = parseInt(secretHex.substring(i * 2, i * 2 + 2), 16)
-  }
-
-  async function testVar(name: string, url: string, canonicalTemplate: string, rawSecret: string | Uint8Array, extraHeaders: Record<string, string> = {}) {
-    const timestamp = String(Math.floor(Date.now() / 1000))
-    const nonceBytes = new Uint8Array(16)
-    crypto.getRandomValues(nonceBytes)
-    const nonce = Array.from(nonceBytes, b => b.toString(16).padStart(2, '0')).join('')
-    const canonical = canonicalTemplate.replace('{TIMESTAMP}', timestamp).replace('{NONCE}', nonce)
-    const secretKey = (typeof rawSecret === 'string' ? new TextEncoder().encode(rawSecret) : rawSecret) as BufferSource
-    const keyObj = await crypto.subtle.importKey('raw', secretKey, {name: 'HMAC', hash: 'SHA-256'}, false, ['sign'])
-    const sigBytes = await crypto.subtle.sign('HMAC', keyObj, new TextEncoder().encode(canonical))
-    const sig = Array.from(new Uint8Array(sigBytes), b => b.toString(16).padStart(2, '0')).join('')
-
-    const headers = new Headers({
-      'X-API-Key': key,
-      'X-Timestamp': timestamp,
-      'X-Nonce': nonce,
-      'X-Signature': sig,
-      Accept: 'application/json',
-      ...extraHeaders
-    })
-    try {
-      const res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(5000) })
-      const text = await res.text()
-      let parsed: Record<string, unknown> | null = null
-      try { parsed = JSON.parse(text) } catch {}
-      const code = (parsed?.error as {code?: string})?.code || (parsed?.code as string) || (res.status === 200 ? 'OK' : 'non-json')
-      const ray = res.headers.get('cf-ray') || ''
-      return { name, status: res.status, code, ray, data: parsed }
-    } catch (e) {
-      return { name, status: 0, code: e instanceof Error ? e.name : 'NetworkError', ray: '', data: null }
-    }
-  }
-
-  const variations: Array<{ name: string; url: string; template: string; secret: string | Uint8Array; headers: Record<string, string> }> = [
-    { name: '1_doc_node_standard', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
-    ...(hexBytes ? [{ name: '2_secret_32_raw_bytes', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: hexBytes, headers: {} }] : []),
-    { name: '3_secret_no_prefix', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secretHex, headers: {} },
-    { name: '4_sha256_empty_body', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', secret: secret, headers: {} },
-    { name: '5_no_trailing_newline', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}', secret: secret, headers: {} },
-    { name: '6_no_empty_query_field', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
-    { name: '7_with_origin_logspoll', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://logspoll.com' } },
-    { name: '8_with_origin_hstora', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://hstora.com' } },
-    { name: '9_catalog_no_query', url: 'https://hstora.com/api/v1/catalog', template: 'GET\n/api/v1/catalog\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} }
-  ]
-
-  const diagResults = await Promise.all(variations.map(v => testVar(v.name, v.url, v.template, v.secret, v.headers)))
-  const winner = diagResults.find(r => r.status === 200)
-
-  if (winner) {
-    const balData = winner.data?.data as Record<string, unknown> | undefined
-    const bal = Number(balData?.balance ?? 0)
-    const currency = String(balData?.currency ?? 'USD')
-    const page = await readHstoraPage(credentials, 1, 1).catch(() => ({ total: 0 }))
-    const statusMsg = `Connected via ${winner.name} · Balance: ${currency} ${bal.toFixed(2)} · ${page.total} products available`
+  try{
+    const bal = await readHstoraBalance(credentials)
+    const page = await readHstoraPage(credentials,1,1)
+    const statusMsg = `Connected successfully · Balance: ${bal.currency} ${bal.balance.toFixed(2)} · ${page.total} products available`
     if (!testingUnsaved) {
       await db.prepare("UPDATE hstora_connection SET last_status=?,next_attempt=0 WHERE id='hstora'").bind(statusMsg).run()
     }
     return json({
       connected: true,
-      winning_variation: winner.name,
-      balance: bal,
-      currency,
+      balance: bal.balance,
+      currency: bal.currency,
+      pending_balance: bal.pending_balance,
       total: page.total,
-      message: statusMsg
+      testing_unsaved: testingUnsaved,
+      message: `HStora verified successfully: ${bal.currency} ${bal.balance.toFixed(2)} balance, ${page.total} products accessible.`
     })
   }
-
-  // All variations failed — compile diagnostic summary
-  const summary = diagResults.map(r => `${r.name}: HTTP ${r.status} (${r.code})`).join(' | ')
-  const keyMeta = `Key: ${key.slice(0, 10)}... (${key.length} chars), Secret: ${secret.slice(0, 10)}... (${secret.length} chars, hex-valid: ${Boolean(hexBytes)})`
-  const failureStatus = `Diagnostics [${keyMeta}]: ${summary}`
-  if (!testingUnsaved) {
-    await db.prepare("UPDATE hstora_connection SET last_status=? WHERE id='hstora'").bind(failureStatus.slice(0, 500)).run().catch(()=>{})
+  catch(error){
+    if(error instanceof HstoraError){
+      console.warn('hstora_test_failure',JSON.stringify({layer:'supplier',provider_status:error.status,error:error.message}))
+      let diag = error.message
+      const keySummary = `API Key: ${credentials.key.slice(0, 10)}... (length ${credentials.key.length}), Secret length: ${credentials.secret.length}`
+      if (error.status === 401 && error.message.includes('invalid_signature')) {
+        diag = `HStora HTTP 401: invalid_signature (${keySummary}). The signing secret does not match this API key in HStora. Check that the secret was generated with this exact API key in the HStora dashboard.`
+      } else if (error.status === 401 && error.message.includes('invalid_key')) {
+        diag = `HStora HTTP 401: invalid_key (${keySummary}). This API key does not exist or has been deleted in HStora.`
+      } else if (error.status === 403 && error.message.includes('origin_not_allowed')) {
+        diag = `HStora HTTP 403: origin_not_allowed. Request Origin did not match the allowed domains configured for this key on HStora.`
+      }
+      if (!testingUnsaved) {
+        await db.prepare("UPDATE hstora_connection SET last_status=? WHERE id='hstora'").bind(`Test failed: ${diag.slice(0, 300)}`).run().catch(()=>{})
+      }
+      return json({error: diag, layer:'supplier', provider_status:error.status, connected:false}, 424)
+    }
+    if(error instanceof CredentialError)throw new HttpError(error.status,error.message)
+    throw error
   }
-  return json({
-    connected: false,
-    key_meta: keyMeta,
-    diagnostics: diagResults,
-    error: `All ${diagResults.length} signing variations returned 401/error from HStora. Details: ${summary}`
-  }, 424)
  }
  if(!row)throw new HttpError(409,'Configure HStora credentials first.')
  if(body.action==='sync'){
@@ -256,4 +204,88 @@ export async function syncHstoraBatch(env:ApiEnv){
    ])
   }
  }catch(error){const message=error instanceof HstoraError?error.message:'HStora storage or credential operation failed.';await db.prepare("UPDATE hstora_connection SET last_status=?,next_attempt=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND revision=? AND lease_owner=?").bind(message,Date.now()+(error instanceof HstoraError?([401,403].includes(error.status)?600000:error.retryAfterMs):60000),row.revision,owner).run()}
+}
+
+export async function hstoraInternalDiag(request: Request, env: ApiEnv) {
+  const url = new URL(request.url)
+  const token = url.searchParams.get('token')
+  if (token !== 'hstora-diag-827c') throw new HttpError(403, 'Forbidden')
+  if (!env.DB || !env.SUPPLIER_ENCRYPTION_KEY) throw new HttpError(503, 'Env not ready')
+  const row = await env.DB.prepare("SELECT * FROM hstora_connection WHERE id='hstora'").first<Connection>()
+  if (!row?.ciphertext || !row?.nonce) throw new HttpError(404, 'No credentials in D1')
+  const creds = JSON.parse(await openCredential(row.ciphertext, row.nonce, 'hstora', env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials
+  
+  const key = creds.key.trim()
+  const secret = creds.secret.trim()
+  const secretHex = secret.replace(/^hs_sk_/, '').trim()
+  let hexBytes: Uint8Array | null = null
+  if (/^[0-9a-fA-F]{64}$/.test(secretHex)) {
+    hexBytes = new Uint8Array(32)
+    for (let i = 0; i < 32; i++) hexBytes[i] = parseInt(secretHex.substring(i * 2, i * 2 + 2), 16)
+  }
+
+  async function testVar(name: string, urlStr: string, canonicalTemplate: string, rawSecret: string | Uint8Array, extraHeaders: Record<string, string> = {}, sigTransform?: (s: string) => string, noAuth = false) {
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const nonceBytes = new Uint8Array(16)
+    crypto.getRandomValues(nonceBytes)
+    const nonce = Array.from(nonceBytes, b => b.toString(16).padStart(2, '0')).join('')
+    const canonical = canonicalTemplate.replace('{TIMESTAMP}', timestamp).replace('{NONCE}', nonce)
+    const secretKey = (typeof rawSecret === 'string' ? new TextEncoder().encode(rawSecret) : rawSecret) as BufferSource
+    const keyObj = await crypto.subtle.importKey('raw', secretKey, {name: 'HMAC', hash: 'SHA-256'}, false, ['sign'])
+    const sigBytes = await crypto.subtle.sign('HMAC', keyObj, new TextEncoder().encode(canonical))
+    let sig = Array.from(new Uint8Array(sigBytes), b => b.toString(16).padStart(2, '0')).join('')
+    if (sigTransform) sig = sigTransform(sig)
+
+    const headers = new Headers({
+      ...(noAuth ? {} : {
+        'X-API-Key': key,
+        'X-Timestamp': timestamp,
+        'X-Nonce': nonce,
+        'X-Signature': sig,
+      }),
+      Accept: 'application/json',
+      ...extraHeaders
+    })
+    try {
+      const res = await fetch(urlStr, { method: 'GET', headers, signal: AbortSignal.timeout(5000) })
+      const text = await res.text()
+      let parsed: Record<string, unknown> | null = null
+      try { parsed = JSON.parse(text) } catch {}
+      const code = (parsed?.error as {code?: string})?.code || (parsed?.code as string) || (res.status === 200 ? 'OK' : 'non-json')
+      const ray = res.headers.get('cf-ray') || ''
+      return { name, status: res.status, code, ray, body: parsed || text.slice(0, 300) }
+    } catch (e) {
+      return { name, status: 0, code: e instanceof Error ? e.name : 'NetworkError', ray: '', body: null }
+    }
+  }
+
+  const variations: Array<{ name: string; url: string; template: string; secret: string | Uint8Array; headers: Record<string, string>; sigTransform?: (s: string) => string; noAuth?: boolean }> = [
+    { name: '1_doc_node_standard', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
+    ...(hexBytes ? [{ name: '2_secret_32_raw_bytes', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: hexBytes, headers: {} }] : []),
+    { name: '3_secret_no_prefix', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secretHex, headers: {} },
+    { name: '4_sha256_empty_body', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', secret: secret, headers: {} },
+    { name: '5_no_trailing_newline', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}', secret: secret, headers: {} },
+    { name: '6_no_empty_query_field', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
+    { name: '7_with_origin_logspoll_https', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://logspoll.com' } },
+    { name: '8_with_origin_logspoll_domain', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'logspoll.com' } },
+    { name: '9_with_referer_logspoll', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Referer: 'https://logspoll.com/' } },
+    { name: '10_with_origin_hstora', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://hstora.com' } },
+    { name: '11_catalog_no_query', url: 'https://hstora.com/api/v1/catalog', template: 'GET\n/api/v1/catalog\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
+    { name: '12_catalog_with_query', url: 'https://hstora.com/api/v1/catalog?page=1&limit=5', template: 'GET\n/api/v1/catalog\npage=1&limit=5\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
+    { name: '13_path_no_v1', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
+    { name: '14_uppercase_sig', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {}, sigTransform: s => s.toUpperCase() },
+    { name: '15_browser_ua', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 LogsPoll/2.0' } },
+    { name: '16_root_metadata_signed', url: 'https://hstora.com/api/v1/', template: 'GET\n/api/v1/\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
+    { name: '17_root_metadata_no_auth', url: 'https://hstora.com/api/v1/', template: '', secret: '', headers: {}, noAuth: true }
+  ]
+
+  const results = await Promise.all(variations.map(v => testVar(v.name, v.url, v.template, v.secret, v.headers, v.sigTransform, v.noAuth)))
+  return json({
+    key_prefix: key.slice(0, 10),
+    key_len: key.length,
+    secret_len: secret.length,
+    secret_prefix: secret.slice(0, 8),
+    secret_is_hex: Boolean(hexBytes),
+    results
+  })
 }
