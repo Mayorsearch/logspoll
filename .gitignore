@@ -35,3 +35,4 @@ emails/preview/
 *.sql
 !workers/api/migrations/*.sql
 !fixtures.sql
+acceptance-evidence/
