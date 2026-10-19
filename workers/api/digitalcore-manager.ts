@@ -267,7 +267,11 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
           ? Number(globalCfg?.usd_to_ngn_rate)
           : 1500.0
 
-    const defaultMarkup = globalCfg?.markup_bps ?? 5000
+    const dcorePolicy = await db
+      .prepare("SELECT markup_bps FROM supplier_automation WHERE provider='digitalcore'")
+      .first<{ markup_bps: number }>()
+      .catch(() => null)
+    const defaultMarkup = dcorePolicy?.markup_bps && dcorePolicy.markup_bps > 0 ? dcorePolicy.markup_bps : 7000
     const autoPublish = globalCfg?.auto_publish === 1
     const autoApprove = globalCfg?.auto_approve === 1
 
@@ -433,7 +437,11 @@ export async function bulkPublishDigitalCore(
       )
       .first<{ id: string }>()
   )?.id
-  const markup = markup_bps > 0 ? markup_bps : 5000
+  const dcorePolicy = await db
+    .prepare("SELECT markup_bps FROM supplier_automation WHERE provider='digitalcore'")
+    .first<{ markup_bps: number }>()
+    .catch(() => null)
+  const markup = markup_bps > 0 ? markup_bps : (dcorePolicy?.markup_bps && dcorePolicy.markup_bps > 0 ? dcorePolicy.markup_bps : 7000)
 
   const s4Writes: Statement[] = [
     db.prepare(

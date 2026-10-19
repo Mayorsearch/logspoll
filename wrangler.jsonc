@@ -13,7 +13,12 @@
     "PRODUCTION_CUTOVER_ENABLED": "true",
     "CATALOG_SYNC_ENABLED": "true",
 		"AUTH_ENABLED": "true",
-              "AUTH_ORIGIN": "https://logspoll.com"
+		"AUTH_ORIGIN": "https://logspoll.com",
+		"BACHS_LIVE_CHECKOUT_ENABLED": "true",
+		"BACHS_LIVE_VERIFIED": "true",
+		"BACHS_FULFILLMENT_VERIFIED": "true",
+		"AUTO_FULFILLMENT_ENABLED": "true",
+		"WALLET_LIVE_FUNDING_ENABLED": "false"
 	},
 	"env": {
 		"preview": {

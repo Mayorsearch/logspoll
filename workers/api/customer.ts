@@ -1,5 +1,9 @@
 import { HttpError, json } from './http.ts'
+import { reconcileCustomerPayment } from './bachs-webhook.ts'
+import { runFulfillment } from './fulfillment.ts'
+import { drainBusinessMail, drainMail } from './mail.ts'
 import type { ApiEnv } from './types.ts'
+import { parseDeliveryCredentials } from '../../src/lib/delivery-parser.ts'
 
 type Customer = { id: string; role: string }
 const storefront = 'storefront_products'
@@ -20,7 +24,7 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
     const category = (url.searchParams.get('category') ?? '').slice(0, 200)
     const page = Math.min(10000, Math.max(1, Math.floor(Number(url.searchParams.get('page')) || 1)))
     const predicates = ['1=1'], values: (string | number)[] = []
-    if (slug) { predicates.push('p.slug=?'); values.push(slug.slice(0, 200)) }
+    if (slug) { predicates.push('(p.slug=? OR p.id=?)'); values.push(slug.slice(0, 200), slug.slice(0, 200)) }
     if (ids) {
       const list = [...new Set(ids.split(','))]
       if (list.length > 100 || list.some(id => !/^[a-f\d-]{36}$/i.test(id))) throw new HttpError(400, 'Invalid product selection.')
@@ -76,35 +80,58 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
   }
   if (url.pathname === '/api/orders' || url.pathname === '/api/v1/orders') {
     if (!user) throw new HttpError(401, 'Verified sign-in required.')
+    await reconcileCustomerPayment(env, user.id)
+    if (env.AUTO_FULFILLMENT_ENABLED === 'true') {
+      const pendingFulfillment = await db.prepare("SELECT id FROM orders WHERE customer_id=? AND payment_status='paid' AND fulfillment_status<>'delivered' LIMIT 1").bind(user.id).first<{id:string}>().catch(() => null)
+      if (pendingFulfillment) {
+        await runFulfillment(env, pendingFulfillment.id).catch(() => undefined)
+        await drainBusinessMail(env).catch(() => undefined)
+        await drainMail(env).catch(() => undefined)
+      }
+    }
     const isPurchases = url.searchParams.get('purchases') === 'true'
     const rows = await db.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,created_at FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<{ id: string; reference: string; payment_status: string; fulfillment_status: string; total_minor: number; currency: string; created_at: string }>()
 
     const hasServer = Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('products') WHERE name='server_number'").first().catch(() => null))
     const serverCol = hasServer ? 'p.server_number' : 'NULL AS server_number'
 
+    const hasStructuredCol = Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('product_entitlements') WHERE name='structured_data'").first().catch(() => null))
+    const structuredCol = hasStructuredCol ? ', CASE WHEN o.payment_status=\'paid\' AND o.fulfillment_status=\'delivered\' THEN e.structured_data ELSE NULL END AS structured_data' : ''
+
     const items = await db.prepare(
       `SELECT i.id, i.order_id, i.product_id, i.product_name, i.category_name, i.quantity, i.unit_price_minor, ${serverCol}, p.slug AS product_slug
-              ${isPurchases ? ', CASE WHEN o.payment_status=\'paid\' AND o.fulfillment_status=\'delivered\' THEN e.instructions ELSE NULL END AS instructions' : ''}
+              ${isPurchases ? `, CASE WHEN o.payment_status='paid' AND o.fulfillment_status='delivered' THEN e.instructions ELSE NULL END AS instructions ${structuredCol}` : ''}
        FROM order_items i
        JOIN orders o ON o.id = i.order_id
        LEFT JOIN products p ON p.id = i.product_id
        ${isPurchases ? 'LEFT JOIN product_entitlements e ON e.order_item_id = i.id' : ''}
        WHERE o.customer_id = ? AND o.id IN (SELECT id FROM orders WHERE customer_id = ? ORDER BY created_at DESC LIMIT 50)`
-    ).bind(user.id, user.id).all<{ id: string; order_id: string; product_id: string; product_name: string; category_name: string; quantity: number; unit_price_minor: number; server_number: number | null; product_slug: string | null; instructions?: string | null }>()
+    ).bind(user.id, user.id).all<{ id: string; order_id: string; product_id: string; product_name: string; category_name: string; quantity: number; unit_price_minor: number; server_number: number | null; product_slug: string | null; instructions?: string | null; structured_data?: string | null }>()
 
     const mappedOrders = rows.results.map(o => ({
       ...o,
-      order_items: items.results.filter(i => i.order_id === o.id).map(i => ({
-        id: i.id,
-        product_id: i.product_id,
-        product_name: i.product_name,
-        category_name: i.category_name,
-        quantity: i.quantity,
-        unit_price_minor: i.unit_price_minor,
-        server_number: i.server_number,
-        product_slug: i.product_slug,
-        ...(isPurchases ? { product_entitlements: i.instructions ? { instructions: i.instructions } : null } : {}),
-      }))
+      order_items: items.results.filter(i => i.order_id === o.id).map(i => {
+        let structured = null
+        if (isPurchases && i.instructions) {
+          if (i.structured_data) {
+            try { structured = JSON.parse(i.structured_data) } catch { structured = null }
+          }
+          if (!structured) {
+            structured = parseDeliveryCredentials(i.instructions, i.product_name, i.category_name)
+          }
+        }
+        return {
+          id: i.id,
+          product_id: i.product_id,
+          product_name: i.product_name,
+          category_name: i.category_name,
+          quantity: i.quantity,
+          unit_price_minor: i.unit_price_minor,
+          server_number: i.server_number,
+          product_slug: i.product_slug,
+          ...(isPurchases ? { product_entitlements: i.instructions ? { instructions: i.instructions, structured } : null } : {}),
+        }
+      })
     }))
 
     if (isPurchases) {

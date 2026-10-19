@@ -18,6 +18,7 @@ import DigitalCoreManager from './DigitalCoreManager'
 import SupplierAutomation from './SupplierAutomation'
 import ApiManager from './ApiManager'
 import StorefrontDiscoveryManager from './StorefrontDiscoveryManager'
+import WalletAdmin from './WalletAdmin'
 import { ProductArtwork } from '../components/ProductArtwork'
 import { storedProductImages } from '../lib/product-images'
 
@@ -44,6 +45,7 @@ type ReviewSnapshot = {
 }
 const d1Nav = [
   { slug: 'overview', label: 'Dashboard overview', Icon: LayoutDashboard },
+  { slug: 'wallets', label: 'Wallet Management', Icon: CreditCard },
   { slug: 'customers', label: 'Customers', Icon: Users },
   { slug: 'products', label: 'Products', Icon: Package },
   { slug: 'categories', label: 'Categories', Icon: Tags },
@@ -108,6 +110,7 @@ export default function CloudflareAdmin() {
   }, [section, tab])
   const recordSections=['products','categories','customers','orders','purchases','support','reviews','settings','audit','email']
   const viewing =
+    section === 'wallets' ? 'wallets' :
     section === 'server1' ? 'server1' :
     section === 'server2' ? 'server2' :
     section === 'server3' ? 'server3' :
@@ -340,11 +343,12 @@ export default function CloudflareAdmin() {
     </aside>
     {open && <button type="button" className="demo-backdrop" aria-label="Close navigation overlay" onClick={() => setOpen(false)}/>}
     <div className="demo-main"><main className="demo-content">
-      <header className="cf-header demo-heading"><div><div className="cf-eyebrow">LOGSPOLL CONTROL CENTER</div><h1>{viewing === 'overview' ? 'Platform Command Center' : viewing === 'server1' ? 'Server 1 · HStora' : viewing === 'server2' ? 'Server 2 · YoungPG' : viewing === 'server3' ? 'Server 3 · ShopViaClone22' : viewing === 'server4' ? 'Server 4 · DigitalCore' : viewing === 'hub' ? 'Supplier Hub & Pricing' : viewing === 'review' ? 'Supplier reviews' : viewing==='records'?section:'Payment status'}</h1><p>Verified admin session: {session?.user.email ?? '—'}</p></div><button className="cf-btn secondary" onClick={() => void refresh()} disabled={busy || loading}>Refresh</button></header>
+      <header className="cf-header demo-heading"><div><div className="cf-eyebrow">LOGSPOLL CONTROL CENTER</div><h1>{viewing === 'overview' ? 'Platform Command Center' : viewing === 'wallets' ? 'Customer Wallet Management' : viewing === 'server1' ? 'Server 1 · HStora' : viewing === 'server2' ? 'Server 2 · YoungPG' : viewing === 'server3' ? 'Server 3 · ShopViaClone22' : viewing === 'server4' ? 'Server 4 · DigitalCore' : viewing === 'hub' ? 'Supplier Hub & Pricing' : viewing === 'review' ? 'Supplier reviews' : viewing==='records'?section:'Payment status'}</h1><p>Verified admin session: {session?.user.email ?? '—'}</p></div><button className="cf-btn secondary" onClick={() => void refresh()} disabled={busy || loading}>Refresh</button></header>
       <p className="cf-warning" role="status">Cloudflare D1 production database. Supplier sync auto-approves and publishes live immediately. Payments remain disabled.</p>
       {loading && <p role="status">Loading administrator records…</p>}
       {error && <p className="cf-error" role="alert">{error}</p>}
       {notice && <p className="cf-success" role="status">{notice}</p>}
+      {viewing==='wallets'&&<WalletAdmin/>}
       {viewing==='records'&&<AdminRecords key={section} section={section!}/>}
       {viewing==='server1' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>

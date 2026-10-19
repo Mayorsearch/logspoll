@@ -1,8 +1,8 @@
 // Minimal structural D1 types; no new runtime dependency.
 export interface Statement {
-  bind(...values: (string | number | null)[]): Statement
+  bind(...values: (string | number | null | undefined)[]): Statement
   first<T = Record<string, unknown>>(): Promise<T | null>
-  all<T = Record<string, unknown>>(): Promise<{ results: T[]; success: boolean }>
+  all<T = Record<string, unknown>>(): Promise<{ results: T[]; success: boolean; meta?: { changes?: number; last_row_id?: number } }>
   run(): Promise<unknown>
 }
 export interface Database {
@@ -28,7 +28,9 @@ export interface ApiEnv {
   BACHS_FULFILLMENT_VERIFIED?: string
   SUPPLIER_ENCRYPTION_KEY?: string
   AUTOMATION_ENABLED?: string
+  AUTO_FULFILLMENT_ENABLED?: string
   CATALOG_SYNC_ENABLED?: string
   CATALOG_RESUME_AT?: string
+  WALLET_LIVE_FUNDING_ENABLED?: string
 }
 export interface Execution { waitUntil(promise: Promise<unknown>): void }

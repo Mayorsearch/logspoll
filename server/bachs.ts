@@ -3,6 +3,19 @@
  * No secret should ever be returned to the frontend or written to logs.
  */
 export const BACHS_SANDBOX_API = 'https://sandbox-api.bachs.io'
+export const BACHS_MINIMUM_NGN_MINOR = 10_000
+export const BACHS_MINIMUM_MESSAGE = 'Bachs requires an order total of at least ₦100.00. Add products or increase quantity before checkout.'
+
+export class BachsCheckoutError extends Error {
+  readonly providerStatus: number | null
+  readonly providerCode: string | null
+  constructor(message: string, providerStatus: number | null = null, providerCode: string | null = null) {
+    super(message)
+    this.name = 'BachsCheckoutError'
+    this.providerStatus = providerStatus
+    this.providerCode = providerCode
+  }
+}
 
 function isDecimalMinor(value: number) {
   return Number.isSafeInteger(value) && value > 0 && value <= 99_999_999_900
@@ -29,6 +42,7 @@ export async function createSandboxSession(input: CheckoutSessionInput): Promise
 }
 
 export async function createBachsSession(input: CheckoutSessionInput, mode: 'sandbox' | 'live'): Promise<{checkoutId:string;checkoutUrl:string}> {
+  if (input.amountMinor < BACHS_MINIMUM_NGN_MINOR) throw new BachsCheckoutError(BACHS_MINIMUM_MESSAGE)
   const key=input.key.trim()
   if (!key.startsWith(mode==='live'?'sk_live_':'sk_sandbox_') || key.length>256 || /[^\x21-\x7e]/.test(key)) throw new Error('Bachs credential environment mismatch.')
   const base=mode==='live'?'https://api.bachs.io':BACHS_SANDBOX_API
@@ -59,10 +73,31 @@ export async function createBachsSession(input: CheckoutSessionInput, mode: 'san
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${key}`, 'Idempotency-Key': input.idempotencyKey },
       body: JSON.stringify(body)
     })
-  } catch {
-    throw new Error('Bachs sandbox could not be reached.')
+  } catch (error) {
+    const timeout = error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)
+    throw new BachsCheckoutError(timeout ? 'Bachs checkout timed out. Retry with the same request ID.' : 'Bachs checkout connection failed. Retry with the same request ID.')
   }
-  if (response.status < 200 || response.status >= 300) throw new Error('Bachs sandbox checkout request was not accepted.')
+  if (response.status < 200 || response.status >= 300) {
+    // Never forward provider bodies: they may echo customer information or credentials.
+    const codes = ['VALIDATION_ERROR', 'UNAUTHORIZED', 'FORBIDDEN', 'NOT_FOUND', 'CONFLICT', 'TOO_MANY_REQUESTS', 'INTERNAL_SERVER_ERROR', 'BAD_GATEWAY', 'SERVICE_UNAVAILABLE']
+    let code: string | null = null
+    const reader = response.body?.getReader()
+    try {
+      let text = '', size = 0
+      const decoder = new TextDecoder()
+      if (reader) while (true) {
+        const next = await reader.read()
+        if (next.done) break
+        size += next.value.byteLength
+        if (size > 8192) throw new Error('Diagnostic body too large')
+        text += decoder.decode(next.value, {stream: true})
+      }
+      const value = JSON.parse(text + decoder.decode())
+      if (codes.includes(value?.error_code)) code = value.error_code
+    } catch { /* HTTP status remains authoritative for diagnostics. */ }
+    finally { await reader?.cancel().catch(() => undefined) }
+    throw new BachsCheckoutError(`Bachs checkout rejected (HTTP ${response.status}${code ? `, ${code}` : ''}). Retry with the same request ID.`, response.status, code)
+  }
   if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Unexpected Bachs checkout response.')
   let parsed: unknown
   try { parsed = await response.json() } catch { throw new Error('Unexpected Bachs checkout response.') }
@@ -138,6 +173,7 @@ export async function getBachsSession(configuredKey: string, checkoutId: string)
       headers: { Accept: 'application/json', Authorization: `Bearer ${key}` }
     })
   } catch { throw new Error('Unable to verify Bachs checkout.') }
+  console.info('Bachs checkout verification', {checkoutId, httpStatus:response.status, json:response.headers.get('content-type')?.includes('application/json')===true})
   if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('Unable to verify Bachs checkout.')
   const data: unknown = await response.json().catch(() => null)
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid Bachs verification response.')

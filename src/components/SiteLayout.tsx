@@ -9,7 +9,7 @@ import { CurrencySelector } from '../lib/currency'
 import { 
   Menu, X, Package, Info, Send, House, History, 
   ShoppingCart, LifeBuoy, Sun, Moon, BookOpen, Heart, User, LogOut,
-  ShieldCheck, LayoutDashboard
+  ShieldCheck, LayoutDashboard, Wallet
 } from 'lucide-react'
 
 export function SiteLayout() {
@@ -41,8 +41,10 @@ export function SiteLayout() {
   useEffect(() => {
     if (!open) return
     const trigger = toggle.current
-    const overflow = document.body.style.overflow
+    const bodyOverflow = document.body.style.overflow
+    const docOverflow = document.documentElement.style.overflow
     document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
     menu.current?.querySelector<HTMLElement>('button,a')?.focus()
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -65,7 +67,8 @@ export function SiteLayout() {
     }
     document.addEventListener('keydown', key)
     return () => {
-      document.body.style.overflow = overflow
+      document.body.style.overflow = bodyOverflow
+      document.documentElement.style.overflow = docOverflow
       document.removeEventListener('keydown', key)
       trigger?.focus()
     }
@@ -104,6 +107,7 @@ export function SiteLayout() {
     window.scrollTo(0, 0)
     const label = pathname === '/' ? 'Digital products & services' : pathname.slice(1).replaceAll('-', ' ')
     document.title = `LOGSPOLL | ${label}`
+    setOpen(false)
   }, [pathname, search])
 
   return (
@@ -175,113 +179,121 @@ export function SiteLayout() {
             </button>
           </div>
         </div>
-
-        {/* Expandable Mobile Menu Drawer (Requirement 8) */}
-        {open && (
-          <>
-            <button 
-              className="mobile-menu-backdrop" 
-              aria-label="Close navigation" 
-              onClick={() => setOpen(false)}
-            />
-            <nav 
-              ref={menu} 
-              id="mobile-nav" 
-              className="mobile-nav" 
-              role="dialog" 
-              aria-modal="true" 
-              aria-label="Mobile navigation"
-            >
-              <div className="mobile-menu-heading">
-                <div className="mobile-brand">
-                  <img 
-                    src={theme === 'dark' ? '/logo-dark.png' : '/logo-light.png'} 
-                    alt="LogsPoll" 
-                    className="brand-logo" 
-                  />
-                </div>
-                <button 
-                  className="icon-button" 
-                  aria-label="Close navigation" 
-                  onClick={() => setOpen(false)}
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="mobile-menu-controls">
-                <CurrencySelector />
-                <button 
-                  className="button button-outline button-small mobile-theme-btn"
-                  onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-                >
-                  {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
-                  <span>{theme === 'light' ? 'Dark' : 'Light'} Mode</span>
-                </button>
-              </div>
-
-              <div className="mobile-nav-links">
-                <Link to="/marketplace" onClick={() => setOpen(false)}>
-                  <Package size={18} /> Shop
-                </Link>
-                <Link to="/marketplace?favorites=1" onClick={() => setOpen(false)}>
-                  <Heart size={18} /> Favorites
-                </Link>
-                <Link to="/docs" onClick={() => setOpen(false)}>
-                  <BookOpen size={18} /> API Documentation
-                </Link>
-                <Link to="/about" onClick={() => setOpen(false)}>
-                  <Info size={18} /> About Us
-                </Link>
-                <Link to="/contact" onClick={() => setOpen(false)}>
-                  <Send size={18} /> Contact
-                </Link>
-                <Link to="/support" onClick={() => setOpen(false)}>
-                  <LifeBuoy size={18} /> Support
-                </Link>
-              </div>
-
-              <div className="mobile-menu-auth">
-                {session ? (
-                  <>
-                    <Link to="/dashboard" className="mobile-auth-primary" onClick={() => setOpen(false)}>
-                      <LayoutDashboard size={18} /> Dashboard
-                    </Link>
-                    <Link to="/dashboard/orders" onClick={() => setOpen(false)}>
-                      <History size={18} /> Orders
-                    </Link>
-                    <Link to="/dashboard/profile" onClick={() => setOpen(false)}>
-                      <User size={18} /> Profile
-                    </Link>
-                    <button 
-                      className="mobile-logout" 
-                      disabled={signingOut} 
-                      onClick={() => void logout()}
-                    >
-                      <LogOut size={18} /> {signingOut ? 'Signing out…' : 'Log out'}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <Link to="/login" className="mobile-login-link" onClick={() => setOpen(false)}>
-                      Log In
-                    </Link>
-                    <Link to="/signup" className="button mobile-auth-primary" onClick={() => setOpen(false)}>
-                      Create Account
-                    </Link>
-                  </>
-                )}
-              </div>
-
-              {error && <p role="alert" className="form-error">{error}</p>}
-
-              <div className="mobile-menu-footer">
-                <small>Built by SwiftNova Labs</small>
-              </div>
-            </nav>
-          </>
-        )}
       </header>
+
+      {/* Expandable Mobile Menu Drawer (Fixed Stacking Context Outside Sticky Header) */}
+      {open && (
+        <>
+          <button 
+            type="button"
+            className="mobile-menu-backdrop" 
+            aria-label="Close navigation" 
+            onClick={() => setOpen(false)}
+          />
+          <nav 
+            ref={menu} 
+            id="mobile-nav" 
+            className="mobile-nav" 
+            role="dialog" 
+            aria-modal="true" 
+            aria-label="Mobile navigation"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mobile-menu-heading">
+              <div className="mobile-brand">
+                <img 
+                  src={theme === 'dark' ? '/logo-dark.png' : '/logo-light.png'} 
+                  alt="LogsPoll" 
+                  className="brand-logo" 
+                />
+              </div>
+              <button 
+                type="button"
+                className="icon-button" 
+                aria-label="Close navigation" 
+                onClick={() => setOpen(false)}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mobile-menu-controls">
+              <CurrencySelector />
+              <button 
+                type="button"
+                className="button button-outline button-small mobile-theme-btn"
+                onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              >
+                {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+                <span>{theme === 'light' ? 'Dark' : 'Light'} Mode</span>
+              </button>
+            </div>
+
+            <div className="mobile-nav-links">
+              <Link to="/marketplace" onClick={() => setOpen(false)}>
+                <Package size={18} /> Shop
+              </Link>
+              <Link to="/marketplace?favorites=1" onClick={() => setOpen(false)}>
+                <Heart size={18} /> Favorites
+              </Link>
+              <Link to="/docs" onClick={() => setOpen(false)}>
+                <BookOpen size={18} /> API Documentation
+              </Link>
+              <Link to="/about" onClick={() => setOpen(false)}>
+                <Info size={18} /> About Us
+              </Link>
+              <Link to="/contact" onClick={() => setOpen(false)}>
+                <Send size={18} /> Contact
+              </Link>
+              <Link to="/support" onClick={() => setOpen(false)}>
+                <LifeBuoy size={18} /> Support
+              </Link>
+            </div>
+
+            <div className="mobile-menu-auth">
+              {session ? (
+                <>
+                  <Link to="/dashboard" className="mobile-auth-primary" onClick={() => setOpen(false)}>
+                    <LayoutDashboard size={18} /> Dashboard
+                  </Link>
+                  <Link to="/dashboard/wallet" onClick={() => setOpen(false)}>
+                    <Wallet size={18} /> Wallet &amp; Funds
+                  </Link>
+                  <Link to="/dashboard/orders" onClick={() => setOpen(false)}>
+                    <History size={18} /> Orders
+                  </Link>
+                  <Link to="/dashboard/profile" onClick={() => setOpen(false)}>
+                    <User size={18} /> Profile
+                  </Link>
+                  <button 
+                    type="button"
+                    className="mobile-logout" 
+                    disabled={signingOut} 
+                    onClick={() => void logout()}
+                  >
+                    <LogOut size={18} /> {signingOut ? 'Signing out…' : 'Log out'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Link to="/login" className="mobile-login-link" onClick={() => setOpen(false)}>
+                    Log In
+                  </Link>
+                  <Link to="/signup" className="button mobile-auth-primary" onClick={() => setOpen(false)}>
+                    Create Account
+                  </Link>
+                </>
+              )}
+            </div>
+
+            {error && <p role="alert" className="form-error">{error}</p>}
+
+            <div className="mobile-menu-footer">
+              <small>Built by SwiftNova Labs</small>
+            </div>
+          </nav>
+        </>
+      )}
 
       {/* Main Page Content */}
       <main id="main" tabIndex={-1}>

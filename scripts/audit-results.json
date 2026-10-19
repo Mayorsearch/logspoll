@@ -1,0 +1,386 @@
+[
+  {
+    "name": "Homepage",
+    "path": "/",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Marketplace",
+    "path": "/marketplace",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Product Details",
+    "path": "/products/facebook-2fa-high-quality-aged-pva",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Categories",
+    "path": "/categories",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Category Detail",
+    "path": "/categories/facebook",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Pricing",
+    "path": "/pricing",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "About Us",
+    "path": "/about",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Customer Support",
+    "path": "/support",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "FAQ",
+    "path": "/faq",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Contact",
+    "path": "/contact",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Privacy Policy",
+    "path": "/privacy",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Terms of Service",
+    "path": "/terms",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "API Docs",
+    "path": "/docs",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Login",
+    "path": "/login",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Registration",
+    "path": "/signup",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Verify Email",
+    "path": "/verify-email",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Forgot Password",
+    "path": "/forgot-password",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Reset Password",
+    "path": "/reset-password",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Shopping Cart",
+    "path": "/cart",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Checkout",
+    "path": "/checkout",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Customer Dashboard",
+    "path": "/dashboard",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "My Orders",
+    "path": "/dashboard/orders",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Digital Delivery Vault",
+    "path": "/dashboard/purchases",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Favorites",
+    "path": "/dashboard/favorites",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Profile",
+    "path": "/dashboard/profile",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Account Settings",
+    "path": "/dashboard/settings",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Dashboard Support",
+    "path": "/dashboard/support",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Transactions",
+    "path": "/dashboard/transactions",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Login",
+    "path": "/admin/login",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Overview",
+    "path": "/admin/overview",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Customers",
+    "path": "/admin/customers",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Products",
+    "path": "/admin/products",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Categories",
+    "path": "/admin/categories",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Orders",
+    "path": "/admin/orders",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Purchases",
+    "path": "/admin/purchases",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Reviews",
+    "path": "/admin/reviews",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin API Manager",
+    "path": "/admin/api-manager",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Storefront Discovery",
+    "path": "/admin/discovery",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Server 1 HStora",
+    "path": "/admin/server1",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Server 2 YoungPG",
+    "path": "/admin/server2",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Server 3 ShopViaClone22",
+    "path": "/admin/server3",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Server 4 DigitalCore",
+    "path": "/admin/server4",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Supplier Hub",
+    "path": "/admin/integrations",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Support",
+    "path": "/admin/support",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Settings",
+    "path": "/admin/settings",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Audit Log",
+    "path": "/admin/audit",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Email Outbox",
+    "path": "/admin/email",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  },
+  {
+    "name": "Admin Payments",
+    "path": "/admin/payments",
+    "mobileStatus": "PASS",
+    "tabletStatus": "PASS",
+    "desktopStatus": "PASS",
+    "issues": []
+  }
+]

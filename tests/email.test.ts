@@ -7,8 +7,8 @@ import { emailTestReady, sendTestEmail } from '../server/email.ts'
 const now = Date.parse('2026-10-12T12:00:00Z')
 const env = { AUTH_ORIGIN: 'https://staging.test', RESEND_API_KEY: 're_synthetic_only', EMAIL_FROM: 'no-reply@logspoll.com', EMAIL_TEST_TO: 'approved@example.test', EMAIL_TEST_ENABLED: 'true' }
 const input = { template: 'verification', requestId: '11111111-1111-4111-8111-111111111111', startedAt: now }
-test('all 23 templates have HTML, text, synthetic labels and safe account links', () => {
-  assert.equal(Object.keys(emailTemplates).length, 23)
+test('all 25 templates have HTML, text, synthetic labels and safe account links', () => {
+  assert.equal(Object.keys(emailTemplates).length, 25)
   for (const kind of Object.keys(emailTemplates) as EmailKind[]) {
     const email = sampleEmail(kind)
     assert.match(email.html, /Nunito Sans|Arial/)

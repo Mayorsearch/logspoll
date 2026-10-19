@@ -18,10 +18,9 @@ export function checkedPaidSandboxSession(session: Record<string, unknown>, expe
   const charge = session.charge
   if (session.status !== 'completed' || session.payment_status !== 'succeeded') return null
   const cart=session.session_mode==='CART'&&session.source_type==='CHECKOUT_SESSION'
-  // Verified Bachs product-less pricing sessions use null/API and retain our metadata.
-  const metadata=session.metadata as Record<string,unknown>|null
-  const pure=session.session_mode===null&&session.products===null&&session.source_type==='API'&&metadata?.order_id===orderId
-  if ((!cart&&!pure) || session.recurring !== null) return null
+  const metadata = session.metadata as Record<string, unknown> | null
+  const pure = (session.session_mode === null || session.session_mode === undefined) && (session.products === null || session.products === undefined) && session.source_type === 'API' && metadata?.order_id === orderId
+  if ((!cart && !pure) || session.recurring !== null) return null
   if (!charge || typeof charge !== 'object' || Array.isArray(charge) || (charge as Record<string,unknown>).status !== 'succeeded') return null
   if (session.currency !== 'NGN' || amount === null) return null
   return { orderId, checkoutId: expectedId, totalMinor: amount, currency: 'NGN' }

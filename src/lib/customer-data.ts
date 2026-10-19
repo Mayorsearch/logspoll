@@ -1,3 +1,5 @@
+import type { StructuredProductDelivery } from './delivery-parser.ts'
+
 export interface OrderItem {
   id: string
   product_id?: string
@@ -7,7 +9,7 @@ export interface OrderItem {
   unit_price_minor?: number
   server_number?: number | null
   product_slug?: string | null
-  product_entitlements?: { instructions: string } | null
+  product_entitlements?: { instructions: string; structured?: StructuredProductDelivery | null } | null
 }
 
 export interface Order {

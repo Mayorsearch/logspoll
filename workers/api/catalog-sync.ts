@@ -87,7 +87,22 @@ export async function refreshPublishedStock(env:ApiEnv) {
     const previous=JSON.parse(row.metadata) as Product,approved=resaleAllowlist(JSON.parse(c.authorized_products))
     if((approved[row.external_id]??approved['*'])!==row.evidence_reference)throw new HttpError(409,'Resale evidence changed; review required.')
     const key=await openCredential(c.encrypted_key,c.key_nonce,c.id,env.SUPPLIER_ENCRYPTION_KEY)
-    const detail=record((await youngpgGet(YOUNGPG_ORIGIN,key,`listings/${listingSlug(previous.slug)}`)).data)
+    let detailRes: Record<string, unknown> | null = null
+    try {
+      detailRes = record((await youngpgGet(YOUNGPG_ORIGIN,key,`listings/${listingSlug(previous.slug)}`)).data)
+    } catch(err) {
+      if (err instanceof HttpError && (err.status === 404 || err.message.includes('404') || err.message.includes('HTTP 404'))) {
+        await commit(env,c,owner,[
+          db.prepare(`UPDATE staging_supplier_feed_items SET stock_quantity=0,source_checked_at=? WHERE connection_id=? AND external_id=?`).bind(Date.now(),c.id,row.external_id),
+          db.prepare(`UPDATE products SET status='inactive',publication_verified=0 WHERE id IN (SELECT product_id FROM supplier_products WHERE connection_id=? AND external_id=?)`).bind(c.id,row.external_id),
+          db.prepare(`UPDATE supplier_sync_items SET metadata=json_set(metadata,'$.review_block',?) WHERE job_id=? AND external_id=?`).bind('Supplier listing detail returned 404; marked out of stock and inactive.',row.job_id,row.external_id),
+          db.prepare('UPDATE staging_supplier_connections SET lease_owner=NULL,lease_until=NULL,next_attempt=? WHERE id=? AND lease_owner=?').bind(Date.now()+5500,c.id,owner),
+        ])
+        return {skipped:false}
+      }
+      throw err
+    }
+    const detail = detailRes
     if(identifier(detail.id)!==row.external_id)throw new HttpError(502,'Stock detail identifier mismatch.')
     const categories=JSON.parse(row.categories) as Category[]
     const category=categories.find(item=>item.id===previous.category_id)
@@ -200,24 +215,42 @@ export async function syncCatalogBatch(env:ApiEnv, connectionId?:string) {
       if (!pending) next='finalize'
       else {
         const product=JSON.parse(pending.metadata) as Product
-        const detail=record((await get(`listings/${listingSlug(product.slug)}`)).data)
-        if (identifier(detail.id)!==product.id) throw new HttpError(502,'Supplier detail identifier mismatch.')
-        const category=categories.find(v=>v.id===product.category_id)
-        if (!category) throw new HttpError(502,'Supplier category checkpoint mismatch.')
-        const {productImages}=await import('../../src/lib/product-images.ts')
-        const enriched=listingsFrom([{
-          id:product.id,title:product.name,category:{slug:category.slug,title:category.name},slug:product.slug,
-          description:product.description===DESCRIPTION_REQUIRED?detail.description:product.description,
-          price_ngn:`${Math.floor(product.cost_minor/100)}.${String(product.cost_minor%100).padStart(2,'0')}`,
-          available_stock:product.stock,status:detail.status??product.supplier_status,
-          image_urls:[...new Set([...productImages(product),...productImages(detail)])],subcategory:detail.subcategory,
-        }],categories,approved).products[0]
-        statements.push(enriched
-          ?db.prepare('UPDATE supplier_sync_items SET metadata=?,detail_done=1 WHERE job_id=? AND external_id=?').bind(JSON.stringify(enriched),job.id,pending.external_id)
-          :db.prepare("UPDATE supplier_sync_items SET metadata=json_set(metadata,'$.review_block',?),detail_done=1 WHERE job_id=? AND external_id=?")
-            .bind(restrictedCatalogText.test(String(detail.title??product.name)+' '+String(detail.description??product.description))
-              ?'Explicit compromised-credential indicators; independent security review required.'
-              :'Current supplier detail failed authorization validation; independent review required.',job.id,pending.external_id))
+        let detailData: Record<string, unknown> | null = null
+        try {
+          detailData = record((await get(`listings/${listingSlug(product.slug)}`)).data)
+        } catch (detailErr) {
+          const is404 = detailErr instanceof HttpError && (detailErr.status === 404 || detailErr.message.includes('404') || detailErr.message.includes('HTTP 404'))
+          if (is404) {
+            statements.push(db.prepare("UPDATE supplier_sync_items SET metadata=json_set(metadata,'$.review_block',?),detail_done=1 WHERE job_id=? AND external_id=?")
+              .bind('Supplier listing detail returned 404; removed from upstream.', job.id, pending.external_id))
+          } else {
+            throw detailErr
+          }
+        }
+        if (detailData) {
+          const detail = detailData
+          if (identifier(detail.id)!==product.id) {
+            statements.push(db.prepare("UPDATE supplier_sync_items SET metadata=json_set(metadata,'$.review_block',?),detail_done=1 WHERE job_id=? AND external_id=?")
+              .bind('Supplier detail identifier mismatch.', job.id, pending.external_id))
+          } else {
+            const category=categories.find(v=>v.id===product.category_id)
+            if (!category) throw new HttpError(502,'Supplier category checkpoint mismatch.')
+            const {productImages}=await import('../../src/lib/product-images.ts')
+            const enriched=listingsFrom([{
+              id:product.id,title:product.name,category:{slug:category.slug,title:category.name},slug:product.slug,
+              description:product.description===DESCRIPTION_REQUIRED?detail.description:product.description,
+              price_ngn:`${Math.floor(product.cost_minor/100)}.${String(product.cost_minor%100).padStart(2,'0')}`,
+              available_stock:product.stock,status:detail.status??product.supplier_status,
+              image_urls:[...new Set([...productImages(product),...productImages(detail)])],subcategory:detail.subcategory,
+            }],categories,approved).products[0]
+            statements.push(enriched
+              ?db.prepare('UPDATE supplier_sync_items SET metadata=?,detail_done=1 WHERE job_id=? AND external_id=?').bind(JSON.stringify(enriched),job.id,pending.external_id)
+              :db.prepare("UPDATE supplier_sync_items SET metadata=json_set(metadata,'$.review_block',?),detail_done=1 WHERE job_id=? AND external_id=?")
+                .bind(restrictedCatalogText.test(String(detail.title??product.name)+' '+String(detail.description??product.description))
+                  ?'Explicit compromised-credential indicators; independent security review required.'
+                  :'Current supplier detail failed authorization validation; independent review required.',job.id,pending.external_id))
+          }
+        }
       }
     } else if (job.phase==='finalize') {
       const check=await db.prepare(`SELECT (SELECT count(*) FROM supplier_sync_seen WHERE job_id=?) scanned,

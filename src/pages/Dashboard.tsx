@@ -4,16 +4,19 @@ import { Link, NavLink, Outlet, useNavigate, useLocation, useSearchParams } from
 import { 
   LogOut, PackageOpen, House, UserRound, 
   ShoppingBag, ShieldCheck, ArrowRight, Heart, BookOpen, 
-  Key, Copy, Check, Download, HelpCircle, Search, 
+  Key, Check, Download, HelpCircle, Search, 
   Clock, CheckCircle2, XCircle, AlertCircle, MessageSquare,
   ChevronDown, ChevronUp, Wallet, Send, RefreshCw, Star
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth'
 import { ProductArtwork } from '../components/ProductArtwork'
+import { BrandIcon } from '../components/BrandIcon'
 import { ReviewForm } from '../components/Reviews'
+import { DeliveryVaultCard } from '../components/DeliveryVaultCard'
 import { useCurrency } from '../lib/currency'
 import { useFavorites } from '../lib/favorites'
+import type { StructuredProductDelivery } from '../lib/delivery-parser'
 import type { Order } from '../lib/customer-data'
 
 interface ProductItem {
@@ -41,6 +44,7 @@ interface NavItem {
 
 const navLinks: NavItem[] = [
   { path: '', label: 'Overview', icon: House, exact: true },
+  { path: '/wallet', label: 'Wallet & Funds', icon: Wallet },
   { path: '/orders', label: 'My Orders', icon: ShoppingBag },
   { path: '/purchases', label: 'Downloads & Vault', icon: Download },
   { path: '/favorites', label: 'Saved Favorites', icon: Heart },
@@ -176,119 +180,6 @@ export function DashboardLayout() {
   )
 }
 
-function CopyableInstruction({
-  text,
-  productName,
-  orderRef,
-}: {
-  text: string
-  productName?: string
-  orderRef?: string
-}) {
-  const [copied, setCopied] = useState(false)
-  const [showInstructions, setShowInstructions] = useState(false)
-
-  const handleCopy = () => {
-    void navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  const handleDownload = () => {
-    const content = [
-      '========================================',
-      'LOGSPOLL DIGITAL DELIVERY VAULT',
-      '========================================',
-      `Product: ${productName || 'Digital Product'}`,
-      orderRef ? `Order Reference: ${orderRef}` : '',
-      `Delivered: ${new Date().toISOString()}`,
-      '----------------------------------------',
-      'CREDENTIALS / ACCESS INSTRUCTIONS:',
-      text,
-      '----------------------------------------',
-      'Keep this information confidential. Delivered securely by LogsPoll (https://logspoll.com).',
-      '========================================',
-    ]
-      .filter(Boolean)
-      .join('\n')
-
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${(orderRef || 'delivery').toLowerCase()}-credentials.txt`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-  }
-
-  return (
-    <div className="credential-box">
-      <div className="credential-header">
-        <span className="credential-title">
-          <Key size={13} /> Delivery Credentials &amp; Access Details
-        </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <button
-            onClick={() => setShowInstructions((v) => !v)}
-            className="credential-copy-btn"
-            type="button"
-            title="View Usage Instructions"
-            style={{ fontSize: '0.75rem', padding: '4px 8px' }}
-          >
-            <BookOpen size={12} />
-            <span>{showInstructions ? 'Hide Guide' : 'Instructions'}</span>
-          </button>
-          <button
-            onClick={handleDownload}
-            className="credential-copy-btn"
-            type="button"
-            title="Download credentials as text file"
-            style={{ fontSize: '0.75rem', padding: '4px 8px' }}
-          >
-            <Download size={12} />
-            <span>Download</span>
-          </button>
-          <button
-            onClick={handleCopy}
-            className="credential-copy-btn"
-            type="button"
-            style={{ fontSize: '0.75rem', padding: '4px 8px' }}
-          >
-            {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-            <span>{copied ? 'Copied' : 'Copy'}</span>
-          </button>
-        </div>
-      </div>
-      <pre className="delivery-instructions">{text}</pre>
-      {showInstructions && (
-        <div
-          style={{
-            marginTop: 8,
-            padding: '10px 12px',
-            background: 'var(--lp-page-bg)',
-            borderRadius: 8,
-            border: '1px solid var(--lp-border)',
-            fontSize: '0.775rem',
-            lineHeight: 1.5,
-            color: 'var(--lp-text-muted)',
-          }}
-        >
-          <strong style={{ display: 'block', color: 'var(--lp-text-main)', marginBottom: 3 }}>
-            💡 Usage &amp; Access Guide:
-          </strong>
-          <ul style={{ margin: 0, paddingLeft: 16 }}>
-            <li>Standard account format: <code>Username/Email | Password | 2FA / Backup Key</code>.</li>
-            <li>For software/AI tools licenses, copy the activation code into the platform's subscription screen.</li>
-            <li>Do not share access details. If you experience activation issues, use the <strong>Contact Support</strong> button below.</li>
-          </ul>
-        </div>
-      )}
-    </div>
-  )
-}
-
 export function CustomerRecords({
   mode,
 }: {
@@ -306,6 +197,34 @@ export function CustomerRecords({
   const [orderFilter, setOrderFilter] = useState<'all' | 'completed' | 'pending' | 'failed'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({})
+  const [vaultCache, setVaultCache] = useState<Record<string, Record<string, { instructions: string; structured?: StructuredProductDelivery | null }>>>({})
+  const [loadingVaultId, setLoadingVaultId] = useState<string | null>(null)
+
+  const handleToggleOrderVault = async (orderId: string) => {
+    const nextState = !expandedOrders[orderId]
+    setExpandedOrders((prev) => ({ ...prev, [orderId]: nextState }))
+
+    if (nextState && !vaultCache[orderId]) {
+      setLoadingVaultId(orderId)
+      try {
+        const res = await cloudflareRequest<{ records: Order[] }>('/api/orders?purchases=true')
+        const matching = res.records.find((o) => o.id === orderId)
+        if (matching && matching.order_items) {
+          const itemMap: Record<string, { instructions: string; structured?: StructuredProductDelivery | null }> = {}
+          for (const item of matching.order_items) {
+            if (item.product_entitlements) {
+              itemMap[item.id] = item.product_entitlements
+            }
+          }
+          setVaultCache((prev) => ({ ...prev, [orderId]: itemMap }))
+        }
+      } catch {
+        // ignore network error
+      } finally {
+        setLoadingVaultId(null)
+      }
+    }
+  }
 
   // Favorites state
   const [favoriteProducts, setFavoriteProducts] = useState<ProductItem[]>([])
@@ -319,8 +238,8 @@ export function CustomerRecords({
   const [supportSuccess, setSupportSuccess] = useState('')
   const [supportError, setSupportError] = useState('')
 
-  // Wallet state (check if wallet functionality is enabled)
-  const [walletEnabled] = useState(false) // Set to false: wallet ledger not active, direct payment used
+  // Wallet state
+  const [walletBalanceMinor, setWalletBalanceMinor] = useState<number | null>(null)
 
   const [searchParams] = useSearchParams()
 
@@ -328,18 +247,26 @@ export function CustomerRecords({
   useEffect(() => {
     const ref = searchParams.get('ref')
     if (ref) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Synchronize authenticated account state on navigation.
       setSupportOrderRef(ref)
       setSupportSubject(`Order Support: ${ref}`)
     }
   }, [searchParams])
 
-  // Fetch orders from D1
+  // Fetch orders and wallet from D1
   useEffect(() => {
     if (session && mode !== 'transactions' && mode !== 'support') {
       let active = true
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Synchronize authenticated account state on navigation.
       setLoading(true)
       const isPurchasesMode = mode === 'purchases' || mode === 'downloads'
       const endpoint = isPurchasesMode ? '/api/orders?purchases=true' : '/api/orders'
+
+      void cloudflareRequest<{ wallet: { balance_minor: number } }>('/api/wallet')
+        .then((data) => {
+          if (active && data.wallet) setWalletBalanceMinor(data.wallet.balance_minor)
+        })
+        .catch(() => { if (active) setWalletBalanceMinor(null) })
       
       void cloudflareRequest<{ records: Order[] }>(endpoint)
         .then(({ records }) => {
@@ -371,6 +298,7 @@ export function CustomerRecords({
   useEffect(() => {
     if ((mode === 'favorites' || mode === 'overview') && favorites.length > 0) {
       let active = true
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Load saved products from the authenticated catalog.
       setFavLoading(true)
       void cloudflareRequest<{ records: ProductItem[] }>(`/api/products?ids=${favorites.slice(0, 50).join(',')}`)
         .then(({ records }) => {
@@ -827,10 +755,13 @@ export function CustomerRecords({
                             ) : null}
                           </div>
                           {item.product_entitlements?.instructions ? (
-                            <CopyableInstruction
-                              text={item.product_entitlements.instructions}
+                            <DeliveryVaultCard
+                              structured={item.product_entitlements.structured}
+                              rawInstructions={item.product_entitlements.instructions}
                               productName={item.product_name}
+                              categoryName={item.category_name}
                               orderRef={order.reference}
+                              orderId={order.id}
                             />
                           ) : (
                             <p className="delivery-pending-note">
@@ -946,136 +877,175 @@ export function CustomerRecords({
         ) : (
           <div className="order-cards-list">
             {filteredOrders.map((order) => {
+              const primaryItem = order.order_items?.[0]
               const isDelivered = order.fulfillment_status === 'delivered' && order.payment_status === 'paid'
-              const isPending = order.fulfillment_status === 'pending' || order.payment_status === 'pending'
-              const isFailed = order.payment_status === 'failed' || order.fulfillment_status === 'failed'
+              const isPending = order.fulfillment_status === 'pending' || order.payment_status === 'pending' || order.fulfillment_status === 'processing'
+              const isExpanded = !!expandedOrders[order.id]
+              const itemsSummary = order.order_items?.map((i) => i.product_name).join(', ') || `Order ${order.reference}`
+              const categoryLabel = primaryItem?.category_name || (primaryItem?.product_name ? primaryItem.product_name.split(' ')[0].toUpperCase() : 'DIGITAL')
 
               return (
-                <article className="order-item-card" key={order.id}>
-                  <div className="order-card-header">
-                    <div className="order-id-group">
-                      <span className="order-ref-badge">{order.reference}</span>
-                      <span className="order-timestamp">
-                        <Clock size={13} className="inline-icon" />
-                        {new Date(order.created_at).toLocaleDateString(undefined, {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
+                <article className="order-compact-card" key={order.id}>
+                  <div className="order-compact-main">
+                    {/* Category Brand Icon */}
+                    <div className="order-compact-icon-box">
+                      <BrandIcon 
+                        name={primaryItem?.product_name || order.reference} 
+                        category={primaryItem?.category_name || ''} 
+                        size={24} 
+                      />
                     </div>
 
-                    <strong className="order-card-price">{formatPrice(order.total_minor)}</strong>
-                  </div>
-
-                  <div className="order-card-statuses">
-                    <div className="status-pair">
-                      <span className="status-label">Payment:</span>
-                      <span className={`status-pill payment-${order.payment_status}`}>
-                        {order.payment_status === 'paid' && <CheckCircle2 size={12} />}
-                        {order.payment_status === 'pending' && <Clock size={12} />}
-                        {(order.payment_status === 'failed' || order.payment_status === 'cancelled') && <XCircle size={12} />}
-                        {order.payment_status === 'refunded' && <ShieldCheck size={12} />}
-                        <span className="capitalize">{order.payment_status}</span>
-                      </span>
-                    </div>
-
-                    <div className="status-pair">
-                      <span className="status-label">Fulfillment:</span>
-                      <span className={`status-pill delivery-${order.fulfillment_status}`}>
-                        {order.fulfillment_status === 'delivered' && <CheckCircle2 size={12} />}
-                        {order.fulfillment_status === 'processing' && <RefreshCw size={12} className="spin-slow" />}
-                        {order.fulfillment_status === 'pending' && <Clock size={12} />}
-                        {order.fulfillment_status === 'failed' && <AlertCircle size={12} />}
-                        <span className="capitalize">{order.fulfillment_status}</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Detailed Items Breakdown */}
-                  {order.order_items && order.order_items.length > 0 && (
-                    <div className="order-items-breakdown" style={{ marginTop: 14, borderTop: '1px solid var(--lp-border)', paddingTop: 10 }}>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--lp-text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        Purchased Items ({order.order_items.length})
+                    {/* Center Information */}
+                    <div className="order-compact-body">
+                      <div className="order-compact-topline">
+                        <span className="order-compact-cat-badge">{categoryLabel}</span>
+                        <span className="order-compact-ref" title={order.reference}>Ref: {order.reference}</span>
+                        <span className="order-compact-date">
+                          <Clock size={12} className="inline-icon" />
+                          {new Date(order.created_at).toLocaleDateString(undefined, {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric'
+                          })}
+                        </span>
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {order.order_items.map((item) => (
-                          <div
-                            key={item.id}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              gap: 12,
-                              padding: '8px 12px',
-                              background: 'var(--lp-page-bg)',
-                              borderRadius: 8,
-                              fontSize: '0.825rem',
-                            }}
-                          >
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                {item.product_slug ? (
-                                  <Link
-                                    to={`/products/${item.product_slug}`}
-                                    style={{ fontWeight: 600, color: 'var(--lp-text-main)', textDecoration: 'none' }}
-                                    className="hover-underline"
-                                  >
-                                    {item.product_name}
-                                  </Link>
-                                ) : (
-                                  <span style={{ fontWeight: 600, color: 'var(--lp-text-main)' }}>{item.product_name}</span>
-                                )}
-                                {item.server_number ? (
-                                  <span className={`server-badge server-badge-${item.server_number}`} style={{ fontSize: '0.65rem', padding: '1px 6px' }}>
-                                    Server {item.server_number}{item.server_number === 4 ? ' (AI Tools)' : ''}
-                                  </span>
-                                ) : null}
+
+                      <h3 className="order-compact-title" title={itemsSummary}>
+                        {itemsSummary}
+                      </h3>
+
+                      <div className="order-compact-meta-row">
+                        <span className={`status-pill payment-${order.payment_status}`}>
+                          {order.payment_status === 'paid' && <CheckCircle2 size={12} />}
+                          {order.payment_status === 'pending' && <Clock size={12} />}
+                          {(order.payment_status === 'failed' || order.payment_status === 'cancelled') && <XCircle size={12} />}
+                          {order.payment_status === 'refunded' && <ShieldCheck size={12} />}
+                          <span className="capitalize">{order.payment_status}</span>
+                        </span>
+
+                        <span className={`status-pill delivery-${order.fulfillment_status}`}>
+                          {order.fulfillment_status === 'delivered' && <CheckCircle2 size={12} />}
+                          {order.fulfillment_status === 'processing' && <RefreshCw size={12} className="spin-slow" />}
+                          {order.fulfillment_status === 'pending' && <Clock size={12} />}
+                          {order.fulfillment_status === 'failed' && <AlertCircle size={12} />}
+                          <span className="capitalize">{order.fulfillment_status}</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Right Price & View Details Action */}
+                    <div className="order-compact-actions">
+                      <strong className="order-compact-price">{formatPrice(order.total_minor)}</strong>
+                      <button
+                        type="button"
+                        className={`button button-small ${isExpanded ? 'button-outline' : 'button-dark'} order-details-toggle`}
+                        onClick={() => handleToggleOrderVault(order.id)}
+                      >
+                        <span>{isExpanded ? 'Hide Details' : 'View Details'}</span>
+                        {loadingVaultId === order.id ? (
+                          <RefreshCw size={12} className="spin-icon" />
+                        ) : isExpanded ? (
+                          <ChevronUp size={12} />
+                        ) : (
+                          <ChevronDown size={12} />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Expanded Details Section */}
+                  {isExpanded && (
+                    <div className="order-compact-expanded">
+                      {/* Item Breakdown */}
+                      {order.order_items && order.order_items.length > 0 && (
+                        <div className="expanded-items-list">
+                          <span className="expanded-section-title">Purchased Items ({order.order_items.length})</span>
+                          {order.order_items.map((item) => (
+                            <div key={item.id} className="expanded-item-row">
+                              <div className="expanded-item-info">
+                                <strong>{item.product_name}</strong>
+                                <span className="item-meta">Qty: {item.quantity} · Unit Price: {formatPrice(item.unit_price_minor ?? 0)}</span>
                               </div>
-                              <div style={{ fontSize: '0.725rem', color: 'var(--lp-text-muted)', marginTop: 2 }}>
-                                Qty: {item.quantity} · Unit Price: {formatPrice(item.unit_price_minor ?? 0)}
-                              </div>
+                              <strong className="expanded-item-total">
+                                {formatPrice((item.unit_price_minor ?? 0) * item.quantity)}
+                              </strong>
                             </div>
-                            <div style={{ fontWeight: 700, color: 'var(--lp-text-main)', flexShrink: 0, fontSize: '0.85rem' }}>
-                              {formatPrice((item.unit_price_minor ?? 0) * item.quantity)}
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Delivery Details */}
+                      {isDelivered ? (
+                        <div className="expanded-vault-container">
+                          <span className="expanded-section-title">Digital Credentials &amp; Access Details</span>
+                          {loadingVaultId === order.id ? (
+                            <div className="expanded-loading">
+                              <RefreshCw size={16} className="spin-icon" />
+                              <span>Retrieving secure credentials from delivery vault…</span>
                             </div>
+                          ) : (
+                            (order.order_items || []).map((item) => {
+                              const ent = vaultCache[order.id]?.[item.id] || item.product_entitlements
+                              return (
+                                <div key={item.id} className="expanded-vault-item">
+                                  <h4>{item.product_name}</h4>
+                                  {ent?.instructions ? (
+                                    <DeliveryVaultCard
+                                      structured={ent.structured}
+                                      rawInstructions={ent.instructions}
+                                      productName={item.product_name}
+                                      categoryName={item.category_name}
+                                      orderRef={order.reference}
+                                      orderId={order.id}
+                                    />
+                                  ) : (
+                                    <p className="delivery-pending-note">
+                                      Credentials delivered securely. View in your <Link to="/dashboard/purchases">Digital Delivery Vault</Link>.
+                                    </p>
+                                  )}
+                                  <ReviewForm itemId={item.id} />
+                                </div>
+                              )
+                            })
+                          )}
+                        </div>
+                      ) : isPending ? (
+                        <div className="expanded-status-notice pending">
+                          <Clock size={16} className="spin-slow" />
+                          <div>
+                            <strong>Fulfillment In Progress</strong>
+                            <p>Your payment is verified and our automated system is provisioning your digital products from verified servers. Delivery typically takes seconds to a few minutes.</p>
                           </div>
-                        ))}
+                        </div>
+                      ) : (
+                        <div className="expanded-status-notice failed">
+                          <AlertCircle size={16} />
+                          <div>
+                            <strong>Order Status: {order.payment_status} / {order.fulfillment_status}</strong>
+                            <p>If you made a payment that hasn't reflected, or need manual delivery assistance, our support team is available 24/7.</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Support & Vault Links */}
+                      <div className="expanded-footer-actions">
+                        <Link
+                          to={`/dashboard/support?ref=${encodeURIComponent(order.reference)}`}
+                          className="button button-outline button-small"
+                        >
+                          <HelpCircle size={13} />
+                          <span>Need Help With This Order?</span>
+                        </Link>
+                        {isDelivered && (
+                          <Link to="/dashboard/purchases" className="button button-outline button-small">
+                            <Download size={13} />
+                            <span>Open Delivery Vault</span>
+                          </Link>
+                        )}
                       </div>
                     </div>
                   )}
-
-                  <div className="order-card-footer" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginTop: 14 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      {isDelivered && (
-                        <Link to="/dashboard/purchases" className="button button-orange button-small">
-                          <Download size={14} />
-                          <span>View Downloads &amp; Vault</span>
-                        </Link>
-                      )}
-                      {isPending && (
-                        <span className="pending-status-note">
-                          <Clock size={14} className="spin-slow" /> Supplier sync in progress...
-                        </span>
-                      )}
-                      {isFailed && (
-                        <span className="pending-status-note" style={{ color: '#ef4444' }}>
-                          <AlertCircle size={14} /> Delivery issue — our team is on it
-                        </span>
-                      )}
-                    </div>
-
-                    <Link
-                      to={`/dashboard/support?ref=${encodeURIComponent(order.reference)}`}
-                      className="button button-outline button-small"
-                      style={{ fontSize: '0.75rem', gap: 6 }}
-                    >
-                      <HelpCircle size={13} />
-                      <span>Contact Support</span>
-                    </Link>
-                  </div>
                 </article>
               )
             })}
@@ -1094,201 +1064,193 @@ export function CustomerRecords({
       <div className="dashboard-welcome-banner">
         <div className="welcome-content">
           <div className="welcome-greeting-row">
-            <h1>Welcome back, {firstName}! 👋</h1>
+            <h1>Welcome back, {firstName}</h1>
             <span className="welcome-verified-badge">
-              <ShieldCheck size={14} /> Verified Member
+              <ShieldCheck size={14} /> Verified Customer
             </span>
           </div>
           <p className="welcome-subtext">
-            Here is your account summary and active digital product inventory today.
+            Monitor your wallet balance, track live orders, and access delivered digital assets.
           </p>
         </div>
 
         <div className="welcome-actions">
-          <Link to="/marketplace" className="button button-orange button-small">
+          <Link to="/dashboard/wallet" className="button button-orange button-small">
+            <Wallet size={16} />
+            <span>Fund Wallet</span>
+          </Link>
+          <Link to="/marketplace" className="button button-outline button-small">
             <PackageOpen size={16} />
-            <span>Browse Marketplace</span>
+            <span>Browse Shop</span>
           </Link>
         </div>
       </div>
 
-      {/* 4 Genuine Real-Data Metric Cards (No Demo or Synthetic Data) */}
-      <div className="dashboard-stats-grid">
-        {/* Card 1: Completed Purchases */}
-        <article className="dashboard-stat-card">
-          <div className="stat-card-icon-wrapper orange">
-            <Download size={20} />
-          </div>
-          <div className="stat-card-info">
-            <span className="stat-card-label">DIGITAL ASSETS</span>
-            <strong className="stat-card-number">{completedPurchases}</strong>
-            <p className="stat-card-desc">Delivered products in your vault</p>
-          </div>
-          <Link to="/dashboard/purchases" className="stat-card-footer-link">
-            <span>Access Vault</span>
-            <ArrowRight size={14} />
-          </Link>
-        </article>
-
-        {/* Card 2: Total Orders */}
-        <article className="dashboard-stat-card">
-          <div className="stat-card-icon-wrapper blue">
-            <ShoppingBag size={20} />
-          </div>
-          <div className="stat-card-info">
-            <span className="stat-card-label">TOTAL ORDERS</span>
-            <strong className="stat-card-number">{records.length}</strong>
-            <p className="stat-card-desc">Orders placed &amp; reconciled</p>
-          </div>
-          <Link to="/dashboard/orders" className="stat-card-footer-link">
-            <span>View Orders</span>
-            <ArrowRight size={14} />
-          </Link>
-        </article>
-
-        {/* Card 3: Pending Orders */}
-        <article className="dashboard-stat-card">
-          <div className="stat-card-icon-wrapper amber">
-            <Clock size={20} />
-          </div>
-          <div className="stat-card-info">
-            <span className="stat-card-label">PROCESSING</span>
-            <strong className="stat-card-number">{pendingOrders}</strong>
-            <p className="stat-card-desc">Pending fulfillment synchronization</p>
-          </div>
-          <Link to="/dashboard/orders" className="stat-card-footer-link">
-            <span>Track Orders</span>
-            <ArrowRight size={14} />
-          </Link>
-        </article>
-
-        {/* Card 4: Saved Favorites */}
-        <article className="dashboard-stat-card">
-          <div className="stat-card-icon-wrapper purple">
-            <Heart size={20} />
-          </div>
-          <div className="stat-card-info">
-            <span className="stat-card-label">SAVED ITEMS</span>
-            <strong className="stat-card-number">{favorites.length}</strong>
-            <p className="stat-card-desc">Bookmarked products for later</p>
-          </div>
-          <Link to="/dashboard/favorites" className="stat-card-footer-link">
-            <span>View Favorites</span>
-            <ArrowRight size={14} />
-          </Link>
-        </article>
-
-        {/* Conditional Wallet Card (Only rendered if wallet functionality is enabled) */}
-        {walletEnabled && (
-          <article className="dashboard-stat-card wallet-card">
-            <div className="stat-card-icon-wrapper green">
-              <Wallet size={20} />
+      {/* 5 Financial and Activity Metric Cards */}
+      <div className="overview-stats-grid">
+        {/* Wallet Balance Card */}
+        <div className="overview-stat-card highlight-card">
+          <div className="stat-card-header">
+            <span className="stat-label">Wallet Balance</span>
+            <div className="stat-icon-wrapper orange">
+              <Wallet size={18} />
             </div>
-            <div className="stat-card-info">
-              <span className="stat-card-label">WALLET BALANCE</span>
-              <strong className="stat-card-number">₦0.00</strong>
-              <p className="stat-card-desc">Available store balance</p>
+          </div>
+          <strong className="stat-number">
+            {walletBalanceMinor === null ? '₦0.00' : new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(walletBalanceMinor / 100)}
+          </strong>
+          <div className="stat-card-footer">
+            <span className="stat-badge-soft">Available NGN</span>
+            <Link to="/dashboard/wallet" className="stat-link">Fund Wallet →</Link>
+          </div>
+        </div>
+
+        {/* Total Orders Card */}
+        <div className="overview-stat-card">
+          <div className="stat-card-header">
+            <span className="stat-label">Total Orders</span>
+            <div className="stat-icon-wrapper blue">
+              <ShoppingBag size={18} />
             </div>
-            <span className="stat-card-footer-link">Direct Checkout Active</span>
-          </article>
-        )}
+          </div>
+          <strong className="stat-number">{loading ? '—' : records.length}</strong>
+          <div className="stat-card-footer">
+            <span className="stat-subtext">Lifetime purchases</span>
+            <Link to="/dashboard/orders" className="stat-link">View All →</Link>
+          </div>
+        </div>
+
+        {/* Completed Purchases Card */}
+        <div className="overview-stat-card">
+          <div className="stat-card-header">
+            <span className="stat-label">Completed</span>
+            <div className="stat-icon-wrapper green">
+              <CheckCircle2 size={18} />
+            </div>
+          </div>
+          <strong className="stat-number">{loading ? '—' : completedPurchases}</strong>
+          <div className="stat-card-footer">
+            <span className="stat-subtext">Delivered &amp; active</span>
+            <Link to="/dashboard/orders" className="stat-link">Delivered →</Link>
+          </div>
+        </div>
+
+        {/* Pending Orders Card */}
+        <div className="overview-stat-card">
+          <div className="stat-card-header">
+            <span className="stat-label">Pending Orders</span>
+            <div className="stat-icon-wrapper amber">
+              <Clock size={18} />
+            </div>
+          </div>
+          <strong className="stat-number">{loading ? '—' : pendingOrders}</strong>
+          <div className="stat-card-footer">
+            <span className="stat-subtext">Awaiting fulfillment</span>
+            <Link to="/dashboard/orders" className="stat-link">Track →</Link>
+          </div>
+        </div>
+
+        {/* Digital Assets Card */}
+        <div className="overview-stat-card">
+          <div className="stat-card-header">
+            <span className="stat-label">Digital Assets</span>
+            <div className="stat-icon-wrapper purple">
+              <Download size={18} />
+            </div>
+          </div>
+          <strong className="stat-number">{loading ? '—' : completedPurchases}</strong>
+          <div className="stat-card-footer">
+            <span className="stat-subtext">Saved in vault</span>
+            <Link to="/dashboard/purchases" className="stat-link">Open Vault →</Link>
+          </div>
+        </div>
       </div>
 
-      {/* Recent Purchases Section (Requirement 4) */}
+      {/* Recent Orders Section */}
       <section className="dashboard-section-block">
         <div className="section-header-row">
           <div>
-            <h2>Recent Purchases &amp; Vault Access</h2>
-            <p className="section-subtitle">Delivered credentials and activation instructions.</p>
+            <h2>Recent Orders</h2>
+            <p className="section-subtitle">Real-time payment and order fulfillment status.</p>
           </div>
-          <Link to="/dashboard/purchases" className="text-link">
-            View All Purchases →
+          <Link to="/dashboard/orders" className="text-link">
+            View All ({records.length}) →
           </Link>
         </div>
 
         {loading ? (
           <div className="dashboard-loading-state">
             <RefreshCw size={20} className="spin-icon" />
-            <p>Loading recent purchases…</p>
+            <p>Loading recent orders…</p>
           </div>
-        ) : completedPurchases === 0 ? (
-          <div className="empty-overview-card">
-            <Download size={24} className="empty-icon" />
-            <p>No delivered purchases yet.</p>
-            <Link to="/marketplace" className="button button-outline button-small">Browse Marketplace</Link>
-          </div>
-        ) : (
-          <div className="recent-purchases-grid">
-            {records
-              .filter((o) => o.payment_status === 'paid' && o.fulfillment_status === 'delivered')
-              .slice(0, 3)
-              .map((order) => (
-                <div className="recent-purchase-item" key={order.id}>
-                  <div className="item-header">
-                    <span className="item-order-ref">{order.reference}</span>
-                    <span className="status-pill status-delivered">Delivered</span>
-                  </div>
-                  <strong className="item-price">{formatPrice(order.total_minor)}</strong>
-                  <span className="item-date">
-                    {new Date(order.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-                  </span>
-                  <Link to="/dashboard/purchases" className="item-vault-link">
-                    Open in Vault <ArrowRight size={13} />
-                  </Link>
-                </div>
-              ))}
-          </div>
-        )}
-      </section>
-
-      {/* Recent Orders Section (Requirement 5) */}
-      <section className="dashboard-section-block">
-        <div className="section-header-row">
-          <div>
-            <h2>Recent Orders</h2>
-            <p className="section-subtitle">Real-time payment and order fulfillment status log.</p>
-          </div>
-          <Link to="/dashboard/orders" className="text-link">
-            View All Orders →
-          </Link>
-        </div>
-
-        {records.length === 0 ? (
+        ) : records.length === 0 ? (
           <div className="empty-overview-card">
             <ShoppingBag size={24} className="empty-icon" />
             <p>No orders recorded for this account yet.</p>
-            <Link to="/marketplace" className="button button-outline button-small">Start Shopping</Link>
+            <Link to="/marketplace" className="button button-outline button-small">Browse Marketplace</Link>
           </div>
         ) : (
-          <div className="overview-orders-table">
-            <div className="table-header-row">
-              <span>REFERENCE</span>
-              <span>DATE</span>
-              <span>AMOUNT</span>
-              <span>PAYMENT</span>
-              <span>FULFILLMENT</span>
-            </div>
-            {records.slice(0, 5).map((order) => (
-              <div className="table-body-row" key={order.id}>
-                <span className="row-ref">
-                  <Link to="/dashboard/orders">{order.reference}</Link>
-                </span>
-                <span className="row-date">
-                  {new Date(order.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                </span>
-                <span className="row-price">{formatPrice(order.total_minor)}</span>
-                <span>
-                  <span className={`status-pill payment-${order.payment_status}`}>
-                    {order.payment_status}
-                  </span>
-                </span>
-                <span>
-                  <span className={`status-pill delivery-${order.fulfillment_status}`}>
-                    {order.fulfillment_status}
-                  </span>
-                </span>
-              </div>
-            ))}
+          <div className="order-cards-list">
+            {records.slice(0, 5).map((order) => {
+              const primaryItem = order.order_items?.[0]
+              const itemsSummary = order.order_items?.map((i) => i.product_name).join(', ') || `Order ${order.reference}`
+              const categoryLabel = primaryItem?.category_name || (primaryItem?.product_name ? primaryItem.product_name.split(' ')[0].toUpperCase() : 'DIGITAL')
+
+              return (
+                <article className="order-compact-card" key={order.id}>
+                  <div className="order-compact-main">
+                    <div className="order-compact-icon-box">
+                      <BrandIcon 
+                        name={primaryItem?.product_name || order.reference} 
+                        category={primaryItem?.category_name || ''} 
+                        size={24} 
+                      />
+                    </div>
+                    <div className="order-compact-body">
+                      <div className="order-compact-topline">
+                        <span className="order-compact-cat-badge">{categoryLabel}</span>
+                        <span className="order-compact-ref">Ref: {order.reference}</span>
+                        <span className="order-compact-date">
+                          <Clock size={11} className="inline-icon" />
+                          {new Date(order.created_at).toLocaleDateString(undefined, {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric'
+                          })}
+                        </span>
+                      </div>
+                      <h3 className="order-compact-title">{itemsSummary}</h3>
+                      <div className="order-compact-meta-row">
+                        <span className={`status-pill payment-${order.payment_status}`}>
+                          {order.payment_status === 'paid' && <CheckCircle2 size={12} />}
+                          {order.payment_status === 'pending' && <Clock size={12} />}
+                          {(order.payment_status === 'failed' || order.payment_status === 'cancelled') && <XCircle size={12} />}
+                          {order.payment_status === 'refunded' && <ShieldCheck size={12} />}
+                          <span className="capitalize">{order.payment_status}</span>
+                        </span>
+                        <span className={`status-pill delivery-${order.fulfillment_status}`}>
+                          {order.fulfillment_status === 'delivered' && <CheckCircle2 size={12} />}
+                          {order.fulfillment_status === 'processing' && <RefreshCw size={12} className="spin-slow" />}
+                          {order.fulfillment_status === 'pending' && <Clock size={12} />}
+                          {order.fulfillment_status === 'failed' && <AlertCircle size={12} />}
+                          <span className="capitalize">{order.fulfillment_status}</span>
+                        </span>
+                      </div>
+                    </div>
+                    <div className="order-compact-actions">
+                      <strong className="order-compact-price">{formatPrice(order.total_minor)}</strong>
+                      <Link
+                        to="/dashboard/orders"
+                        className="button button-small button-outline order-details-toggle"
+                      >
+                        <span>View Details</span>
+                        <ArrowRight size={12} />
+                      </Link>
+                    </div>
+                  </div>
+                </article>
+              )
+            })}
           </div>
         )}
       </section>
@@ -1297,11 +1259,20 @@ export function CustomerRecords({
       <section className="dashboard-quick-shortcuts">
         <h2>Quick Shortcuts</h2>
         <div className="shortcuts-grid">
+          <Link to="/dashboard/wallet" className="shortcut-card">
+            <Wallet size={20} className="shortcut-icon" />
+            <div>
+              <strong>Fund Wallet</strong>
+              <small>Deposit funds via Bachs gateway</small>
+            </div>
+            <ArrowRight size={15} />
+          </Link>
+
           <Link to="/marketplace" className="shortcut-card">
             <PackageOpen size={20} className="shortcut-icon" />
             <div>
               <strong>Shop Products</strong>
-              <small>Explore 1,700+ verified accounts &amp; tools</small>
+              <small>Browse published digital products</small>
             </div>
             <ArrowRight size={15} />
           </Link>
@@ -1309,17 +1280,17 @@ export function CustomerRecords({
           <Link to="/dashboard/orders" className="shortcut-card">
             <ShoppingBag size={20} className="shortcut-icon" />
             <div>
-              <strong>Reconcile Orders</strong>
-              <small>Check fulfillment &amp; payment status</small>
+              <strong>Order History</strong>
+              <small>Reconcile fulfillment &amp; payments</small>
             </div>
             <ArrowRight size={15} />
           </Link>
 
-          <Link to="/dashboard/profile" className="shortcut-card">
-            <UserRound size={20} className="shortcut-icon" />
+          <Link to="/dashboard/purchases" className="shortcut-card">
+            <Download size={20} className="shortcut-icon" />
             <div>
-              <strong>Edit Profile</strong>
-              <small>Update full name &amp; identity details</small>
+              <strong>Delivery Vault</strong>
+              <small>Delivered credentials &amp; licenses</small>
             </div>
             <ArrowRight size={15} />
           </Link>
@@ -1328,7 +1299,16 @@ export function CustomerRecords({
             <HelpCircle size={20} className="shortcut-icon" />
             <div>
               <strong>24/7 Support Desk</strong>
-              <small>Submit ticket or WhatsApp support</small>
+              <small>Submit ticket or get assistance</small>
+            </div>
+            <ArrowRight size={15} />
+          </Link>
+
+          <Link to="/dashboard/profile" className="shortcut-card">
+            <UserRound size={20} className="shortcut-icon" />
+            <div>
+              <strong>Account Profile</strong>
+              <small>Manage personal details &amp; access</small>
             </div>
             <ArrowRight size={15} />
           </Link>

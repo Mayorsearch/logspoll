@@ -1,4 +1,5 @@
 import {supplierAutomation,runSupplierAutomation} from './supplier-automation.ts'
+import {runFulfillment} from './fulfillment.ts'
 import {stagingBachsWebhook} from './bachs-staging.ts'
 import {bachsCheckout} from './bachs-checkout.ts'
 import {bachsWebhook,reconcileBachsAttempt} from './bachs-webhook.ts'
@@ -9,7 +10,7 @@ import {hstoraReview} from './hstora-review.ts'
 import {hstoraAdmin,syncHstoraBatch} from './hstora-manager.ts'
 import {shopviaclone22Admin,syncShopViaClone22Batch} from './shopviaclone22-manager.ts'
 import {digitalcoreAdmin,syncDigitalCoreBatch} from './digitalcore-manager.ts'
-import {digitaltopAdmin,syncDigitalTopBatch} from './digitaltop-manager.ts'
+import {syncDigitalTopBatch} from './digitaltop-manager.ts'
 import {exchangeRateAdmin,refreshExchangeRateCron} from './exchange-rate.ts'
 import {handleStorefrontDiscovery,handleAdminStorefrontDiscovery} from './storefront-discovery.ts'
 import { requireRuntime } from './runtime.ts'
@@ -29,6 +30,24 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     await requireRuntime(env)
     const url = new URL(request.url)
     if(url.pathname==='/api/admin/supplier-automation')return await supplierAutomation(request,env)
+    if(url.pathname==='/api/internal/fulfillment'){
+      if(request.method!=='POST')throw new HttpError(405,'POST required.')
+      const authHeader = request.headers.get('Authorization')
+      const isBearerSecret = Boolean(authHeader && env.AUTH_SECRET && authHeader === `Bearer ${env.AUTH_SECRET}`)
+      if(!isBearerSecret){
+        await adminActor(request,env)
+      }
+      const orderId=url.searchParams.get('order_id')??undefined
+      if(orderId){
+        const {fulfillPaidOrder}=await import('./fulfillment.ts')
+        const res=await fulfillPaidOrder(env,orderId)
+        return json(res)
+      }
+      await runFulfillment(env)
+      await drainBusinessMail(env).catch(()=>undefined)
+      await drainMail(env).catch(()=>undefined)
+      return json({ok:true})
+    }
     const origin = request.headers.get('Origin')
     if (origin && origin !== url.origin) throw new HttpError(403, 'Origin not permitted.')
     if (!env.DB) throw new HttpError(503, 'Staging database is not configured.')
@@ -82,6 +101,35 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     if (url.pathname === '/api/admin/storefront-discovery') return await handleAdminStorefrontDiscovery(request, env)
     if (url.pathname === '/api/storefront/discovery') return await handleStorefrontDiscovery(request, env)
     if (url.pathname === '/api/admin/catalog') return await catalogAdmin(request, env)
+    if (url.pathname === '/api/admin/wallets') return await (await import('./wallet.ts')).adminGetWallets(request, env)
+    if (url.pathname === '/api/admin/wallets/freeze') return await (await import('./wallet.ts')).adminFreezeWallet(request, env)
+    if (url.pathname === '/api/admin/wallets/adjust') return await (await import('./wallet.ts')).adminAdjustWallet(request, env)
+    if (url.pathname === '/api/wallet') {
+      if (request.method !== 'GET') throw new HttpError(405, 'GET required.')
+      const user = await identity(request, env)
+      const { getWalletOverview } = await import('./wallet.ts')
+      return await getWalletOverview(env.DB!, user.id, env)
+    }
+    if (url.pathname === '/api/wallet/fund') {
+      const user = await identity(request, env)
+      const { initiateWalletFunding } = await import('./wallet.ts')
+      return await initiateWalletFunding(request, env, user)
+    }
+    if (url.pathname === '/api/wallet/pay-order' || url.pathname === '/api/wallet/checkout') {
+      const user = await identity(request, env)
+      const { payOrderWithWallet } = await import('./wallet.ts')
+      return await payOrderWithWallet(request, env, user)
+    }
+    if (url.pathname === '/api/wallet/reconcile') {
+      const user = await identity(request, env)
+      const attemptId = url.searchParams.get('attempt_id')
+      if (!attemptId) throw new HttpError(400, 'Attempt ID required.')
+      const attempt = await env.DB!.prepare('SELECT * FROM wallet_funding_attempts WHERE id=? AND customer_id=?').bind(attemptId, user.id).first<import('./wallet.ts').FundingAttemptRecord>()
+      if (!attempt) throw new HttpError(404, 'Funding attempt not found.')
+      const { reconcileWalletFundingAttempt } = await import('./wallet.ts')
+      const res = await reconcileWalletFundingAttempt(env, attempt)
+      return json(res)
+    }
     if (url.pathname === '/api/checkout' || url.pathname === '/api/v1/checkout') return await bachsCheckout(request, env)
     if (url.pathname === '/api/bachs/order' || url.pathname === '/api/v1/order' || /^\/api\/(?:v1\/)?orders\/[^/]+\/status$/.test(url.pathname)) {
       if (request.method !== 'GET') throw new HttpError(405, 'GET required.')
@@ -90,9 +138,15 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
       const id = statusMatch ? statusMatch[1] : url.searchParams.get('id')
       if (!id) throw new HttpError(400, 'Order ID required.')
       const attempt = await env.DB!.prepare('SELECT a.* FROM bachs_payment_attempts a WHERE a.order_id=? AND a.customer_id=? ORDER BY a.created_at DESC LIMIT 1').bind(id, user.id).first<{id:string;order_id:string;checkout_id:string;provider_mode:string;amount_minor:number;status:string}>()
-      if (!attempt) throw new HttpError(404, 'Order not found.')
-      if (attempt.checkout_id && ['initiating', 'open'].includes(attempt.status)) await reconcileBachsAttempt(env, attempt)
-      const order = await env.DB!.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,created_at FROM orders WHERE id=? AND customer_id=?').bind(id, user.id).first()
+      let order = await env.DB!.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,payment_method,created_at FROM orders WHERE id=? AND customer_id=?').bind(id, user.id).first<{id:string;reference:string;payment_status:string;fulfillment_status:string;total_minor:number;currency:string;payment_method:string;created_at:string}>()
+      if (!order && !attempt) throw new HttpError(404, 'Order not found.')
+      if (attempt?.checkout_id && ['initiating', 'open'].includes(attempt.status)) await reconcileBachsAttempt(env, attempt)
+      if (order && order.payment_status === 'paid' && order.fulfillment_status !== 'delivered' && env.AUTO_FULFILLMENT_ENABLED === 'true') {
+        await runFulfillment(env, id).catch(() => undefined)
+        await drainBusinessMail(env).catch(() => undefined)
+        await drainMail(env).catch(() => undefined)
+        order = await env.DB!.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,payment_method,created_at FROM orders WHERE id=? AND customer_id=?').bind(id, user.id).first<NonNullable<typeof order>>()
+      }
       return json({ order })
     }
     if (request.method === 'POST' && ['/api/support', '/api/reviews'].includes(url.pathname)) return await customerWrite(request, env, await identity(request, env))
@@ -147,6 +201,7 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
   } catch (error) { return json({ error: error instanceof HttpError ? error.message : 'Staging API unavailable. No write or success was assumed.' }, error instanceof HttpError ? error.status : 503) }
 }
 export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, context: Execution) => {
+  context.waitUntil(requireRuntime(env).then(()=>runFulfillment(env)).catch(()=>{}))
   context.waitUntil(requireRuntime(env).then(()=>drainBusinessMail(env)).then(()=>drainMail(env)).catch(()=>{}))
   context.waitUntil(requireRuntime(env).then(()=>refreshExchangeRateCron(env)).catch(()=>{}))
   context.waitUntil(requireRuntime(env).then(()=>runSupplierAutomation(env)).catch(()=>{}))
@@ -158,7 +213,12 @@ export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, cont
     await syncDigitalTopBatch(env).catch(()=>{})
     await env.DB!.prepare("INSERT INTO migration_metadata(key,value) VALUES('catalog_scheduler_heartbeat',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run()
     for(let batch=0;batch<4;batch++) {
-      try { if((await refreshPublishedStock(env)).skipped) { const result=await syncCatalogBatch(env); if(result.skipped && (await refreshSupplierTaxonomy(env)).skipped) break } }
+      try {
+        const syncResult = await syncCatalogBatch(env);
+        if (syncResult.skipped) {
+          if ((await refreshPublishedStock(env)).skipped && (await refreshSupplierTaxonomy(env)).skipped) break;
+        }
+      }
       catch { break /* Redacted failure/cooldown is persisted by the batch handler. */ }
       if(batch<3) await new Promise(resolve=>setTimeout(resolve,5500))
     }

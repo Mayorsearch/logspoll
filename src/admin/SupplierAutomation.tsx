@@ -102,7 +102,7 @@ function formatCurrency(kobo: number) {
 export default function SupplierAutomation() {
   const [globalConfig, setGlobalConfig] = useState<GlobalPricingConfig>({
     id: 'global',
-    markup_bps: 7000,
+    markup_bps: 5000,
     auto_publish: 1,
     automatic_pricing: 1,
     auto_approve: 1,
@@ -110,7 +110,7 @@ export default function SupplierAutomation() {
     delivery_type: 'Subscription activation',
     updated_at: Date.now()
   })
-  const [globalPercent, setGlobalPercent] = useState('70')
+  const [globalPercent, setGlobalPercent] = useState('50')
   const [usdRate, setUsdRate] = useState('1500')
   const [autoPublish, setAutoPublish] = useState(true)
   const [autoPricing, setAutoPricing] = useState(true)
@@ -892,7 +892,8 @@ function Controls({
   stat?: Stats
   reload: () => void
 }) {
-  const [percent, setPercent] = useState(String((initial?.markup_bps ?? 7000) / 100))
+  const defaultProviderMarkup = provider === 'digitalcore' ? 7000 : 5000
+  const [percent, setPercent] = useState(String((initial?.markup_bps ?? defaultProviderMarkup) / 100))
   const [pricing, setPricing] = useState(initial?.automatic_pricing !== 0)
   const [publish, setPublish] = useState(initial?.auto_publish !== 0)
   const [approve, setApprove] = useState(initial?.auto_approve !== 0)
@@ -902,12 +903,12 @@ function Controls({
 
   useEffect(() => {
     if (initial) {
-      setPercent(String((initial.markup_bps ?? 7000) / 100))
+      setPercent(String((initial.markup_bps ?? defaultProviderMarkup) / 100))
       setPricing(initial.automatic_pricing !== 0)
       setPublish(initial.auto_publish !== 0)
       setApprove(initial.auto_approve !== 0)
     }
-  }, [initial])
+  }, [initial, defaultProviderMarkup])
 
   async function action(act: string) {
     setBusy(true)

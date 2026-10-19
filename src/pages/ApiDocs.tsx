@@ -248,28 +248,30 @@ export function ApiDocs() {
               API keys are cryptographically generated using high-entropy random identifiers (<code>lp_live_...</code>).
               Only the SHA-256 hash of the key is stored in LogsPoll Cloudflare D1 database.
             </p>
-            <table className="docs-table">
-              <thead>
-                <tr>
-                  <th>Scope</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>read:catalog</code></td>
-                  <td>Query products, categories, and real-time inventory levels.</td>
-                </tr>
-                <tr>
-                  <td><code>orders:create</code></td>
-                  <td>Create new customer orders and Bachs checkout sessions.</td>
-                </tr>
-                <tr>
-                  <td><code>orders:read</code></td>
-                  <td>Read past orders, payment receipts, and delivered credentials.</td>
-                </tr>
-              </tbody>
-            </table>
+            <div className="docs-table-wrapper">
+              <table className="docs-table">
+                <thead>
+                  <tr>
+                    <th>Scope</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>read:catalog</code></td>
+                    <td>Query products, categories, and real-time inventory levels.</td>
+                  </tr>
+                  <tr>
+                    <td><code>orders:create</code></td>
+                    <td>Create new customer orders and Bachs checkout sessions.</td>
+                  </tr>
+                  <tr>
+                    <td><code>orders:read</code></td>
+                    <td>Read past orders, payment receipts, and delivered credentials.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </section>
 
           {/* Section 5: Categories */}
@@ -331,47 +333,49 @@ export function ApiDocs() {
               under canonical categories while retaining independent server numbers.
             </p>
             <h3>Query Parameters:</h3>
-            <table className="docs-table">
-              <thead>
-                <tr>
-                  <th>Parameter</th>
-                  <th>Type</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>main_category</code></td>
-                  <td>string</td>
-                  <td>Filter by unified platform: <code>facebook</code>, <code>instagram</code>, <code>tiktok</code>, <code>twitter</code>, <code>gmail</code>, <code>vpn</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>server</code></td>
-                  <td>number</td>
-                  <td>Filter by logical supplier server tier: <code>1</code>, <code>2</code>, or <code>3</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>availability</code></td>
-                  <td>string</td>
-                  <td>Filter by stock: <code>in-stock</code> or <code>out-of-stock</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>q</code></td>
-                  <td>string</td>
-                  <td>Search keyword matching product title or description.</td>
-                </tr>
-                <tr>
-                  <td><code>sort</code></td>
-                  <td>string</td>
-                  <td>Sorting: <code>featured</code>, <code>price-asc</code>, <code>price-desc</code>, <code>newest</code>.</td>
-                </tr>
-                <tr>
-                  <td><code>page</code></td>
-                  <td>number</td>
-                  <td>Pagination page index (default: 1, 20 items per page).</td>
-                </tr>
-              </tbody>
-            </table>
+            <div className="docs-table-wrapper">
+              <table className="docs-table">
+                <thead>
+                  <tr>
+                    <th>Parameter</th>
+                    <th>Type</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>main_category</code></td>
+                    <td>string</td>
+                    <td>Filter by unified platform: <code>facebook</code>, <code>instagram</code>, <code>tiktok</code>, <code>twitter</code>, <code>gmail</code>, <code>vpn</code>.</td>
+                  </tr>
+                  <tr>
+                    <td><code>server</code></td>
+                    <td>number</td>
+                    <td>Filter by logical supplier server tier: <code>1</code>, <code>2</code>, or <code>3</code>.</td>
+                  </tr>
+                  <tr>
+                    <td><code>availability</code></td>
+                    <td>string</td>
+                    <td>Filter by stock: <code>in-stock</code> or <code>out-of-stock</code>.</td>
+                  </tr>
+                  <tr>
+                    <td><code>q</code></td>
+                    <td>string</td>
+                    <td>Search keyword matching product title or description.</td>
+                  </tr>
+                  <tr>
+                    <td><code>sort</code></td>
+                    <td>string</td>
+                    <td>Sorting: <code>featured</code>, <code>price-asc</code>, <code>price-desc</code>, <code>newest</code>.</td>
+                  </tr>
+                  <tr>
+                    <td><code>page</code></td>
+                    <td>number</td>
+                    <td>Pagination page index (default: 1, 20 items per page).</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
             <h3>cURL Request:</h3>
             <CodeBlock 
               language="bash"
@@ -556,47 +560,49 @@ export function ApiDocs() {
             <p>
               LogsPoll returns standard HTTP response codes. Failed responses include a JSON payload with a human-readable <code>error</code> or <code>message</code> attribute.
             </p>
-            <table className="docs-table">
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Meaning</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>400 Bad Request</code></td>
-                  <td>Invalid Input</td>
-                  <td>Malformed JSON, invalid product ID, or out-of-range quantity.</td>
-                </tr>
-                <tr>
-                  <td><code>401 Unauthorized</code></td>
-                  <td>Authentication Required</td>
-                  <td>Missing or invalid <code>Authorization: Bearer</code> token or expired session.</td>
-                </tr>
-                <tr>
-                  <td><code>403 Forbidden</code></td>
-                  <td>Access Denied</td>
-                  <td>Account is unverified, deactivated, or lacks required permission.</td>
-                </tr>
-                <tr>
-                  <td><code>404 Not Found</code></td>
-                  <td>Resource Missing</td>
-                  <td>Product or order could not be located.</td>
-                </tr>
-                <tr>
-                  <td><code>429 Too Many Requests</code></td>
-                  <td>Rate Limited</td>
-                  <td>Exceeded 60 requests per minute limit. Retry after cooldown.</td>
-                </tr>
-                <tr>
-                  <td><code>503 Unavailable</code></td>
-                  <td>Database / Maintenance</td>
-                  <td>Database synchronization or payment gateway is temporarily locked.</td>
-                </tr>
-              </tbody>
-            </table>
+            <div className="docs-table-wrapper">
+              <table className="docs-table">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Meaning</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>400 Bad Request</code></td>
+                    <td>Invalid Input</td>
+                    <td>Malformed JSON, invalid product ID, or out-of-range quantity.</td>
+                  </tr>
+                  <tr>
+                    <td><code>401 Unauthorized</code></td>
+                    <td>Authentication Required</td>
+                    <td>Missing or invalid <code>Authorization: Bearer</code> token or expired session.</td>
+                  </tr>
+                  <tr>
+                    <td><code>403 Forbidden</code></td>
+                    <td>Access Denied</td>
+                    <td>Account is unverified, deactivated, or lacks required permission.</td>
+                  </tr>
+                  <tr>
+                    <td><code>404 Not Found</code></td>
+                    <td>Resource Missing</td>
+                    <td>Product or order could not be located.</td>
+                  </tr>
+                  <tr>
+                    <td><code>429 Too Many Requests</code></td>
+                    <td>Rate Limited</td>
+                    <td>Exceeded 60 requests per minute limit. Retry after cooldown.</td>
+                  </tr>
+                  <tr>
+                    <td><code>503 Unavailable</code></td>
+                    <td>Database / Maintenance</td>
+                    <td>Database synchronization or payment gateway is temporarily locked.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </section>
 
           {/* Section 13: Rate Limits */}

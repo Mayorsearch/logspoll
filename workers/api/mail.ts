@@ -40,7 +40,7 @@ export async function drainMail(env: ApiEnv) {
     const row = await env.DB.prepare(`UPDATE auth_mail_outbox SET lease_owner=?,lease_until=? WHERE id=(
       SELECT id FROM auth_mail_outbox WHERE delivered_at IS NULL AND attempts<6 AND next_attempt<=?
       AND created_at>? AND (expires_at IS NULL OR expires_at>?) AND (lease_until IS NULL OR lease_until<?) ORDER BY created_at LIMIT 1
-    ) RETURNING id,payload,iv,created_at,attempts`).bind(owner, now + 30000, now, now - 15 * 60000, now, now).first<{ id: string; payload: string; iv: string; created_at: number; attempts: number }>()
+    ) RETURNING id,payload,iv,created_at,attempts`).bind(owner, now + 30000, now, now - 23 * 3600000, now, now).first<{ id: string; payload: string; iv: string; created_at: number; attempts: number }>()
     if (!row) break
     let failure = 'mail_decryption_failed'
     try {
@@ -88,24 +88,54 @@ export async function drainBusinessMail(env:ApiEnv) {
  let rows:{results:{id:string;kind:EmailKind;email:string;name:string}[]}
  try{rows=await env.DB.prepare("SELECT e.id,e.kind,a.email,a.name FROM business_mail_events e JOIN auth_user a ON a.id=e.user_id WHERE e.queued_at IS NULL AND a.emailVerified=1 ORDER BY e.created_at LIMIT 2").all()}catch{return}
  for(const row of rows.results){
-  let orderId = row.id.includes(':') ? row.id.split(':')[0] : null
-  if(!orderId){
-   const audit = await env.DB.prepare("SELECT record_id FROM audit_logs WHERE id=? AND table_name='orders'").bind(row.id).first<{record_id:string}>().catch(()=>null)
-   if(audit) orderId = audit.record_id
-  }
+  let entityId = row.id.includes(':') ? row.id.split(':')[0] : row.id
   let extraData: Partial<EmailData> | undefined
-  if(orderId){
-   const order = await env.DB.prepare("SELECT id,reference,total_minor,currency,payment_status,fulfillment_status FROM orders WHERE id=?").bind(orderId).first<{id:string;reference:string;total_minor:number;currency:string;payment_status:string;fulfillment_status:string}>().catch(()=>null)
-   if(order){
-    const items = await env.DB.prepare("SELECT product_name,quantity,unit_price_minor FROM order_items WHERE order_id=?").bind(order.id).all<{product_name:string;quantity:number;unit_price_minor:number}>().catch(()=>({results:[]}))
+
+  if(row.kind === 'wallet_funded'){
+   const funding = await env.DB.prepare('SELECT reference, credited_minor FROM wallet_funding_attempts WHERE id=?').bind(entityId).first<{reference:string;credited_minor:number}>().catch(()=>null)
+   if(funding){
     extraData = {
-     orderId: order.id,
-     reference: order.reference,
-     amountMinor: order.total_minor,
-     paymentStatus: order.payment_status,
-     fulfillmentStatus: order.fulfillment_status,
-     orderItems: items.results.map(i => ({ name: i.product_name, quantity: i.quantity, priceMinor: i.unit_price_minor })),
-     orderDetailsUrl: `${env.APP_ORIGIN ?? env.AUTH_ORIGIN ?? 'https://logspoll.com'}/dashboard?tab=orders`
+     reference: funding.reference,
+     amountMinor: funding.credited_minor,
+     paymentStatus: 'paid',
+     orderDetailsUrl: `${env.APP_ORIGIN ?? env.AUTH_ORIGIN ?? 'https://logspoll.com'}/dashboard/wallet`
+    }
+   }
+  } else if(row.kind === 'wallet_adjustment'){
+   const tx = await env.DB.prepare('SELECT reference, amount_minor, direction, reason FROM wallet_transactions WHERE id=?').bind(entityId).first<{reference:string;amount_minor:number;direction:string;reason:string}>().catch(()=>null)
+   if(tx){
+    extraData = {
+     reference: tx.reference,
+     amountMinor: tx.amount_minor,
+     paymentStatus: tx.direction === 'credit' ? 'credited' : 'debited',
+     orderDetailsUrl: `${env.APP_ORIGIN ?? env.AUTH_ORIGIN ?? 'https://logspoll.com'}/dashboard/wallet`
+    }
+   }
+  } else {
+   let orderId = entityId
+   if(!orderId){
+    const audit = await env.DB.prepare("SELECT record_id FROM audit_logs WHERE id=? AND table_name='orders'").bind(row.id).first<{record_id:string}>().catch(()=>null)
+    if(audit) orderId = audit.record_id
+   }
+   if(orderId){
+    const order = await env.DB.prepare("SELECT id,reference,total_minor,currency,payment_status,fulfillment_status FROM orders WHERE id=?").bind(orderId).first<{id:string;reference:string;total_minor:number;currency:string;payment_status:string;fulfillment_status:string}>().catch(()=>null)
+    if(order){
+     if(row.kind==='order_delivered'&&(order.payment_status!=='paid'||order.fulfillment_status!=='delivered'))continue
+     const items = await env.DB.prepare("SELECT product_name,quantity,unit_price_minor FROM order_items WHERE order_id=?").bind(order.id).all<{product_name:string;quantity:number;unit_price_minor:number}>().catch(()=>({results:[]}))
+     extraData = {
+      orderId: order.id,
+      reference: order.reference,
+      amountMinor: order.total_minor,
+      paymentStatus: order.payment_status,
+      fulfillmentStatus: order.fulfillment_status,
+      orderItems: items.results.map(i => ({ name: i.product_name, quantity: i.quantity, priceMinor: i.unit_price_minor })),
+      orderDetailsUrl: `${env.APP_ORIGIN ?? env.AUTH_ORIGIN ?? 'https://logspoll.com'}/dashboard?tab=orders`
+     }
+     if(row.kind==='order_delivered'){
+      const deliveries=await env.DB.prepare('SELECT i.product_name,e.instructions FROM order_items i JOIN product_entitlements e ON e.order_item_id=i.id WHERE i.order_id=? ORDER BY i.id').bind(order.id).all<{product_name:string;instructions:string}>()
+      if(deliveries.results.length!==items.results.length||!deliveries.results.length)continue
+      extraData.deliveryInstructions='Protected in your Digital Delivery Vault. Sign in to view and copy credentials securely.'
+     }
     }
    }
   }

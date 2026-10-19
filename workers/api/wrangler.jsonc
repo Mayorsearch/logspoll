@@ -51,7 +51,8 @@
         "PRODUCTION_CUTOVER_ENABLED": "true",
         "AUTH_ENABLED": "false",
         "CATALOG_SYNC_ENABLED": "true",
-        "AUTOMATION_ENABLED": "true"
+        "AUTOMATION_ENABLED": "true",
+        "WALLET_LIVE_FUNDING_ENABLED": "false"
       },
       "d1_databases": [
         {

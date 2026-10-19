@@ -17,11 +17,12 @@ const externalId=(value:unknown)=>{const id=String(value??'');if(!/^[1-9]\d{0,15
 const decimal=(value:unknown)=>{const text=String(value??'');if(!/^\d{1,12}(?:\.\d{1,12})?$/.test(text))throw new HstoraError('Invalid HStora price.');return text}
 function text(value:unknown,max:number){if(typeof value!=='string')return '';if(value.length>max||Array.from(value).some(character=>{const code=character.charCodeAt(0);return code<32&&![9,10,13].includes(code)}))throw new HstoraError('Invalid HStora text metadata.');return value.trim()}
 
-export async function hstoraHeaders(credentials:HstoraCredentials,path:string,query:string,timestamp=String(Math.floor(Date.now()/1000)),nonce=crypto.randomUUID().replaceAll('-','')){
+export async function hstoraHeaders(credentials:HstoraCredentials,path:string,query:string,timestamp=String(Math.floor(Date.now()/1000)),nonce=crypto.randomUUID().replaceAll('-',''),operation:{method:'GET'|'POST';body?:string}={method:'GET'}){
  const key=credentials.key.trim(),secret=credentials.secret.trim()
  if(!/^hs_pk_[A-Za-z0-9_-]+$/.test(key)||!/^hs_sk_[A-Za-z0-9_-]+$/.test(secret)||key.length>256||secret.length>1024)throw new HstoraError('Invalid HStora credential format. Enter the API key (hs_pk_) and API signing secret (hs_sk_), not the webhook secret.',400)
- if(!/^\/api\/v1\/(?:catalog|products\/[1-9]\d{0,15})$/.test(path)||/[\r\n#]/.test(query))throw new HstoraError('Unsupported HStora resource.',400)
- const canonical=['GET',path,query,timestamp,nonce,''].join('\n')
+ if((operation.method==='GET'&&path==='/api/v1/orders')||(operation.method==='POST'&&path!=='/api/v1/orders')||!/^\/api\/v1\/(?:catalog|products\/[1-9]\d{0,15}|orders(?:\/lookup|\/[1-9]\d{0,15})?)$/.test(path)||/[\r\n#]/.test(query))throw new HstoraError('Unsupported HStora resource.',400)
+ const bodyHash=operation.body?hex(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(operation.body))):''
+ const canonical=[operation.method,path,query,timestamp,nonce,bodyHash].join('\n')
  const imported=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign'])
  const headers=new Headers({
    'X-API-Key':key,

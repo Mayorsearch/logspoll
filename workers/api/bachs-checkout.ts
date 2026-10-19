@@ -1,5 +1,5 @@
 import {assertAutomationQuotes} from './supplier-automation.ts'
-import {createBachsSession} from '../../server/bachs.ts'
+import {createBachsSession,BachsCheckoutError,BACHS_MINIMUM_NGN_MINOR,BACHS_MINIMUM_MESSAGE} from '../../server/bachs.ts'
 import {HttpError,json} from './http.ts'
 import {identity} from './auth.ts'
 import {requireRuntime} from './runtime.ts'
@@ -31,15 +31,17 @@ export async function initiateCheckout(env:ApiEnv,buyer:Buyer,requestId:string,i
   if(rows.results.length!==items.length)throw new HttpError(409,'A product is unavailable.')
   const total=items.reduce((sum,i)=>sum+rows.results.find(p=>p.id===i.id)!.price_minor*i.quantity,0)
   if(!Number.isSafeInteger(total)||total<1||total>99999999900||rows.results.some(p=>p.currency!=='NGN'||p.price_minor<1))throw new HttpError(409,'Invalid product pricing.')
+  if(total<BACHS_MINIMUM_NGN_MINOR)throw new HttpError(400,BACHS_MINIMUM_MESSAGE)
   await assertAutomationQuotes(env,items.map(item=>item.id))
   const id=crypto.randomUUID(),order=crypto.randomUUID(),now=Date.now(),key='bachs_'+id
   const hasMail=Boolean(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_mail_events'").first().catch(()=>null))
   const statements=[db.prepare('INSERT INTO orders(id,customer_id,reference,total_minor) VALUES(?,?,?,?)').bind(order,buyer.id,'LP-'+order,total),db.prepare('INSERT INTO bachs_payment_attempts(id,order_id,customer_id,client_request_id,idempotency_key,provider_mode,amount_minor,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,order,buyer.id,requestId,key,mode,total,now,now)]
   if(hasMail)statements.push(db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) VALUES(?,'order_placed',?,?) ON CONFLICT(id) DO NOTHING").bind(order+':order_placed',buyer.id,now))
+  const walletHolds=(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet_transactions'").first())?"+COALESCE((SELECT sum(i.quantity) FROM order_items i JOIN orders o ON o.id=i.order_id JOIN wallet_transactions t ON t.order_id=o.id AND t.type='purchase' AND t.status='completed' WHERE i.product_id=p.id AND o.payment_method='wallet' AND o.payment_status='paid'),0)":""
   for(const item of items){const p=rows.results.find(p=>p.id===item.id)!
    statements.push(db.prepare('INSERT INTO order_items(id,order_id,product_id,product_name,category_name,quantity,unit_price_minor) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),order,p.id,p.name,p.category_name,item.quantity,p.price_minor))
    // Expiry alone never frees a hold: only verified terminal provider status does.
-   statements.push(db.prepare(`INSERT INTO bachs_reservations(attempt_id,product_id,quantity,expires_at,created_at) VALUES(?,?,CASE WHEN EXISTS(SELECT 1 FROM storefront_products p WHERE p.id=? AND p.currency='NGN' AND p.price_minor=? AND p.available_quantity>=?+COALESCE((SELECT sum(r.quantity) FROM bachs_reservations r WHERE r.product_id=p.id AND r.state IN ('held','consumed')),0)) THEN ? ELSE 0 END,?,?)`).bind(id,p.id,p.id,p.price_minor,item.quantity,item.quantity,now+3600000,now))
+   statements.push(db.prepare(`INSERT INTO bachs_reservations(attempt_id,product_id,quantity,expires_at,created_at) VALUES(?,?,CASE WHEN EXISTS(SELECT 1 FROM storefront_products p WHERE p.id=? AND p.currency='NGN' AND p.price_minor=? AND p.available_quantity>=?+COALESCE((SELECT sum(r.quantity) FROM bachs_reservations r WHERE r.product_id=p.id AND r.state IN ('held','consumed')),0)${walletHolds}) THEN ? ELSE 0 END,?,?)`).bind(id,p.id,p.id,p.price_minor,item.quantity,item.quantity,now+3600000,now))
   }
   try{await db.batch(statements)}catch{
    const concurrent=await db.prepare('SELECT id FROM bachs_payment_attempts WHERE customer_id=? AND client_request_id=?').bind(buyer.id,requestId).first()
@@ -49,6 +51,7 @@ export async function initiateCheckout(env:ApiEnv,buyer:Buyer,requestId:string,i
   attempt={id,order_id:order,provider_mode:mode,amount_minor:total,idempotency_key:key,checkout_id:null,status:'initiating'}
  }
  if(!['initiating','open'].includes(attempt.status))return {orderId:attempt.order_id,status:attempt.status}
+ if(attempt.amount_minor<BACHS_MINIMUM_NGN_MINOR)throw new HttpError(400,BACHS_MINIMUM_MESSAGE)
  // Every retry uses the same provider key. Ambiguous timeouts retain the hold.
  const session=await createBachsSession({key:env.BACHS_API_KEY!,amountMinor:attempt.amount_minor,buyerEmail:buyer.email,orderId:attempt.order_id,idempotencyKey:attempt.idempotency_key,successUrl:origin+'/dashboard?tab=orders',cancelUrl:origin+'/cart'},mode)
  if(attempt.checkout_id&&attempt.checkout_id!==session.checkoutId)throw new HttpError(503,'Provider checkout identity changed; manual reconciliation required.')
@@ -71,5 +74,11 @@ export async function bachsCheckout(request:Request,env:ApiEnv){
   while(true){const next=await reader.read();if(next.done)break;size+=next.value.length;if(size>8192){await reader.cancel();throw new HttpError(413,'Checkout too large.')}raw+=decoder.decode(next.value,{stream:true})}raw+=decoder.decode()
   let body:{requestId:string;items:Item[]};try{body=JSON.parse(raw);if(!body||!Array.isArray(body.items))throw Error()}catch{throw new HttpError(400,'Invalid checkout JSON.')}
   return json(await initiateCheckout(env,buyer,body.requestId,body.items,origin))
- }catch(error){return json({error:error instanceof HttpError?error.message:'Checkout could not be confirmed. Retry with the same request ID.'},error instanceof HttpError?error.status:503)}
+ }catch(error){
+  if(error instanceof BachsCheckoutError){
+   console.warn('Bachs checkout failed',{providerStatus:error.providerStatus,providerCode:error.providerCode})
+   return json({error:error.message,providerStatus:error.providerStatus,providerCode:error.providerCode},502)
+  }
+  return json({error:error instanceof HttpError?error.message:'Checkout could not be confirmed. Retry with the same request ID.'},error instanceof HttpError?error.status:503)
+ }
 }

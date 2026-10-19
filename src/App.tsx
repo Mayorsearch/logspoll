@@ -17,6 +17,7 @@ import { AuthProvider } from './auth/AuthProvider'
 import { ProtectedRoute, AdminGate } from './auth/ProtectedRoute'
 import { AuthPage, AuthCallback, RecoveryRedirect } from './pages/Auth'
 import { DashboardLayout, CustomerRecords, Profile, AccountSettings } from './pages/Dashboard'
+import { WalletPage } from './pages/WalletPage'
 
 export default function App() {
   return (
@@ -44,6 +45,7 @@ export default function App() {
                 <Route path="catalog" element={<Navigate to="/marketplace" replace />} />
                 <Route path="private-catalog" element={<Navigate to="/marketplace" replace />} />
                 <Route path="products/:slug" element={<ProductDetails />} />
+                <Route path="product/:slug" element={<ProductDetails />} />
                 <Route path="docs" element={<ApiDocs />} />
                 <Route path="api-docs" element={<Navigate to="/docs" replace />} />
 
@@ -77,7 +79,8 @@ export default function App() {
                     <Route path="downloads" element={<CustomerRecords key="downloads" mode="purchases" />} />
                     <Route path="favorites" element={<CustomerRecords key="favorites" mode="favorites" />} />
                     <Route path="support" element={<CustomerRecords key="support" mode="support" />} />
-                    <Route path="transactions" element={<CustomerRecords key="transactions" mode="transactions" />} />
+                    <Route path="wallet" element={<WalletPage />} />
+                    <Route path="transactions" element={<WalletPage />} />
                     <Route path="settings" element={<AccountSettings />} />
                   </Route>
                 </Route>

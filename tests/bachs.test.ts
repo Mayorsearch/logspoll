@@ -44,3 +44,26 @@ test('Bachs HMAC-SHA256 webhook checks timestamp and raw body; V2 accepts rotate
   assert.equal(await verifyBachsWebhook(raw, new Headers({ 'X-Bachs-Timestamp': String(ts), 'X-Bachs-Signature': signature }), secret, ts), true)
   assert.equal(await verifyBachsWebhook(raw, new Headers({ 'X-Bachs-Signature-V2': `t=${ts},v1=${signature}` }), 'incorrect', ts), false)
 })
+
+test('checkout rejects below the documented NGN minimum without contacting Bachs', async t => {
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw Error('must not call') })
+  await assert.rejects(createSandboxSession({key:'sk_sandbox_test',amountMinor:9999,buyerEmail:'test@example.com',idempotencyKey:'minimum_test_12345'}), /at least ₦100\.00/)
+  assert.equal(fetch.mock.callCount(), 0)
+})
+
+test('checkout reports provider status and allowlisted code without leaking response content', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({error_code:'VALIDATION_ERROR',detail:'sk_live_private customer@example.com'}, {status:400}))
+  await assert.rejects(createSandboxSession({key:'sk_sandbox_test',amountMinor:10000,buyerEmail:'test@example.com',idempotencyKey:'diagnostic_test_12345'}), error => {
+    assert.match(String(error), /HTTP 400, VALIDATION_ERROR/)
+    assert.doesNotMatch(String(error), /sk_live_private|customer@example.com/)
+    return true
+  })
+})
+
+test('checkout accepts exactly the NGN minimum without increasing its amount', async t => {
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    assert.equal(JSON.parse(String(init?.body)).pricing.amount, '100.00')
+    return Response.json({checkout_id:'chk_minimum12345',checkout_url:'https://sandbox-checkout.bachs.io/c/minimum'})
+  })
+  assert.equal((await createSandboxSession({key:'sk_sandbox_test',amountMinor:10000,buyerEmail:'test@example.com',idempotencyKey:'minimum_boundary_12345'})).checkoutId, 'chk_minimum12345')
+})

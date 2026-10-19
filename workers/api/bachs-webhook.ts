@@ -2,10 +2,25 @@ import {getBachsSession,verifyBachsWebhook} from '../../server/bachs.ts'
 import {checkedPaidSandboxSession,parseNGNMinor} from '../../server/bachs-flow.ts'
 import {HttpError,json} from './http.ts'
 import {requireRuntime} from './runtime.ts'
+import {runFulfillment} from './fulfillment.ts'
+import {drainBusinessMail,drainMail} from './mail.ts'
 import type {ApiEnv} from './types.ts'
 
 type Attempt={id:string;order_id:string;customer_id?:string;checkout_id:string;provider_mode:string;amount_minor:number;status:string}
 const supported=new Set(['checkout.completed','checkout.expired','collection.succeeded','collection.failed','collection.underpaid','refund.paid','refund.created','refund.failed'])
+
+/** Recover a missed webhook using the customer's own latest pending checkout. */
+export async function reconcileCustomerPayment(env:ApiEnv,customerId:string){
+ if(!env.BACHS_API_KEY||!env.DB)return
+ const attempt=await env.DB.prepare(`SELECT a.* FROM bachs_payment_attempts a JOIN orders o ON o.id=a.order_id
+  WHERE a.customer_id=? AND o.customer_id=? AND o.payment_status='pending'
+  AND a.status IN ('initiating','open') AND a.checkout_id IS NOT NULL ORDER BY a.created_at DESC LIMIT 1`).bind(customerId,customerId).first<Attempt>()
+ if(!attempt)return
+ try{await reconcileBachsAttempt(env,attempt)}catch(error){
+  console.warn('Bachs customer payment recovery failed',{checkoutId:attempt.checkout_id,errorType:error instanceof Error?error.name:'unknown'})
+  throw new HttpError(503,'Bachs payment verification is temporarily unavailable. Your order is preserved; retry shortly.')
+ }
+}
 
 /** Signed events request reconciliation, never authorize fulfillment themselves. */
 export async function bachsWebhook(request:Request,env:ApiEnv):Promise<Response>{
@@ -35,11 +50,14 @@ export async function bachsWebhook(request:Request,env:ApiEnv):Promise<Response>
   if(existing&&(existing.checkout_id!==checkoutId||existing.event_type!==event.type))throw new HttpError(409,'Event identity mismatch.')
   if(existing?.processing_status==='processed')return json({received:true,duplicate:true})
   let attempt=await db.prepare('SELECT id,order_id,customer_id,checkout_id,provider_mode,amount_minor,status FROM bachs_payment_attempts WHERE checkout_id=?').bind(checkoutId).first<Attempt>()
+  const hasWalletFunding = Boolean(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet_funding_attempts'").first().catch(() => null))
+  let fundingAttempt = (!attempt && hasWalletFunding) ? await db.prepare('SELECT id, customer_id, wallet_id, reference, checkout_id, provider_mode, amount_minor, fee_minor, credited_minor, status FROM wallet_funding_attempts WHERE checkout_id=?').bind(checkoutId).first<import('./wallet.ts').FundingAttemptRecord>().catch(() => null) : null
   const key=env.BACHS_API_KEY.trim(),mode=key.startsWith('sk_live_')?'live':key.startsWith('sk_sandbox_')?'sandbox':null
   if(!mode)throw new HttpError(503,'Payment verification is not configured.')
   if(attempt&&attempt.provider_mode!==mode)throw new HttpError(409,'Payment environment mismatch.')
+  if(fundingAttempt&&fundingAttempt.provider_mode!==mode)throw new HttpError(409,'Payment environment mismatch.')
   let verifiedSession:Record<string,unknown>|undefined
-  if(!attempt){
+  if(!attempt&&!fundingAttempt){
    // Recover a created checkout whose response was interrupted before D1 saved its ID.
    // Only an authoritative, matching checkout can attach to an existing attempt.
    verifiedSession=await getBachsSession(key,checkoutId)
@@ -49,13 +67,26 @@ export async function bachsWebhook(request:Request,env:ApiEnv):Promise<Response>
     if(candidate){
      await db.prepare("UPDATE bachs_payment_attempts SET checkout_id=?,status='open',updated_at=? WHERE id=? AND checkout_id IS NULL AND status='initiating'").bind(checkoutId,now,candidate.id).run()
      attempt=await db.prepare('SELECT id,order_id,customer_id,checkout_id,provider_mode,amount_minor,status FROM bachs_payment_attempts WHERE id=? AND checkout_id=?').bind(candidate.id,checkoutId).first<Attempt>()
+    } else if (hasWalletFunding) {
+     const walletCandidate=await db.prepare("SELECT id FROM wallet_funding_attempts WHERE (id=? OR reference=?) AND provider_mode=? AND amount_minor=? AND checkout_id IS NULL AND status='initiating'").bind(verifiedSession.reference,verifiedSession.reference,mode,amount).first<{id:string}>().catch(() => null)
+     if(walletCandidate){
+      await db.prepare("UPDATE wallet_funding_attempts SET checkout_id=?,status='open',updated_at=? WHERE id=? AND checkout_id IS NULL AND status='initiating'").bind(checkoutId,now,walletCandidate.id).run()
+      fundingAttempt=await db.prepare('SELECT id, customer_id, wallet_id, reference, checkout_id, provider_mode, amount_minor, fee_minor, credited_minor, status FROM wallet_funding_attempts WHERE id=? AND checkout_id=?').bind(walletCandidate.id,checkoutId).first<import('./wallet.ts').FundingAttemptRecord>().catch(() => null)
+     }
     }
    }
   }
-  await db.prepare("INSERT INTO bachs_webhook_events(event_id,event_type,checkout_id,attempt_id,received_at,processing_status) VALUES(?,?,?,?,?,?) ON CONFLICT(event_id) DO UPDATE SET attempt_id=COALESCE(bachs_webhook_events.attempt_id,excluded.attempt_id),processing_status=excluded.processing_status").bind(event.id,event.type,checkoutId,attempt?.id??null,now,attempt?'received':'needs_review').run()
-  // Never create orders from unsolicited signed events or acknowledge payment as verified.
-  if(!attempt)return json({received:true,reviewRequired:true})
-  await reconcileBachsAttempt(env,attempt,event.id,event.type,verifiedSession)
+  const targetId = attempt?.id ?? null
+  const hasTarget = Boolean(attempt || fundingAttempt)
+  await db.prepare("INSERT INTO bachs_webhook_events(event_id,event_type,checkout_id,attempt_id,received_at,processing_status) VALUES(?,?,?,?,?,?) ON CONFLICT(event_id) DO UPDATE SET attempt_id=COALESCE(bachs_webhook_events.attempt_id,excluded.attempt_id),processing_status=excluded.processing_status").bind(event.id,event.type,checkoutId,targetId,now,hasTarget?'received':'needs_review').run()
+  // Never create orders or credit wallets from unsolicited signed events.
+  if(!attempt&&!fundingAttempt)return json({received:true,reviewRequired:true})
+  if(fundingAttempt){
+   const { reconcileWalletFundingAttempt } = await import('./wallet.ts')
+   await reconcileWalletFundingAttempt(env, fundingAttempt, event.id, event.type, verifiedSession)
+   return json({received:true})
+  }
+  await reconcileBachsAttempt(env,attempt!,event.id,event.type,verifiedSession)
   return json({received:true})
  }catch(error){return json({error:error instanceof HttpError?error.message:'Payment verification unavailable; delivery must retry.'},error instanceof HttpError?error.status:503)}
 }
@@ -70,6 +101,13 @@ export async function reconcileBachsAttempt(env:ApiEnv,attempt:Attempt,eventId='
   const refunded=matches&&(eventType==='refund.paid'||session.payment_status==='refunded'||session.status==='refunded')
   const paid=matches&&!refunded&&checkedPaidSandboxSession(session,attempt.checkout_id)
   const terminal=matches&&['expired','cancelled'].includes(String(session.status))
+  console.info('Bachs payment reconciliation',{
+   checkoutId:attempt.checkout_id,identityMatches:matches,paidVerified:Boolean(paid),
+   completed:session.status==='completed',paymentSucceeded:session.payment_status==='succeeded',
+   chargeSucceeded:Boolean(session.charge&&typeof session.charge==='object'&&(session.charge as Record<string,unknown>).status==='succeeded'),
+   oneTime:session.recurring===null,cartMode:session.session_mode==='CART',apiSource:session.source_type==='API',
+   checkoutSource:session.source_type==='CHECKOUT_SESSION',metadataMatches:(session.metadata as Record<string,unknown>|null)?.order_id===attempt.order_id
+  })
   let customerId = attempt.customer_id
   if(!customerId){
    const ord=await db.prepare('SELECT customer_id FROM orders WHERE id=?').bind(attempt.order_id).first<{customer_id:string}>().catch(()=>null)
@@ -95,8 +133,16 @@ export async function reconcileBachsAttempt(env:ApiEnv,attempt:Attempt,eventId='
     db.prepare("UPDATE orders SET payment_status='paid',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND payment_status='pending' AND EXISTS(SELECT 1 FROM bachs_payment_attempts a WHERE a.id=? AND a.order_id=orders.id AND a.status='paid')").bind(attempt.order_id,attempt.id),
     db.prepare("UPDATE bachs_webhook_events SET processing_status=CASE WHEN EXISTS(SELECT 1 FROM bachs_payment_attempts WHERE id=? AND status='paid') THEN 'processed' ELSE 'needs_review' END,processed_at=? WHERE event_id=?").bind(attempt.id,now,eventId),
    ]
-   if(hasMail&&customerId) writes.push(db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) VALUES(?,'purchase_success',?,?) ON CONFLICT(id) DO NOTHING").bind(attempt.order_id+':purchase_success',customerId,now))
+   if(hasMail&&customerId) writes.push(db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) SELECT ?,'purchase_success',?,? WHERE EXISTS(SELECT 1 FROM bachs_payment_attempts WHERE id=? AND status='paid') ON CONFLICT(id) DO NOTHING").bind(attempt.order_id+':purchase_success',customerId,now,attempt.id))
    await db.batch(writes)
+   await db.prepare(`INSERT OR IGNORE INTO fulfillment_jobs(order_item_id,order_id,request_id,created_at,updated_at)
+    SELECT i.id,i.order_id,'delivery_'||i.id,?,?
+    FROM order_items i WHERE i.order_id=? AND NOT EXISTS(SELECT 1 FROM product_entitlements e WHERE e.order_item_id=i.id)`).bind(now,now,attempt.order_id).run().catch(()=>undefined)
+   if(env.AUTO_FULFILLMENT_ENABLED==='true'){
+    await runFulfillment(env,attempt.order_id).catch(()=>undefined)
+    await drainBusinessMail(env).catch(()=>undefined)
+    await drainMail(env).catch(()=>undefined)
+   }
   }else if(terminal){
    const writes=[
     db.prepare("UPDATE bachs_payment_attempts SET status='expired',updated_at=? WHERE id=? AND status IN ('initiating','open')").bind(now,attempt.id),

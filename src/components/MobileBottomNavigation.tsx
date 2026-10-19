@@ -6,8 +6,8 @@ import {
   LogIn, 
   Menu, 
   LayoutDashboard, 
+  Wallet,
   Receipt, 
-  Heart, 
   UserRound 
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
@@ -52,7 +52,7 @@ export function MobileBottomNavigation({ onOpenMenu }: MobileBottomNavigationPro
     )
   }
 
-  // Authenticated Customer Navigation
+  // Authenticated Customer Navigation (5 aligned items: Dashboard | Shop | Wallet | Orders | Profile)
   return (
     <nav className="mobile-bottom-navigation" aria-label="Customer quick navigation">
       <NavLink to="/dashboard" end className={({ isActive }) => (isActive ? 'active' : '')}>
@@ -63,13 +63,13 @@ export function MobileBottomNavigation({ onOpenMenu }: MobileBottomNavigationPro
         <ShoppingBag size={20} />
         <span>Shop</span>
       </NavLink>
+      <NavLink to="/dashboard/wallet" className={({ isActive }) => (isActive ? 'active' : '')}>
+        <Wallet size={20} />
+        <span>Wallet</span>
+      </NavLink>
       <NavLink to="/dashboard/orders" className={({ isActive }) => (isActive ? 'active' : '')}>
         <Receipt size={20} />
         <span>Orders</span>
-      </NavLink>
-      <NavLink to="/marketplace?favorites=1" className={({ isActive }) => (isActive ? 'active' : '')}>
-        <Heart size={20} />
-        <span>Favorites</span>
       </NavLink>
       <NavLink to="/dashboard/profile" className={({ isActive }) => (isActive ? 'active' : '')}>
         <UserRound size={20} />

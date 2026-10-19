@@ -1,9 +1,10 @@
-import { useEffect, useState, useId } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import { useCart } from '../lib/cart'
 import { useAuth } from '../auth/AuthProvider'
 import { useCurrency } from '../lib/currency'
 import { cloudflareRequest } from '../lib/cloudflare-auth'
+import { checkoutRequestId, clearCheckoutRequest } from '../lib/checkout-request'
 import {
   ShieldCheck,
   Lock,
@@ -19,7 +20,8 @@ import {
   CreditCard,
   Building2,
   PhoneCall,
-  ShoppingBag
+  ShoppingBag,
+  Wallet
 } from 'lucide-react'
 
 interface Product {
@@ -73,16 +75,23 @@ export function Checkout() {
   const [checkoutError, setCheckoutError] = useState<string>('')
   const [copiedRef, setCopiedRef] = useState<boolean>(false)
 
-  // Stable client request ID to enforce idempotency
-  const defaultRequestId = useId().replace(/[^a-f0-9]/gi, '')
-  const [clientRequestId] = useState<string>(() => {
-    const key = 'logspoll-checkout-req-id'
-    const existing = sessionStorage.getItem(key)
-    if (existing) return existing
-    const newId = crypto.randomUUID ? crypto.randomUUID() : 'req-' + Date.now() + '-' + defaultRequestId
-    sessionStorage.setItem(key, newId)
-    return newId
-  })
+  // Payment Method selection ('wallet' | 'bachs')
+  const [paymentMethod, setPaymentMethod] = useState<'wallet' | 'bachs'>('wallet')
+  const [wallet, setWallet] = useState<{ balance_minor: number; status: string } | null>(null)
+  const [loadingWallet, setLoadingWallet] = useState(false)
+
+  // Fetch customer wallet on mount
+  useEffect(() => {
+    if (session) {
+      setLoadingWallet(true)
+      void cloudflareRequest<{ wallet: { balance_minor: number; status: string } }>('/api/wallet')
+        .then(res => {
+          if (res.wallet) setWallet(res.wallet)
+        })
+        .catch(() => {})
+        .finally(() => setLoadingWallet(false))
+    }
+  }, [session])
 
   // 1. Check order status if active order ID exists
   const checkOrderStatus = async (orderId: string) => {
@@ -99,7 +108,7 @@ export function Checkout() {
         if (res.order.payment_status === 'paid') {
           // Clear cart on confirmed verified payment
           clear()
-          sessionStorage.removeItem('logspoll-checkout-req-id')
+          clearCheckoutRequest(sessionStorage, session.user.id, items)
         }
       } else {
         setStatusError('Order details could not be retrieved.')
@@ -150,7 +159,7 @@ export function Checkout() {
     return sum + (product ? product.price_minor * item.quantity : 0)
   }, 0)
 
-  // Handle Checkout submission to /api/checkout
+  // Handle Checkout submission
   const handleInitiatePayment = async () => {
     if (!session) {
       navigate(`/login?next=${encodeURIComponent('/checkout')}`)
@@ -161,6 +170,49 @@ export function Checkout() {
     setSubmitting(true)
     setCheckoutError('')
 
+    // 1. Pay with Customer Wallet Flow
+    if (paymentMethod === 'wallet') {
+      const balanceMinor = wallet?.balance_minor ?? 0
+      if (balanceMinor < subtotalMinor) {
+        setCheckoutError(`Insufficient wallet balance. Total: ${formatPrice(subtotalMinor)}, Available: ${formatPrice(balanceMinor)}. Please fund your wallet or pay with Bachs.`)
+        setSubmitting(false)
+        return
+      }
+
+      try {
+        const res = await cloudflareRequest<{
+          ok: boolean
+          orderId: string
+          reference: string
+          totalMinor: number
+          balanceAfterMinor: number
+        }>('/api/wallet/pay-order', {
+          requestId: checkoutRequestId(sessionStorage, session.user.id, items),
+          items: items.map(i => ({ id: i.id, quantity: i.quantity })),
+        })
+
+        clear()
+        clearCheckoutRequest(sessionStorage, session.user.id, items)
+        if (res.orderId) {
+          setActiveOrderId(res.orderId)
+          sessionStorage.setItem('logspoll-active-order-id', res.orderId)
+          await checkOrderStatus(res.orderId)
+        }
+      } catch (err) {
+        setCheckoutError(err instanceof Error ? err.message : 'Wallet payment failed.')
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
+    // 2. Direct Bachs Gateway Flow
+    if (subtotalMinor < 10000) {
+      setCheckoutError('Bachs checkout requires a minimum order total of ₦100.00. Please increase quantity or add more items.')
+      setSubmitting(false)
+      return
+    }
+
     try {
       const response = await fetch('/api/checkout', {
         method: 'POST',
@@ -169,7 +221,7 @@ export function Checkout() {
           Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          requestId: clientRequestId,
+          requestId: checkoutRequestId(sessionStorage, session.user.id, items),
           items: items.map(i => ({ id: i.id, quantity: i.quantity })),
         }),
       })
@@ -184,6 +236,10 @@ export function Checkout() {
       } = await response.json().catch(() => ({}))
 
       if (!response.ok) {
+        if (response.status === 409 && data.error === 'Idempotency request does not match the original checkout.') {
+          checkoutRequestId(sessionStorage, session.user.id, items, true)
+          throw new Error('Your cart changed. Its checkout reference is refreshed; select Pay again. Existing orders are unchanged.')
+        }
         throw new Error(data.error || 'Payment gateway connection was not accepted.')
       }
 
@@ -198,7 +254,6 @@ export function Checkout() {
       if (checkoutUrl) {
         window.location.assign(checkoutUrl)
       } else if (orderId) {
-        // Poll status immediately
         await checkOrderStatus(orderId)
       }
     } catch (err) {
@@ -396,7 +451,7 @@ export function Checkout() {
         ) : (
           <div className="cart-grid-layout">
             {/* Left Column: Delivery & Payment Details */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <div className="checkout-details-column">
               {cartError && (
                 <div className="checkout-verification-notice" style={{ background: 'rgba(239, 68, 68, 0.08)', borderColor: '#ef4444', color: '#dc2626' }}>
                   <AlertCircle size={18} style={{ flexShrink: 0 }} />
@@ -432,56 +487,177 @@ export function Checkout() {
                 </p>
               </div>
 
-              {/* Payment Gateway Card */}
+              {/* Payment Method Selector Card */}
               <div className="cart-panel">
                 <div className="checkout-section-header">
                   <CreditCard size={18} color="#ff6500" />
-                  <span>Payment Gateway & Settlement</span>
+                  <span>Choose Payment Method</span>
                 </div>
 
-                <div className="checkout-payment-box">
-                  <div className="checkout-payment-header">
-                    <div className="checkout-payment-brand">
-                      <Building2 size={16} color="#ff6500" />
-                      <span>Bachs Payments (NGN Settlement)</span>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
+                  {/* Option 1: Pay with Wallet */}
+                  <div
+                    onClick={() => setPaymentMethod('wallet')}
+                    style={{
+                      padding: 14,
+                      borderRadius: 10,
+                      border: `2px solid ${paymentMethod === 'wallet' ? '#ff6500' : 'var(--lp-border, #e2e8f0)'}`,
+                      background: paymentMethod === 'wallet' ? '#ff650008' : 'var(--lp-card-bg, #ffffff)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
+                        <Wallet size={16} color={paymentMethod === 'wallet' ? '#ff6500' : 'var(--lp-text-muted)'} />
+                        <span>Pay with Wallet</span>
+                      </div>
+                      <span style={{
+                        width: 16, height: 16, borderRadius: '50%',
+                        border: `2px solid ${paymentMethod === 'wallet' ? '#ff6500' : '#cbd5e1'}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center'
+                      }}>
+                        {paymentMethod === 'wallet' && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ff6500' }} />}
+                      </span>
                     </div>
-                    <span className="checkout-payment-badge">Bank Transfer · Card · USSD</span>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--lp-text-muted)' }}>
+                      Available: <strong style={{ color: (wallet?.balance_minor ?? 0) >= subtotalMinor ? '#10b981' : '#ef4444' }}>{loadingWallet ? '…' : formatPrice(wallet?.balance_minor ?? 0)}</strong>
+                    </div>
                   </div>
 
-                  <p className="checkout-payment-desc">
-                    Secure Naira checkout powered by Bachs. Orders are created with atomic D1 inventory holds and verified cryptographic webhooks.
-                  </p>
-
-                  <div className="checkout-payment-channels">
-                    <div className="checkout-channel-item">
-                      <Building2 size={13} color="#ff6500" />
-                      <span>Direct Bank Transfer</span>
+                  {/* Option 2: Bachs Direct Gateway */}
+                  <div
+                    onClick={() => setPaymentMethod('bachs')}
+                    style={{
+                      padding: 14,
+                      borderRadius: 10,
+                      border: `2px solid ${paymentMethod === 'bachs' ? '#ff6500' : 'var(--lp-border, #e2e8f0)'}`,
+                      background: paymentMethod === 'bachs' ? '#ff650008' : 'var(--lp-card-bg, #ffffff)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
+                        <Building2 size={16} color={paymentMethod === 'bachs' ? '#ff6500' : 'var(--lp-text-muted)'} />
+                        <span>Bachs Online Gateway</span>
+                      </div>
+                      <span style={{
+                        width: 16, height: 16, borderRadius: '50%',
+                        border: `2px solid ${paymentMethod === 'bachs' ? '#ff6500' : '#cbd5e1'}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center'
+                      }}>
+                        {paymentMethod === 'bachs' && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ff6500' }} />}
+                      </span>
                     </div>
-                    <div className="checkout-channel-item">
-                      <CreditCard size={13} color="#ff6500" />
-                      <span>Debit & Credit Cards</span>
-                    </div>
-                    <div className="checkout-channel-item">
-                      <PhoneCall size={13} color="#ff6500" />
-                      <span>USSD Channels</span>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--lp-text-muted)' }}>
+                      Card · Bank Transfer · USSD
                     </div>
                   </div>
                 </div>
 
-                {/* Pre-Activation Notice explaining that live charging is disabled per prompt instructions */}
-                <div className="checkout-verification-notice">
-                  <Lock size={18} style={{ flexShrink: 0, marginTop: 2 }} />
-                  <div>
-                    <strong style={{ display: 'block', marginBottom: 2 }}>Production Verification Notice:</strong>
-                    Live settlement is completing final merchant onboarding verification. Per security protocol, live card charging remains locked until compliance clearance is completed. No customer accounts will be debited.
+                {/* Wallet Details Breakdown */}
+                {paymentMethod === 'wallet' && (
+                  <div style={{
+                    padding: 16,
+                    borderRadius: 10,
+                    background: 'var(--lp-bg-subtle, #f8fafc)',
+                    border: '1px solid var(--lp-border, #e2e8f0)',
+                    marginBottom: 16
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: 6 }}>
+                      <span style={{ color: 'var(--lp-text-muted)' }}>Current Wallet Balance:</span>
+                      <strong>{formatPrice(wallet?.balance_minor ?? 0)}</strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: 6 }}>
+                      <span style={{ color: 'var(--lp-text-muted)' }}>Amount to Deduct:</span>
+                      <strong style={{ color: '#ff6500' }}>-{formatPrice(subtotalMinor)}</strong>
+                    </div>
+                    <div style={{ height: 1, background: 'var(--lp-border, #e2e8f0)', margin: '8px 0' }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                      <span style={{ fontWeight: 600 }}>Remaining Wallet Balance:</span>
+                      <strong style={{ color: (wallet?.balance_minor ?? 0) >= subtotalMinor ? '#10b981' : '#ef4444' }}>
+                        {formatPrice(Math.max(0, (wallet?.balance_minor ?? 0) - subtotalMinor))}
+                      </strong>
+                    </div>
+
+                    {(wallet?.balance_minor ?? 0) < subtotalMinor && (
+                      <div style={{
+                        marginTop: 14,
+                        padding: '10px 14px',
+                        background: '#ef444415',
+                        border: '1px solid #ef4444',
+                        color: '#b91c1c',
+                        borderRadius: 8,
+                        fontSize: '0.825rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: 10
+                      }}>
+                        <div>
+                          <strong>Insufficient Wallet Balance.</strong> You need {formatPrice(subtotalMinor - (wallet?.balance_minor ?? 0))} more.
+                        </div>
+                        <Link
+                          to="/dashboard/wallet"
+                          className="button button-orange button-small"
+                          style={{ padding: '5px 12px', fontSize: '0.75rem', textDecoration: 'none' }}
+                        >
+                          Fund Wallet Now →
+                        </Link>
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
+
+                {/* Bachs Info Box */}
+                {paymentMethod === 'bachs' && (
+                  <>
+                    <div className="checkout-payment-box">
+                      <div className="checkout-payment-header">
+                        <div className="checkout-payment-brand">
+                          <Building2 size={16} color="#ff6500" />
+                          <span>Bachs Payments (NGN Settlement)</span>
+                        </div>
+                        <span className="checkout-payment-badge">Bank Transfer · Card · USSD</span>
+                      </div>
+
+                      <p className="checkout-payment-desc">
+                        Secure Naira checkout powered by Bachs. Orders are created with atomic D1 inventory holds and verified cryptographic webhooks.
+                      </p>
+
+                      <div className="checkout-payment-channels">
+                        <div className="checkout-channel-item">
+                          <Building2 size={13} color="#ff6500" />
+                          <span>Direct Bank Transfer</span>
+                        </div>
+                        <div className="checkout-channel-item">
+                          <CreditCard size={13} color="#ff6500" />
+                          <span>Debit & Credit Cards</span>
+                        </div>
+                        <div className="checkout-channel-item">
+                          <PhoneCall size={13} color="#ff6500" />
+                          <span>USSD Channels</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="checkout-verification-notice">
+                      <Lock size={18} style={{ flexShrink: 0, marginTop: 2 }} />
+                      <div>
+                        <strong style={{ display: 'block', marginBottom: 2 }}>Production Verification Notice:</strong>
+                        Live settlement is completing final merchant onboarding verification. Per security protocol, live card charging remains locked until compliance clearance is completed. No customer accounts will be debited.
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 {checkoutError && (
                   <div className="checkout-verification-notice" style={{ background: 'rgba(239, 68, 68, 0.08)', borderColor: '#ef4444', color: '#dc2626' }}>
                     <AlertCircle size={18} style={{ flexShrink: 0 }} />
                     <div>
-                      <strong>Gateway Status:</strong> {checkoutError}
+                      <strong>Checkout Notice:</strong> {checkoutError}
                     </div>
                   </div>
                 )}
@@ -556,13 +732,33 @@ export function Checkout() {
                 type="button"
                 className="cart-primary-btn"
                 onClick={() => void handleInitiatePayment()}
-                disabled={submitting || loadingProducts || !items.length || subtotalMinor <= 0}
+                disabled={
+                  submitting ||
+                  loadingProducts ||
+                  !items.length ||
+                  subtotalMinor <= 0 ||
+                  (paymentMethod === 'wallet' && (wallet?.balance_minor ?? 0) < subtotalMinor)
+                }
               >
                 {submitting ? (
                   <>
                     <RefreshCw size={16} className="animate-spin" />
-                    <span>Connecting to Bachs…</span>
+                    <span>
+                      {paymentMethod === 'wallet' ? 'Authorizing Wallet Payment…' : 'Connecting to Bachs…'}
+                    </span>
                   </>
+                ) : paymentMethod === 'wallet' ? (
+                  (wallet?.balance_minor ?? 0) < subtotalMinor ? (
+                    <>
+                      <AlertCircle size={16} />
+                      <span>Insufficient Wallet Balance</span>
+                    </>
+                  ) : (
+                    <>
+                      <Wallet size={16} />
+                      <span>Pay {formatPrice(subtotalMinor)} from Wallet</span>
+                    </>
+                  )
                 ) : (
                   <>
                     <Lock size={16} />

@@ -142,7 +142,7 @@ export async function youngpgGet(
     !response.headers.get("content-type")?.includes("application/json")
   )
     throw new HttpError(
-      502,
+      response.status === 404 ? 404 : 502,
       `${context}: supplier returned HTTP ${response.status} or an unsupported response.`,
     );
   const reader = response.body?.getReader();

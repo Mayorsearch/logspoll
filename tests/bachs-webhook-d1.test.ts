@@ -5,7 +5,8 @@ import {readFileSync} from 'node:fs'
 import {bachsWebhook} from '../workers/api/bachs-webhook.ts'
 import type {ApiEnv,Database,Statement} from '../workers/api/types.ts'
 import {initiateCheckout,paymentMode} from '../workers/api/bachs-checkout.ts'
-import {reconcileBachsAttempt} from '../workers/api/bachs-webhook.ts'
+import {reconcileBachsAttempt,reconcileCustomerPayment} from '../workers/api/bachs-webhook.ts'
+import {customerRead} from '../workers/api/customer.ts'
 
 const customer='11111111-1111-4111-8111-111111111111',order='22222222-2222-4222-8222-222222222222',attempt='33333333-3333-4333-8333-333333333333',product='44444444-4444-4444-8444-444444444444',category='55555555-5555-4555-8555-555555555555',checkout='chk_sandbox12345'
 function fixture(){
@@ -170,4 +171,39 @@ test('refund handling reconciles paid order to refunded without triggering or re
  const unlinkedRes=await bachsWebhook(unlinkedReq,env)
  assert.equal(unlinkedRes.status,200)
  assert.deepEqual(await unlinkedRes.json(),{received:true,reviewRequired:true})
+})
+
+test('below-minimum NGN checkout creates no order or hold and preserves existing attempts',async t=>{
+ const {sql,env}=fixture();t.after(()=>sql.close())
+ sql.prepare('UPDATE products SET price_minor=2250 WHERE id=?').run(product)
+ const fetch=t.mock.method(globalThis,'fetch',async()=>{throw Error('must not call')})
+ await assert.rejects(initiateCheckout(env,{id:customer,email:'test@example.com'},crypto.randomUUID(),[{id:product,quantity:1}],'https://test.example'),/at least ₦100\.00/)
+ for(const table of ['orders','order_items','bachs_payment_attempts','bachs_reservations'])assert.equal(sql.prepare('SELECT count(*) n FROM '+table).get()!.n,1)
+ sql.prepare('UPDATE bachs_payment_attempts SET amount_minor=2250').run()
+ const requestId=String(sql.prepare('SELECT client_request_id FROM bachs_payment_attempts').get()!.client_request_id)
+ await assert.rejects(initiateCheckout(env,{id:customer,email:'test@example.com'},requestId,[{id:product,quantity:1}],'https://test.example'),/at least ₦100\.00/)
+ assert.equal(fetch.mock.callCount(),0)
+ assert.equal(sql.prepare('SELECT state FROM bachs_reservations').get()!.state,'held')
+})
+
+
+test('dashboard order reads recover a missed webhook through authoritative verification',async t=>{
+ const {sql,env}=fixture();t.after(()=>sql.close())
+ const fetch=t.mock.method(globalThis,'fetch',async()=>Response.json(paid))
+ const response=await customerRead(new Request('https://test.example/api/orders'),env,{id:customer,role:'customer'})
+ assert.equal(response?.status,200)
+ assert.equal((await response!.json()).records[0].payment_status,'paid')
+ assert.equal(sql.prepare('SELECT state FROM bachs_reservations').get()!.state,'consumed')
+ assert.equal(sql.prepare('SELECT fulfillment_status FROM orders').get()!.fulfillment_status,'pending')
+ await reconcileCustomerPayment(env,customer)
+ assert.equal(fetch.mock.callCount(),1)
+})
+test('dashboard recovery is customer-scoped and never trusts failed provider verification',async t=>{
+ const {sql,env}=fixture();t.after(()=>sql.close())
+ const fetch=t.mock.method(globalThis,'fetch',async()=>{throw Error('provider unavailable')})
+ await reconcileCustomerPayment(env,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+ assert.equal(fetch.mock.callCount(),0)
+ await assert.rejects(reconcileCustomerPayment(env,customer),/verification is temporarily unavailable/)
+ assert.equal(sql.prepare('SELECT payment_status FROM orders').get()!.payment_status,'pending')
+ assert.equal(sql.prepare('SELECT state FROM bachs_reservations').get()!.state,'held')
 })

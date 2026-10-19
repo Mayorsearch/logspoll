@@ -35,11 +35,11 @@ test('sandbox checkout includes durable reference and allows omitted local retur
     const body = JSON.parse(String(init.body))
     assert.equal(body.reference,orderId)
     assert.equal(body.metadata.order_id,orderId)
-    assert.equal(body.pricing.amount,'14.50')
+    assert.equal(body.pricing.amount,'114.50')
     assert.equal('success_url' in body,false)
     assert.equal(new Headers(init.headers).get('Idempotency-Key'),'sandbox_11111111111141118111111111111111')
     return Response.json({checkout_id:'chk_1234567890',checkout_url:'https://checkout.bachs.io/c/abc12345'})
   })
-  await createSandboxSession({key:'sk_sandbox_'+'a'.repeat(30),amountMinor:1450,buyerEmail:'test@example.com',orderId,
+  await createSandboxSession({key:'sk_sandbox_'+'a'.repeat(30),amountMinor:11450,buyerEmail:'test@example.com',orderId,
     idempotencyKey:'sandbox_11111111111141118111111111111111'})
 })
