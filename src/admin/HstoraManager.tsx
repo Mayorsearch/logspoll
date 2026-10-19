@@ -42,6 +42,7 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Fetch supplier configuration on mount
     void refresh()
   }, [])
 
@@ -303,9 +304,9 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
               </div>
             </div>
 
-            <div style={{ background: 'var(--admin-subtle, #f8fafc)', padding: 12, borderRadius: 8 }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>LAST STATUS</div>
-              <div style={{ fontSize: '0.8rem', marginTop: 4, color: 'var(--admin-text, #1e293b)', overflowWrap: 'anywhere' }}>
+            <div style={{ background: status.last_status?.includes('failed') || status.last_status?.includes('HTTP') ? 'rgba(239, 68, 68, 0.08)' : 'var(--admin-subtle, #f8fafc)', padding: 12, borderRadius: 8, border: status.last_status?.includes('failed') || status.last_status?.includes('HTTP') ? '1px solid rgba(239, 68, 68, 0.25)' : 'none' }}>
+              <div style={{ fontSize: '0.75rem', color: status.last_status?.includes('failed') || status.last_status?.includes('HTTP') ? '#b91c1c' : 'var(--admin-muted, #64748b)', fontWeight: 600 }}>LAST STATUS / ERROR LOG</div>
+              <div style={{ fontSize: '0.8rem', marginTop: 4, color: status.last_status?.includes('failed') || status.last_status?.includes('HTTP') ? '#991b1b' : 'var(--admin-text, #1e293b)', overflowWrap: 'anywhere' }}>
                 {status.last_status || 'Ready'}
               </div>
             </div>

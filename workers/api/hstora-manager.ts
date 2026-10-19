@@ -18,7 +18,9 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
       const creds = JSON.parse(await openCredential(row.ciphertext, row.nonce, 'hstora', env.SUPPLIER_ENCRYPTION_KEY)) as {baseUrl?:string;allowedOrigin?:string}
       if (creds.baseUrl) baseUrl = creds.baseUrl
       if (creds.allowedOrigin) allowedOrigin = creds.allowedOrigin
-    } catch {}
+    } catch {
+      // Ignore credential decryption error
+    }
   }
   return json({provider:'hstora',connection:conn ? {...conn, base_url: baseUrl, allowed_origin: allowedOrigin} : null})
  }
@@ -39,7 +41,9 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
       if (!secret) secret = old.secret
       if (!body.base_url && old.baseUrl) baseUrl = old.baseUrl
       if (!body.allowed_origin && old.allowedOrigin) allowedOrigin = old.allowedOrigin
-    } catch {}
+    } catch {
+      // Ignore old credential decryption error
+    }
    }
    if (key && secret) {
     const credentials: HstoraCredentials = {key, secret, baseUrl, ...(allowedOrigin ? {allowedOrigin} : {})}
@@ -47,19 +51,19 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
     try{await hstoraHeaders(credentials,'/api/v1/catalog','page=1&limit=1');sealed=await sealCredential(JSON.stringify(credentials),'hstora',env.SUPPLIER_ENCRYPTION_KEY)}
     catch(error){if(error instanceof HstoraError)throw new HttpError(400,'Invalid HStora credential format. Enter the API key (hs_pk_) and API signing secret (hs_sk_), not the webhook secret.');if(error instanceof CredentialError)throw new HttpError(error.status,error.message);throw error}
     const nextEnabled = typeof body.enabled === 'boolean' ? (body.enabled ? 1 : 0) : (row?.enabled ?? 0)
-    await db.prepare("INSERT INTO hstora_connection(id,ciphertext,nonce,enabled,fx_rate_minor) VALUES('hstora',?,?,?,?) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext,nonce=excluded.nonce,enabled=excluded.enabled,fx_rate_minor=COALESCE(excluded.fx_rate_minor,hstora_connection.fx_rate_minor),revision=revision+1,lease_owner=NULL,lease_until=NULL,requested=0,phase='idle',job_id=NULL,page=1,total=NULL,scanned=0,last_status='Credentials saved; test connection'").bind(sealed.ciphertext,sealed.nonce,nextEnabled,body.fx_rate_minor===undefined?null:Number(body.fx_rate_minor)).run()
+    await db.prepare("INSERT INTO hstora_connection(id,ciphertext,nonce,enabled,fx_rate_minor) VALUES('hstora',?,?,?,?) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext,nonce=excluded.nonce,enabled=excluded.enabled,fx_rate_minor=COALESCE(excluded.fx_rate_minor,hstora_connection.fx_rate_minor),revision=revision+1,lease_owner=NULL,lease_until=NULL,requested=0,next_attempt=0,phase='idle',job_id=NULL,page=1,total=NULL,scanned=0,last_status='Credentials saved; test connection'").bind(sealed.ciphertext,sealed.nonce,nextEnabled,body.fx_rate_minor===undefined?null:Number(body.fx_rate_minor)).run()
     return json({saved:true})
    } else if (!row) throw new HttpError(400, 'Enter API key and signing secret first.')
   }
   if(!row)throw new HttpError(400,'Configure HStora credentials first.')
-  if(typeof body.enabled==='boolean')await db.prepare("UPDATE hstora_connection SET enabled=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora'").bind(body.enabled?1:0).run()
+  if(typeof body.enabled==='boolean')await db.prepare("UPDATE hstora_connection SET enabled=?,lease_owner=NULL,lease_until=NULL,next_attempt=CASE WHEN ?=1 THEN 0 ELSE next_attempt END WHERE id='hstora'").bind(body.enabled?1:0,body.enabled?1:0).run()
   if(body.fx_rate_minor!==undefined)await db.prepare("UPDATE hstora_connection SET fx_rate_minor=? WHERE id='hstora'").bind(Number(body.fx_rate_minor)).run()
   return json({saved:true})
  }
- if(body.action==='toggle'){
+  if(body.action==='toggle'){
   if(!row)throw new HttpError(400,'Configure HStora credentials first.')
   const nextEnabled = row.enabled ? 0 : 1
-  await db.prepare("UPDATE hstora_connection SET enabled=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora'").bind(nextEnabled).run()
+  await db.prepare("UPDATE hstora_connection SET enabled=?,lease_owner=NULL,lease_until=NULL,next_attempt=CASE WHEN ?=1 THEN 0 ELSE next_attempt END WHERE id='hstora'").bind(nextEnabled,nextEnabled).run()
   return json({saved:true, enabled:Boolean(nextEnabled)})
  }
  if(!row)throw new HttpError(409,'Configure HStora credentials first.')
@@ -67,7 +71,7 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
   try{
     const credentials=JSON.parse(await openCredential(row.ciphertext,row.nonce,'hstora',env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials;
     const page=await readHstoraPage(credentials,1,1);
-    await db.prepare("UPDATE hstora_connection SET last_status='Connected successfully' WHERE id='hstora'").run();
+    await db.prepare("UPDATE hstora_connection SET last_status='Connected successfully',next_attempt=0 WHERE id='hstora'").run();
     return json({connected:true,total:page.total})
   }
   catch(error){
@@ -82,7 +86,8 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
  }
  if(body.action==='sync'){
   if(!row.enabled)throw new HttpError(409,'Enable HStora first.')
-  await db.prepare("UPDATE hstora_connection SET requested=1 WHERE id='hstora'").run();return json({queued:true,phase:row.phase,next_attempt:row.next_attempt,message:row.next_attempt>Date.now()?'Job queued; provider cooldown remains active. Progress is retained.':'Background job queued; awaiting the scheduler.'},202)
+  await db.prepare("UPDATE hstora_connection SET requested=1,next_attempt=0 WHERE id='hstora'").run();
+  return json({queued:true,phase:row.phase,next_attempt:0,message:'Background catalog synchronization queued successfully.'},202)
  }
  throw new HttpError(400,'Unknown supplier action.')
 }
@@ -119,5 +124,5 @@ export async function syncHstoraBatch(env:ApiEnv){
     db.prepare("UPDATE hstora_connection SET phase='complete',last_success=?,last_status='Complete private snapshot; review required',requested=0 WHERE id='hstora'").bind(now),
    ])
   }
- }catch(error){const message=error instanceof HstoraError?error.message:'HStora storage or credential operation failed.';await db.prepare("UPDATE hstora_connection SET last_status=?,next_attempt=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND revision=? AND lease_owner=?").bind(message,Date.now()+(error instanceof HstoraError?([401,403].includes(error.status)?3600000:error.retryAfterMs):60000),row.revision,owner).run()}
+ }catch(error){const message=error instanceof HstoraError?error.message:'HStora storage or credential operation failed.';await db.prepare("UPDATE hstora_connection SET last_status=?,next_attempt=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND revision=? AND lease_owner=?").bind(message,Date.now()+(error instanceof HstoraError?([401,403].includes(error.status)?600000:error.retryAfterMs):60000),row.revision,owner).run()}
 }

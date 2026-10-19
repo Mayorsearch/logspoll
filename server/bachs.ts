@@ -122,7 +122,7 @@ export interface BachsBankTransferDetails {
   bank_name?: string
   accountNumber: string
   account_number?: string
-  accountName: string
+  accountName?: string
   account_name?: string
   amount?: string | number
   currency?: string
@@ -140,9 +140,9 @@ export function extractBachsBankTransferDetails(data: unknown): BachsBankTransfe
     d.transfer_details,
     d.account_details,
     d.payment_details,
-    (d.payment_method_details as any)?.bank_transfer,
-    (d.payment_methods as any)?.bank_transfer,
-    (d.metadata as any)?.bank_transfer,
+    (d.payment_method_details as Record<string, unknown> | undefined)?.bank_transfer,
+    (d.payment_methods as Record<string, unknown> | undefined)?.bank_transfer,
+    (d.metadata as Record<string, unknown> | undefined)?.bank_transfer,
     d,
   ]
 
@@ -154,19 +154,15 @@ export function extractBachsBankTransferDetails(data: unknown): BachsBankTransfe
       const accountName = String(obj.account_name || obj.accountName || obj.account_holder_name || '').trim()
       const expiresAt = obj.expires_at || obj.expiresAt || d.expires_at || d.expiresAt || null
 
-      if (accountNumber && (bankName || accountName)) {
-        const resolvedBank = bankName || 'Bachs Settlement Bank'
-        const resolvedAccount = accountName || 'LogsPoll Checkout'
-        const resolvedExpires = typeof expiresAt === 'string' || typeof expiresAt === 'number' ? expiresAt : null
+      if (accountNumber && bankName) {
+        const resolvedExpires = (typeof expiresAt === 'string' || typeof expiresAt === 'number') && String(expiresAt).trim() ? expiresAt : null
         return {
-          bankName: resolvedBank,
-          bank_name: resolvedBank,
+          bankName,
+          bank_name: bankName,
           accountNumber,
           account_number: accountNumber,
-          accountName: resolvedAccount,
-          account_name: resolvedAccount,
-          expiresAt: resolvedExpires,
-          expires_at: resolvedExpires,
+          ...(accountName ? { accountName, account_name: accountName } : {}),
+          ...(resolvedExpires ? { expiresAt: resolvedExpires, expires_at: resolvedExpires } : {}),
         }
       }
     }

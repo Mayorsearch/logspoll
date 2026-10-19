@@ -14,6 +14,7 @@ import {
   MIN_WALLET_FUND_MINOR,
   MAX_WALLET_FUND_MINOR,
 } from '../workers/api/wallet.ts'
+import { extractBachsBankTransferDetails } from '../server/bachs.ts'
 import { bachsWebhook } from '../workers/api/bachs-webhook.ts'
 import { apiFetch } from '../workers/api/index.ts'
 import type { ApiEnv, Database, Statement } from '../workers/api/types.ts'
@@ -1030,4 +1031,165 @@ test('live wallet funding is enabled when WALLET_LIVE_FUNDING_ENABLED is true an
   assert.equal(overview.funding.mode, 'live')
   assert.match(overview.funding.reason, /live online checkout/i)
 })
+
+test('extractBachsBankTransferDetails strictly avoids fabricating bank or account names', () => {
+  // Missing bank name -> returns null (never fabricates "Bachs Settlement Bank")
+  const missingBank = extractBachsBankTransferDetails({
+    bank_transfer: { account_number: '1234567890' }
+  })
+  assert.equal(missingBank, null)
+
+  // Missing account number -> returns null
+  const missingAccount = extractBachsBankTransferDetails({
+    bank_transfer: { bank_name: 'Guaranty Trust Bank' }
+  })
+  assert.equal(missingAccount, null)
+
+  // Bank name and account number present, no account name -> returns verified fields, no fabricated account name
+  const validNoName = extractBachsBankTransferDetails({
+    bank_transfer: {
+      account_number: '0123456789',
+      bank_name: 'Wema Bank'
+    }
+  })
+  assert.ok(validNoName)
+  assert.equal(validNoName.bankName, 'Wema Bank')
+  assert.equal(validNoName.accountNumber, '0123456789')
+  assert.equal(validNoName.accountName, undefined)
+  assert.equal(validNoName.expiresAt, undefined)
+
+  // Full verified payload with genuine account name and expiration
+  const full = extractBachsBankTransferDetails({
+    bank_transfer: {
+      account_number: '9876543210',
+      bank_name: 'Providus Bank',
+      account_name: 'LogsPoll - John Doe',
+      expires_at: '2026-10-19T14:00:00Z'
+    }
+  })
+  assert.ok(full)
+  assert.equal(full.bankName, 'Providus Bank')
+  assert.equal(full.accountNumber, '9876543210')
+  assert.equal(full.accountName, 'LogsPoll - John Doe')
+  assert.equal(full.expiresAt, '2026-10-19T14:00:00Z')
+})
+
+test('late payment reconciliation credits expired or failed attempt when Bachs confirms payment', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+
+  const wallet = await getOrCreateWallet(env.DB!, customer)
+  const attemptId = crypto.randomUUID()
+  const checkoutId = 'chk_late_payment_001'
+  const reference = 'WF-LATE-TEST-001'
+
+  // Attempt was locally marked 'expired' before customer transferred funds
+  sql.prepare(`
+    INSERT INTO wallet_funding_attempts (
+      id, customer_id, wallet_id, reference, checkout_id, provider_mode,
+      amount_minor, fee_minor, credited_minor, idempotency_key, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 250000, 0, 250000, 'wf_late_key_001', 'expired', ?, ?)
+  `).run(attemptId, customer, wallet.id, reference, checkoutId, 'sandbox', Date.now() - 3600000, Date.now() - 3600000)
+
+  // Bachs verified session confirms funds arrived and session is 'paid'
+  const session = {
+    checkout_id: checkoutId,
+    reference: attemptId,
+    currency: 'NGN',
+    amount: '2500.00',
+    status: 'completed',
+    payment_status: 'succeeded',
+    source_type: 'API',
+    session_mode: null,
+    products: null,
+    recurring: null,
+    metadata: { order_id: attemptId },
+    charge: { status: 'succeeded' },
+  }
+
+  const attempt = sql.prepare('SELECT * FROM wallet_funding_attempts WHERE id=?').get(attemptId) as any
+  assert.equal(attempt.status, 'expired')
+
+  // Reconcile: should transition from 'expired' -> 'paid' and credit wallet exactly once
+  const res = await reconcileWalletFundingAttempt(env, attempt, '', '', session)
+  assert.equal(res.status, 'paid')
+
+  // Verify wallet is credited
+  const updatedWallet = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(wallet.id) as any
+  assert.equal(updatedWallet.balance_minor, 250000)
+
+  // Verify attempt status in DB is now 'paid'
+  const updatedAttempt = sql.prepare('SELECT * FROM wallet_funding_attempts WHERE id=?').get(attemptId) as any
+  assert.equal(updatedAttempt.status, 'paid')
+
+  // Reconciling again does not double-credit (strictly idempotent)
+  const res2 = await reconcileWalletFundingAttempt(env, updatedAttempt, '', '', session)
+  assert.equal(res2.status, 'paid')
+  const walletCheck = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(wallet.id) as any
+  assert.equal(walletCheck.balance_minor, 250000)
+})
+
+test('repeated deposit requests for the same amount with fresh request IDs create distinct attempts', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+
+  await getOrCreateWallet(env.DB!, customer)
+  let sessionCounter = 1
+
+  t.mock.method(globalThis, 'fetch', async (url: string | URL) => {
+    const urlStr = String(url)
+    if (urlStr.includes('/v1/checkout-sessions')) {
+      const chkId = `chk_session_${sessionCounter++}`
+      return Response.json({
+        checkout_id: chkId,
+        checkout_url: `https://checkout.bachs.finance/${chkId}`,
+        bank_transfer: {
+          account_number: '0123456789',
+          bank_name: 'Wema Bank',
+        }
+      })
+    }
+    return new Response(null, { status: 404 })
+  })
+
+  // First deposit of ₦2,000
+  const req1 = new Request('https://test.example/api/wallet/fund', {
+    method: 'POST',
+    body: JSON.stringify({ amount: '2000.00', requestId: '11111111-aaaa-4111-8111-111111111111' })
+  })
+  const res1 = await initiateWalletFunding(req1, env, { id: customer, email: 'user@example.com' })
+  assert.equal(res1.status, 200)
+  const data1 = await res1.json() as any
+  assert.equal(data1.ok, true)
+  assert.equal(data1.checkoutId, 'chk_session_1')
+
+  // Second deposit of the exact same amount (₦2,000) with fresh requestId
+  const req2 = new Request('https://test.example/api/wallet/fund', {
+    method: 'POST',
+    body: JSON.stringify({ amount: '2000.00', requestId: '22222222-bbbb-4222-8222-222222222222' })
+  })
+  const res2 = await initiateWalletFunding(req2, env, { id: customer, email: 'user@example.com' })
+  assert.equal(res2.status, 200)
+  const data2 = await res2.json() as any
+  assert.equal(data2.ok, true)
+  assert.equal(data2.checkoutId, 'chk_session_2')
+
+  // Two distinct attempts exist in database
+  assert.notEqual(data1.attemptId, data2.attemptId)
+  assert.notEqual(data1.reference, data2.reference)
+
+  // Complete attempt 1
+  sql.prepare("UPDATE wallet_funding_attempts SET status='paid' WHERE id=?").run(data1.attemptId)
+
+  // Re-submitting with the completed attempt's requestId throws 409
+  const retryReq = new Request('https://test.example/api/wallet/fund', {
+    method: 'POST',
+    body: JSON.stringify({ amount: '2000.00', requestId: '11111111-aaaa-4111-8111-111111111111' })
+  })
+  await assert.rejects(
+    initiateWalletFunding(retryReq, env, { id: customer, email: 'user@example.com' }),
+    /already finished/
+  )
+})
+
 

@@ -30,23 +30,25 @@ export async function hstoraHeaders(credentials:HstoraCredentials,path:string,qu
    'X-Nonce':nonce,
    'X-Signature':hex(await crypto.subtle.sign('HMAC',imported,new TextEncoder().encode(canonical))),
    Accept:'application/json',
-   'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 LogsPoll/2.0'
+   'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 LogsPoll/2.0'
  })
- if(credentials.allowedOrigin){
-   try {
-     const url=new URL(credentials.allowedOrigin)
-     if(url.protocol==='https:'||url.protocol==='http:') headers.set('Origin',url.origin)
-   } catch {}
+ const originUrl = credentials.allowedOrigin?.trim() || 'https://logspoll.com'
+ try {
+   const url = new URL(originUrl)
+   if (url.protocol === 'https:' || url.protocol === 'http:') headers.set('Origin', url.origin)
+ } catch {
+   // Ignore invalid origin URL
  }
  return headers
 }
 export async function hstoraRejection(response:Response){
- let reason=response.headers.get('cf-mitigated')==='challenge'?'Cloudflare challenge':response.headers.get('Content-Type')?.includes('application/json')?'API rejection':'non-JSON gateway rejection'
+ let reason = response.headers.get('cf-mitigated')==='challenge' ? 'Cloudflare challenge' : response.headers.get('Content-Type')?.includes('application/json') ? 'API rejection' : 'non-JSON gateway rejection'
  if(response.headers.get('Content-Type')?.includes('application/json')){
   const reader=response.body?.getReader();let raw='',size=0
   try{if(reader){while(size<=8192){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;if(size>8192)break;raw+=new TextDecoder().decode(part.value)}
-   if(size<=8192){const body=JSON.parse(raw),code=body?.error?.code
-    if(['origin_not_allowed','invalid_signature','missing_auth','request_expired','rate_limited'].includes(code))reason=code
+   if(size<=8192){const body=JSON.parse(raw)
+    const code = body?.error?.code || body?.code
+    if(typeof code === 'string' && /^[a-zA-Z0-9_-]{2,64}$/.test(code)) reason = code
    }
   }}catch{/* Provider bodies are untrusted and never logged. */}finally{await reader?.cancel().catch(()=>{})}
  }
@@ -55,8 +57,14 @@ export async function hstoraRejection(response:Response){
  let extra = ''
  if (reason === 'origin_not_allowed') {
   extra = ' Configure this key’s allowed domain as logspoll.com; requests use Origin https://logspoll.com.'
- } else if (reason === 'non-JSON gateway rejection' && response.status === 403) {
-  extra = ' Cloudflare WAF/Bot protection at supplier host blocked request. Check API Base URL and IP/domain whitelist in HStora.'
+ } else if (reason === 'invalid_key' || reason === 'invalid_signature') {
+  extra = ' Check API key and signing secret in HStora manager.'
+ } else if (reason === 'request_expired') {
+  extra = ' Request timestamp expired. Verify server clock synchronization.'
+ } else if (reason === 'missing_auth') {
+  extra = ' Missing required authentication headers.'
+ } else if ((reason === 'non-JSON gateway rejection' || reason === 'Cloudflare challenge') && (response.status === 403 || response.status === 503)) {
+  extra = ' Cloudflare Bot/WAF challenge at supplier host blocked request. Whitelist LogsPoll IP or contact HStora support.'
  }
  return `HStora HTTP ${response.status}: ${reason}.${identifier}${extra}`
 }

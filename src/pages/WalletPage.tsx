@@ -54,6 +54,7 @@ interface PendingDeposit {
   id: string
   reference: string
   checkout_id?: string | null
+  checkoutUrl?: string | null
   amount_minor: number
   amount: number
   fee: number
@@ -68,6 +69,8 @@ export interface ActiveFundingSession {
   reference: string
   amountMinor: number
   amount: number
+  feeMinor?: number
+  creditedMinor?: number
   checkoutUrl?: string
   bankTransfer?: BankTransferDetails | null
   status: 'awaiting_payment' | 'checking' | 'paid' | 'failed'
@@ -297,7 +300,9 @@ export function WalletPage() {
       return
     }
 
-    if (!fundingRequest.current || fundingRequest.current.amount !== depositAmount) fundingRequest.current = {amount:depositAmount,id:crypto.randomUUID()}
+    if (!fundingRequest.current || fundingRequest.current.amount !== depositAmount) {
+      fundingRequest.current = { amount: depositAmount, id: crypto.randomUUID() }
+    }
     setFundingBusy(true)
     try {
       const res = await cloudflareRequest<{
@@ -307,18 +312,25 @@ export function WalletPage() {
         attemptId: string
         bankTransfer?: BankTransferDetails | null
         amountMinor?: number
+        feeMinor?: number
+        creditedMinor?: number
         amount?: number
+        creditedAmount?: number
       }>('/api/wallet/fund', {
         amount: customAmountStr,
         requestId: fundingRequest.current.id,
       })
 
+      // Cleanly clear fundingRequest so future deposits generate a fresh request ID and session
+      fundingRequest.current = null
       setShowFundModal(false)
       setActiveFunding({
         attemptId: res.attemptId,
         reference: res.reference,
         amountMinor: res.amountMinor ?? Math.round(depositAmount * 100),
         amount: res.amount ?? depositAmount,
+        feeMinor: res.feeMinor ?? 0,
+        creditedMinor: res.creditedMinor ?? (res.amountMinor ?? Math.round(depositAmount * 100)),
         checkoutUrl: res.checkoutUrl,
         bankTransfer: res.bankTransfer ?? null,
         status: 'awaiting_payment',
@@ -495,6 +507,9 @@ export function WalletPage() {
                       reference: deposit.reference,
                       amountMinor: deposit.amount_minor,
                       amount: deposit.amount,
+                      feeMinor: Math.round(deposit.fee * 100),
+                      creditedMinor: Math.round(deposit.credited_amount * 100),
+                      checkoutUrl: deposit.checkoutUrl ?? undefined,
                       bankTransfer: deposit.bankTransfer ?? null,
                       status: 'awaiting_payment',
                     })
@@ -712,7 +727,7 @@ export function WalletPage() {
           >
             <div className="section-header-row">
               <h2 id="active-funding-title">
-                {activeFunding.status === 'paid' ? 'Deposit Completed' : 'Temporary Bank Transfer'}
+                {activeFunding.status === 'paid' ? 'Deposit Completed' : activeFunding.status === 'failed' ? 'Payment Session Expired' : activeFunding.bankTransfer && activeFunding.bankTransfer.account_number && (activeFunding.bankTransfer.bank_name || activeFunding.bankTransfer.bankName) ? 'Temporary Bank Transfer' : 'Complete Deposit via Bachs'}
               </h2>
               <button 
                 type="button" 
@@ -734,7 +749,7 @@ export function WalletPage() {
                 </div>
                 <h3>Wallet Credited Successfully!</h3>
                 <p className="wallet-subtext" style={{ margin: '8px 0 16px' }}>
-                  {formatPrice(activeFunding.amountMinor)} has been added to your LogsPoll wallet balance.
+                  {formatPrice(activeFunding.creditedMinor ?? activeFunding.amountMinor)} has been added to your LogsPoll wallet balance.
                 </p>
                 <dl className="wallet-receipt-lines" style={{ textAlign: 'left', marginBottom: 16 }}>
                   <div>
@@ -742,10 +757,18 @@ export function WalletPage() {
                     <dd>{activeFunding.reference}</dd>
                   </div>
                   <div>
-                    <dt>Amount Credited</dt>
+                    <dt>Deposit Amount</dt>
                     <dd>{formatPrice(activeFunding.amountMinor)}</dd>
                   </div>
+                  <div>
+                    <dt>Payment Gateway Fee</dt>
+                    <dd>{formatPrice(activeFunding.feeMinor ?? 0)}</dd>
+                  </div>
                   <div className="receipt-total-row">
+                    <dt>Net Amount Credited</dt>
+                    <dd>{formatPrice(activeFunding.creditedMinor ?? activeFunding.amountMinor)}</dd>
+                  </div>
+                  <div>
                     <dt>Current Wallet Balance</dt>
                     <dd>{wallet ? formatPrice(wallet.balance_minor) : 'Updated'}</dd>
                   </div>
@@ -763,22 +786,39 @@ export function WalletPage() {
                 </button>
               </div>
             ) : activeFunding.status === 'failed' ? (
-              <div className="deposit-success-view">
-                <div className="success-icon-wrap" style={{ background: '#fee2e2', color: '#dc2626' }}>
-                  <AlertCircle size={32} />
+              <div className="deposit-failed-view" style={{ textAlign: 'center', padding: '16px 8px' }}>
+                <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
+                  <AlertCircle size={26} />
                 </div>
-                <h3>Deposit Window Closed</h3>
-                <p className="wallet-subtext" style={{ margin: '8px 0 16px' }}>
-                  This payment session was cancelled or expired. Any uncompleted transfer will not debit your account or can be re-initiated anytime.
+                <h3 style={{ margin: '0 0 6px', fontSize: '1.15rem', fontWeight: 700 }}>Payment Session Expired</h3>
+                <p className="wallet-subtext" style={{ margin: '0 0 16px', fontSize: 13 }}>
+                  This payment session for <strong>{formatPrice(activeFunding.amountMinor)}</strong> has expired or was not completed within the time window.
                 </p>
-                <button
-                  type="button"
-                  className="button button-outline"
-                  style={{ width: '100%' }}
-                  onClick={() => setActiveFunding(null)}
-                >
-                  Close
-                </button>
+                <div className="transfer-instructions-note" style={{ textAlign: 'left', marginBottom: 16 }}>
+                  <strong>Did you already transfer funds?</strong> If you have completed this payment, our late-payment reconciliation will automatically detect it from Bachs and credit your wallet. You can also click <strong>Verify Again</strong> below to check immediately.
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="button button-orange"
+                    disabled={reconcilingId === activeFunding.attemptId}
+                    onClick={() => handleCheckStatus(activeFunding.attemptId)}
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                  >
+                    <RefreshCw size={14} className={reconcilingId === activeFunding.attemptId ? 'spin-icon' : ''} />
+                    <span>{reconcilingId === activeFunding.attemptId ? 'Verifying with Bachs…' : 'Verify Again (Check for Late Payment)'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-outline"
+                    onClick={() => {
+                      setActiveFunding(null)
+                      void fetchWallet(true)
+                    }}
+                  >
+                    Start New Deposit
+                  </button>
+                </div>
               </div>
             ) : (
               <div>
@@ -792,12 +832,12 @@ export function WalletPage() {
                   </small>
                 </div>
 
-                {activeFunding.bankTransfer ? (
+                {activeFunding.bankTransfer && activeFunding.bankTransfer.account_number && (activeFunding.bankTransfer.bank_name || activeFunding.bankTransfer.bankName) ? (
                   <div className="bank-transfer-card">
                     <div className="bank-transfer-row">
                       <span className="label">Bank Name</span>
                       <span className="value">
-                        {activeFunding.bankTransfer.bank_name || activeFunding.bankTransfer.bankName || 'Bachs Settlement Bank'}
+                        {activeFunding.bankTransfer.bank_name || activeFunding.bankTransfer.bankName}
                       </span>
                     </div>
 
@@ -822,25 +862,36 @@ export function WalletPage() {
                       </div>
                     </div>
 
-                    <div className="bank-transfer-row">
-                      <span className="label">Account Name</span>
-                      <div className="value-group">
-                        <span className="value">
-                          {activeFunding.bankTransfer.account_name || activeFunding.bankTransfer.accountName || 'LogsPoll Checkout'}
-                        </span>
-                        <button
-                          type="button"
-                          className="copy-mini-btn"
-                          aria-label="Copy Account Name"
-                          onClick={() => copyToClipboard(
-                            activeFunding.bankTransfer!.account_name || activeFunding.bankTransfer!.accountName || '',
-                            'acc_name'
-                          )}
-                        >
-                          {copiedRef === 'acc_name' ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-                        </button>
+                    {(activeFunding.bankTransfer.account_name || activeFunding.bankTransfer.accountName) && (
+                      <div className="bank-transfer-row">
+                        <span className="label">Account Name</span>
+                        <div className="value-group">
+                          <span className="value">
+                            {activeFunding.bankTransfer.account_name || activeFunding.bankTransfer.accountName}
+                          </span>
+                          <button
+                            type="button"
+                            className="copy-mini-btn"
+                            aria-label="Copy Account Name"
+                            onClick={() => copyToClipboard(
+                              activeFunding.bankTransfer!.account_name || activeFunding.bankTransfer!.accountName || '',
+                              'acc_name'
+                            )}
+                          >
+                            {copiedRef === 'acc_name' ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    )}
+
+                    {(activeFunding.bankTransfer.expires_at || activeFunding.bankTransfer.expiresAt) && (
+                      <div className="bank-transfer-row">
+                        <span className="label">Expires At</span>
+                        <span className="value" style={{ fontSize: 12 }}>
+                          {String(activeFunding.bankTransfer.expires_at || activeFunding.bankTransfer.expiresAt)}
+                        </span>
+                      </div>
+                    )}
 
                     <div className="bank-transfer-row">
                       <span className="label">Amount to Transfer</span>
@@ -877,27 +928,36 @@ export function WalletPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="bank-transfer-card" style={{ textAlign: 'center', padding: '20px 14px' }}>
-                    <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--dash-text-dark)' }}>
-                      Payment session initialized for <strong>{formatPrice(activeFunding.amountMinor)}</strong>.
+                  <div className="bank-transfer-card" style={{ textAlign: 'center', padding: '24px 16px' }}>
+                    <p style={{ margin: '0 0 10px', fontSize: 14, color: 'var(--dash-text-dark)', fontWeight: 600 }}>
+                      Complete your deposit of <strong>{formatPrice(activeFunding.amountMinor)}</strong>
                     </p>
-                    {activeFunding.checkoutUrl && (
+                    <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--dash-text-muted)', lineHeight: 1.5 }}>
+                      Temporary virtual bank account details are not provided directly for this session. Use the verified Bachs checkout portal below to complete payment via Bank Transfer, Card, or USSD.
+                    </p>
+                    {activeFunding.checkoutUrl ? (
                       <a 
                         href={activeFunding.checkoutUrl} 
                         target="_blank" 
                         rel="noopener noreferrer" 
-                        className="button button-orange button-small"
-                        style={{ display: 'inline-flex', gap: 6, margin: '4px 0' }}
+                        className="button button-orange"
+                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, margin: '4px 0', padding: '10px 20px', fontWeight: 600 }}
                       >
                         <span>Open Bachs Secure Checkout</span>
-                        <ExternalLink size={13} />
+                        <ExternalLink size={15} />
                       </a>
+                    ) : (
+                      <p style={{ color: '#dc2626', fontSize: 12 }}>Checkout link unavailable. Please refresh or retry.</p>
                     )}
                   </div>
                 )}
 
                 <div className="transfer-instructions-note">
-                  <strong>Important:</strong> Send the exact amount ({formatPrice(activeFunding.amountMinor)}) using the temporary bank details above. This account is single-use for this deposit and will be cleared automatically once payment is verified.
+                  {activeFunding.bankTransfer && activeFunding.bankTransfer.account_number && (activeFunding.bankTransfer.bank_name || activeFunding.bankTransfer.bankName) ? (
+                    <><strong>Important:</strong> Send the exact amount ({formatPrice(activeFunding.amountMinor)}) using the temporary bank details above. This account is single-use for this deposit and will be cleared automatically once payment is verified.</>
+                  ) : (
+                    <><strong>Important:</strong> Click "Open Bachs Secure Checkout" above to complete your deposit of {formatPrice(activeFunding.amountMinor)}. Your wallet balance will be credited automatically once payment is verified.</>
+                  )}
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
@@ -912,7 +972,7 @@ export function WalletPage() {
                     <span>{reconcilingId === activeFunding.attemptId ? 'Verifying with Bachs…' : 'I Have Sent The Funds / Check Status'}</span>
                   </button>
 
-                  {activeFunding.checkoutUrl && activeFunding.bankTransfer && (
+                  {activeFunding.checkoutUrl && activeFunding.bankTransfer && activeFunding.bankTransfer.account_number && (activeFunding.bankTransfer.bank_name || activeFunding.bankTransfer.bankName) && (
                     <a
                       href={activeFunding.checkoutUrl}
                       target="_blank"
@@ -934,7 +994,7 @@ export function WalletPage() {
                     }}
                     style={{ justifyContent: 'center' }}
                   >
-                    Close (Keeps Awaiting in Background)
+                    Close
                   </button>
                 </div>
               </div>
