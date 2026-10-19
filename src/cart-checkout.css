@@ -3,6 +3,7 @@
    ========================================================================== */
 
 :root {
+  font-family: 'Nunito Sans', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --lp-orange: #ff6500;
   --lp-orange-hover: #e55a00;
   --lp-orange-light: #fff3ec;
@@ -35,6 +36,7 @@
 }
 
 .cart-checkout-page {
+  font-family: 'Nunito Sans', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   min-height: calc(100vh - 80px);
   background: var(--lp-page-bg);
   padding: 32px 16px 80px;

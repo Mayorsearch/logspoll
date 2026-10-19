@@ -1,6 +1,6 @@
 /* D1 presentation bridge: original LOGSPOLL Admin HQ palette and shell.
    Current D1 APIs, auth, routes and permission checks are untouched. */
-.d1-reference-admin{background:#11152a;color:#f8fafc;min-height:100vh}
+.d1-reference-admin{font-family:'Nunito Sans',system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#11152a;color:#f8fafc;min-height:100vh}
 .d1-reference-admin .demo-main{min-width:0}
 .d1-reference-admin .demo-content{padding-bottom:38px}
 .d1-reference-admin .cf-header.demo-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 20px;min-height:80px;margin:0 0 20px;background:#080d18;border:1px solid #202a40;border-radius:10px}
