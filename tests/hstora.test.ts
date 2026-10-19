@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import{createHmac}from'node:crypto'
-import{hstoraHeaders,hstoraCatalogPages,readHstoraPage,readHstoraDetail,normalizeHstoraProduct}from'../server/hstora.ts'
+import{hstoraHeaders,hstoraCatalogPages,readHstoraPage,readHstoraDetail,readHstoraBalance,generateHstoraNonce,normalizeHstoraProduct}from'../server/hstora.ts'
 const credentials={key:'hs_pk_test_only',secret:'hs_sk_test_only'}
 const product=(id:number)=>({id,name:'VPN subscription '+id,price:'0.02',currency:'USD',stock_available:5,description:'Supplier provided subscription description',price_tiers:[{min_quantity:100,unit_price:'0.019'}]})
 test('HStora signs exact documented GET path and raw query; never signs purchase endpoints',async()=>{
@@ -10,6 +10,28 @@ test('HStora signs exact documented GET path and raw query; never signs purchase
  assert.equal(headers.get('X-Signature'),createHmac('sha256',credentials.secret).update(['GET',path,query,timestamp,nonce,''].join('\n')).digest('hex'))
  assert.equal(headers.get('X-API-Key'),credentials.key)
  await assert.rejects(hstoraHeaders(credentials,'/api/v1/orders',''))
+})
+test('HStora signs /api/v1/balance with empty query and body hash, and parses balance envelope',async t=>{
+ const path='/api/v1/balance',timestamp='1792000000',nonce='balance-nonce'
+ const headers=await hstoraHeaders(credentials,path,'',timestamp,nonce)
+ assert.equal(headers.get('X-Signature'),createHmac('sha256',credentials.secret).update(['GET',path,'',timestamp,nonce,''].join('\n')).digest('hex'))
+ assert.equal(headers.get('Origin'),null)
+
+ t.mock.method(globalThis,'fetch',async(url,init)=>{
+  assert.equal(String(url),'https://hstora.com/api/v1/balance')
+  assert.equal(init?.method,'GET')
+  return Response.json({success:true,data:{balance:4.887,pending_balance:0,currency:'USD'}})
+ })
+ const res=await readHstoraBalance(credentials)
+ assert.equal(res.balance,4.887)
+ assert.equal(res.pending_balance,0)
+ assert.equal(res.currency,'USD')
+})
+test('generateHstoraNonce produces unique 32-character lowercase hex strings',()=>{
+ const n1=generateHstoraNonce(),n2=generateHstoraNonce()
+ assert.match(n1,/^[0-9a-f]{32}$/)
+ assert.match(n2,/^[0-9a-f]{32}$/)
+ assert.notEqual(n1,n2)
 })
 test('complete pagination preserves supplier IDs, server1 mapping, native currency and fractional tiers',async t=>{
  const pages:number[]=[]

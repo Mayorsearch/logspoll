@@ -17,10 +17,16 @@ const externalId=(value:unknown)=>{const id=String(value??'');if(!/^[1-9]\d{0,15
 const decimal=(value:unknown)=>{const text=String(value??'');if(!/^\d{1,12}(?:\.\d{1,12})?$/.test(text))throw new HstoraError('Invalid HStora price.');return text}
 function text(value:unknown,max:number){if(typeof value!=='string')return '';if(value.length>max||Array.from(value).some(character=>{const code=character.charCodeAt(0);return code<32&&![9,10,13].includes(code)}))throw new HstoraError('Invalid HStora text metadata.');return value.trim()}
 
-export async function hstoraHeaders(credentials:HstoraCredentials,path:string,query:string,timestamp=String(Math.floor(Date.now()/1000)),nonce=crypto.randomUUID().replaceAll('-',''),operation:{method:'GET'|'POST';body?:string}={method:'GET'}){
+export function generateHstoraNonce(): string {
+ const bytes = new Uint8Array(16)
+ crypto.getRandomValues(bytes)
+ return Array.from(bytes, v => v.toString(16).padStart(2, '0')).join('')
+}
+
+export async function hstoraHeaders(credentials:HstoraCredentials,path:string,query:string,timestamp=String(Math.floor(Date.now()/1000)),nonce=generateHstoraNonce(),operation:{method:'GET'|'POST';body?:string}={method:'GET'}){
  const key=credentials.key.trim(),secret=credentials.secret.trim()
  if(!/^hs_pk_[A-Za-z0-9_-]+$/.test(key)||!/^hs_sk_[A-Za-z0-9_-]+$/.test(secret)||key.length>256||secret.length>1024)throw new HstoraError('Invalid HStora credential format. Enter the API key (hs_pk_) and API signing secret (hs_sk_), not the webhook secret.',400)
- if((operation.method==='GET'&&path==='/api/v1/orders')||(operation.method==='POST'&&path!=='/api/v1/orders')||!/^\/api\/v1\/(?:catalog|products\/[1-9]\d{0,15}|orders(?:\/lookup|\/[1-9]\d{0,15})?)$/.test(path)||/[\r\n#]/.test(query))throw new HstoraError('Unsupported HStora resource.',400)
+ if((operation.method==='GET'&&path==='/api/v1/orders')||(operation.method==='POST'&&path!=='/api/v1/orders')||!/^\/api\/v1\/(?:balance|catalog|products\/[1-9]\d{0,15}|orders(?:\/lookup|\/[1-9]\d{0,15})?|\/?)$/.test(path)||/[\r\n#]/.test(query))throw new HstoraError('Unsupported HStora resource.',400)
  const bodyHash=operation.body?hex(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(operation.body))):''
  const canonical=[operation.method,path,query,timestamp,nonce,bodyHash].join('\n')
  const imported=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign'])
@@ -32,12 +38,14 @@ export async function hstoraHeaders(credentials:HstoraCredentials,path:string,qu
    Accept:'application/json',
    'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 LogsPoll/2.0'
  })
- const originUrl = credentials.allowedOrigin?.trim() || 'https://logspoll.com'
- try {
-   const url = new URL(originUrl)
-   if (url.protocol === 'https:' || url.protocol === 'http:') headers.set('Origin', url.origin)
- } catch {
-   // Ignore invalid origin URL
+ if (credentials.allowedOrigin && credentials.allowedOrigin.trim()) {
+   try {
+     const trimmed = credentials.allowedOrigin.trim()
+     const url = new URL(trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : `https://${trimmed}`)
+     if (url.protocol === 'https:' || url.protocol === 'http:') headers.set('Origin', url.origin)
+   } catch {
+     // Ignore invalid origin URL
+   }
  }
  return headers
 }
@@ -105,6 +113,14 @@ export async function readHstoraDetail(credentials:HstoraCredentials,id:string){
  const data=await get(credentials,'/api/v1/products/'+externalId(id),'',15000),product=normalizeHstoraProduct(data)
  if(product.id!==id)throw new HstoraError('HStora detail identity mismatch.')
  return product
+}
+export async function readHstoraBalance(credentials:HstoraCredentials){
+ const data=await get(credentials,'/api/v1/balance','',15000)
+ const balance=Number(data.balance??0)
+ const pending=Number(data.pending_balance??0)
+ const currency=text(data.currency,3)||'USD'
+ if(!Number.isFinite(balance)||balance<0)throw new HstoraError('Invalid HStora balance response.')
+ return {balance,pending_balance:pending,currency}
 }
 /** Consumer must persist each completed batch privately; publication requires a validated complete snapshot. */
 export async function* hstoraCatalogPages(credentials:HstoraCredentials,limit=50){

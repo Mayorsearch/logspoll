@@ -15,6 +15,12 @@ type Status = {
   with_images: number
   with_descriptions: number
   base_url?: string
+  allowed_origin?: string
+  key_configured?: boolean
+  key_prefix?: string
+  key_len?: number
+  secret_configured?: boolean
+  secret_len?: number
 }
 
 export default function HstoraManager({ onComplete }: { onComplete?: () => void }) {
@@ -30,7 +36,7 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
 
   async function refresh() {
     try {
-      const result = await cloudflareRequest<{ connection: Status & { allowed_origin?: string } | null }>('/api/admin/hstora')
+      const result = await cloudflareRequest<{ connection: Status | null }>('/api/admin/hstora')
       setStatus(result.connection)
       if (result.connection?.base_url) setBaseUrl(result.connection.base_url)
       if (result.connection?.allowed_origin) setAllowedOrigin(result.connection.allowed_origin)
@@ -58,6 +64,12 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
       if (act === 'save') {
         const apiKey = key.current?.value?.trim()
         const apiSecret = secret.current?.value?.trim()
+        if ((apiKey && !apiSecret) || (!apiKey && apiSecret)) {
+          setIsError(true)
+          setMessage('Both API Key (hs_pk_) and Secret Key (hs_sk_) must be entered together. Leaving one blank would mismatch your credentials.')
+          setBusy(false)
+          return
+        }
         body = {
           action: 'save',
           base_url: baseUrl.trim(),
@@ -67,13 +79,28 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
           ...(apiKey ? { api_key: apiKey } : {}),
           ...(apiSecret ? { api_secret: apiSecret } : {}),
         }
+      } else if (act === 'test') {
+        const apiKey = key.current?.value?.trim()
+        const apiSecret = secret.current?.value?.trim()
+        if ((apiKey && !apiSecret) || (!apiKey && apiSecret)) {
+          setIsError(true)
+          setMessage('To test new credentials, enter both the API Key and Secret Key together. Or leave both blank to test saved credentials.')
+          setBusy(false)
+          return
+        }
+        body = {
+          action: 'test',
+          base_url: baseUrl.trim(),
+          allowed_origin: allowedOrigin.trim() || undefined,
+          ...(apiKey && apiSecret ? { api_key: apiKey, api_secret: apiSecret } : {})
+        }
       } else if (act === 'toggle') {
         body = { action: 'toggle' }
       } else if (act === 'rate') {
         body = { action: 'save', enabled: Boolean(status?.enabled), fx_rate_minor: Math.round(Number(rate) * 100) }
       }
 
-      const result = await cloudflareRequest<{ connected?: boolean; total?: number; message?: string; error?: string; layer?: string }>('/api/admin/hstora', body)
+      const result = await cloudflareRequest<{ connected?: boolean; balance?: number; currency?: string; total?: number; message?: string; error?: string; layer?: string }>('/api/admin/hstora', body)
 
       if (key.current && act === 'save') key.current.value = ''
       if (secret.current && act === 'save') secret.current.value = ''
@@ -86,7 +113,7 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
         setMessage(
           result.message ??
             (result.connected
-              ? `Connection verified: ${result.total ?? 0} accessible products found.`
+              ? `Connection verified: ${result.currency ?? 'USD'} ${(result.balance ?? 0).toFixed(2)} wallet balance · ${result.total ?? 0} accessible products found.`
               : act === 'sync'
                 ? 'Background catalog synchronization queued successfully.'
                 : 'Settings saved successfully.')
@@ -207,6 +234,14 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
             />
           </label>
         </div>
+
+        {status?.key_configured && (
+          <div style={{ marginTop: 12, fontSize: '0.82rem', color: 'var(--admin-muted, #64748b)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span>Configured Key: <code style={{ color: '#0f766e', background: 'rgba(15,118,110,0.08)', padding: '2px 6px', borderRadius: 4 }}>{status.key_prefix}</code> ({status.key_len} chars)</span>
+            <span>·</span>
+            <span>Secret: <span style={{ color: '#16a34a' }}>● Saved</span> ({status.secret_len} chars)</span>
+          </div>
+        )}
 
         {/* Buttons */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 20 }}>
