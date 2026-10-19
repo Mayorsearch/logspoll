@@ -110,6 +110,20 @@ export function SiteLayout() {
     setOpen(false)
   }, [pathname, search])
 
+  const isDashboard = pathname.startsWith('/dashboard')
+
+  if (isDashboard) {
+    return (
+      <div className="site-shell dashboard-viewport">
+        <a className="skip-link" href="#main">Skip to content</a>
+        <main id="main" tabIndex={-1}>
+          <Outlet />
+        </main>
+        <FloatingChatWidget />
+      </div>
+    )
+  }
+
   return (
     <div className={`site-shell${isHome ? ' homepage-layout' : ''}`}>
       <a className="skip-link" href="#main">Skip to content</a>

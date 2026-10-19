@@ -13,3 +13,4 @@ createRoot(document.getElementById('root')!).render(
 
 import './storefront-ui.css'
 import './dashboard-ui.css'
+import './fintech-dashboard.css'

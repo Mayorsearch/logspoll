@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, NavLink, Outlet, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { 
-  LogOut, PackageOpen, House, UserRound, 
-  ShoppingBag, ShieldCheck, ArrowRight, Heart, BookOpen, 
+  PackageOpen, House, UserRound, 
+  ShoppingBag, ShieldCheck, ArrowRight, Heart, 
   Key, Check, Download, HelpCircle, Search, 
   Clock, CheckCircle2, XCircle, AlertCircle, MessageSquare,
-  ChevronDown, ChevronUp, Wallet, Send, RefreshCw, Star
+  ChevronDown, ChevronUp, Wallet, RefreshCw,
+  Sun, Moon, Bell, Eye, EyeOff, Plus, ChevronRight, ArrowDown, ArrowUp, Send
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth'
@@ -16,6 +17,10 @@ import { ReviewForm } from '../components/Reviews'
 import { DeliveryVaultCard } from '../components/DeliveryVaultCard'
 import { useCurrency } from '../lib/currency'
 import { useFavorites } from '../lib/favorites'
+import { DashboardProvider, useDashboard } from './DashboardContext'
+import { FundWalletSheet } from '../components/FundWalletSheet'
+import { TransactionDetailsSheet } from '../components/TransactionDetailsSheet'
+import type { WalletTransactionItem } from '../components/TransactionDetailsSheet'
 import type { StructuredProductDelivery } from '../lib/delivery-parser'
 import type { Order } from '../lib/customer-data'
 
@@ -35,148 +40,209 @@ interface ProductItem {
   category_slug?: string
 }
 
-interface NavItem {
-  path: string
-  label: string
-  icon: typeof House
-  exact?: boolean
-}
-
-const navLinks: NavItem[] = [
-  { path: '', label: 'Overview', icon: House, exact: true },
-  { path: '/wallet', label: 'Wallet & Funds', icon: Wallet },
-  { path: '/orders', label: 'My Orders', icon: ShoppingBag },
-  { path: '/purchases', label: 'Downloads & Vault', icon: Download },
-  { path: '/favorites', label: 'Saved Favorites', icon: Heart },
-  { path: '/profile', label: 'Profile Settings', icon: UserRound },
-  { path: '/settings', label: 'Security & Access', icon: Key },
-  { path: '/support', label: 'Support & Help', icon: HelpCircle },
-]
-
-export function DashboardLayout() {
+function DashboardShellInner() {
   const { session } = useAuth()
-  const navigate = useNavigate()
   const location = useLocation()
-  const { favorites } = useFavorites()
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const { theme, toggleTheme, toastMessage, showToast } = useDashboard()
 
   const displayName = String(
     session?.user.user_metadata?.full_name || 
     session?.user.user_metadata?.name || 
     session?.user.email?.split('@')[0] || 
-    'Your Account'
+    'Customer'
   )
 
-  const email = session?.user.email ?? ''
+  const initials = displayName
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join('') || 'LP'
 
-  async function logout() {
-    if (busy) return
-    setBusy(true)
-    setError('')
-    try {
-      await cloudflareAuth('sign-out', {})
-      navigate('/login', { replace: true })
-    } catch {
-      setError('Unable to sign out. Please try again.')
-    } finally {
-      setBusy(false)
-    }
+  const getSectionTitle = () => {
+    const p = location.pathname
+    if (p === '/dashboard' || p === '/dashboard/') return 'Dashboard'
+    if (p.includes('/wallet') || p.includes('/transactions')) return 'My Wallet'
+    if (p.includes('/orders')) return 'My Orders'
+    if (p.includes('/purchases') || p.includes('/downloads')) return 'Delivery Vault'
+    if (p.includes('/favorites') || p.includes('/saved')) return 'Saved Items'
+    if (p.includes('/profile') || p.includes('/settings')) return 'Account Settings'
+    if (p.includes('/support')) return 'Support & Help'
+    return 'Dashboard'
   }
 
   return (
-    <div className="container dashboard-shell">
-      {/* Mobile Horizontal Navigation Tabs */}
-      <nav className="dashboard-mobile-nav" aria-label="Mobile dashboard navigation">
-        {navLinks.map(({ path, label, icon: Icon, exact }) => {
-          const target = `/dashboard${path}`
-          const isActive = exact ? location.pathname === target : location.pathname.startsWith(target)
-          return (
-            <NavLink 
-              key={label} 
-              to={target} 
-              end={exact}
-              className={`dashboard-mobile-pill ${isActive ? 'active' : ''}`}
-            >
-              <Icon size={16} />
-              <span>{label}</span>
-              {path === '/favorites' && favorites.length > 0 && (
-                <span className="pill-badge">{favorites.length}</span>
-              )}
-            </NavLink>
-          )
-        })}
-      </nav>
+    <div className={`fintech-app ${theme === 'dark' ? 'dark' : ''}`}>
+      {/* Desktop Persistent Sidebar (>= 1000px) */}
+      <aside className="fintech-sidebar" aria-label="Desktop navigation">
+        <Link to="/dashboard" className="fintech-logo">
+          <span className="fintech-logo-mark">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M7 4v16h11" />
+              <path d="M12 4v11h7" />
+            </svg>
+          </span>
+          <span className="fintech-logo-word">Logs<span>Poll</span></span>
+        </Link>
 
-      {/* Desktop Sidebar Navigation */}
-      <aside className="dashboard-sidebar">
-        {/* Customer Identity Card */}
-        <div className="customer-identity">
-          <div className="customer-avatar-wrapper">
-            <span className="customer-avatar">
-              {displayName.charAt(0).toUpperCase()}
-            </span>
-            <span className="avatar-online-dot" title="Active session" />
-          </div>
-          <div className="customer-meta">
-            <strong className="customer-name">{displayName}</strong>
-            <span className="member-label">
-              <ShieldCheck size={12} className="inline-icon" /> VERIFIED CUSTOMER
-            </span>
-            <small className="account-email" title={email}>{email}</small>
-          </div>
-        </div>
+        <div className="fintech-side-heading">MY ACCOUNT</div>
 
-        {/* Primary Navigation Menu */}
-        <nav className="dashboard-nav-list" aria-label="Customer dashboard navigation">
-          {navLinks.map(({ path, label, icon: Icon, exact }) => (
-            <NavLink 
-              key={label} 
-              to={`/dashboard${path}`} 
-              end={exact}
-              className={({ isActive }) => `dashboard-nav-item ${isActive ? 'active' : ''}`}
-            >
-              <Icon size={18} className="nav-icon" />
-              <span className="nav-label">{label}</span>
-              {path === '/favorites' && favorites.length > 0 && (
-                <span className="nav-count-badge">{favorites.length}</span>
-              )}
-            </NavLink>
-          ))}
+        <nav className="fintech-side-links" aria-label="Account navigation">
+          <NavLink
+            to="/dashboard"
+            end
+            className={({ isActive }) => `side-nav-link ${isActive ? 'active' : ''}`}
+          >
+            <House size={18} />
+            <span>Dashboard</span>
+          </NavLink>
+          <NavLink
+            to="/dashboard/wallet"
+            className={({ isActive }) => `side-nav-link ${isActive ? 'active' : ''}`}
+          >
+            <Wallet size={18} />
+            <span>My Wallet</span>
+          </NavLink>
+          <NavLink
+            to="/dashboard/orders"
+            className={({ isActive }) => `side-nav-link ${isActive ? 'active' : ''}`}
+          >
+            <ShoppingBag size={18} />
+            <span>My Orders</span>
+          </NavLink>
+          <NavLink
+            to="/dashboard/favorites"
+            className={({ isActive }) => `side-nav-link ${isActive ? 'active' : ''}`}
+          >
+            <Heart size={18} />
+            <span>Saved Items</span>
+          </NavLink>
+          <NavLink
+            to="/dashboard/profile"
+            className={({ isActive }) => `side-nav-link ${isActive ? 'active' : ''}`}
+          >
+            <UserRound size={18} />
+            <span>Account Settings</span>
+          </NavLink>
         </nav>
 
-        {/* Secondary Quick Links */}
-        <div className="dashboard-sidebar-extra">
-          <span className="sidebar-section-title">QUICK ACCESS</span>
-          <Link to="/marketplace" className="dashboard-nav-extra">
-            <PackageOpen size={17} />
-            <span>Marketplace</span>
-          </Link>
-          <Link to="/docs" className="dashboard-nav-extra">
-            <BookOpen size={17} />
-            <span>API Docs</span>
-          </Link>
+        <div className="fintech-side-spacer" />
+
+        <div className="fintech-side-tip">
+          <strong>Need help?</strong>
+          <p>Get support with your wallet, recent purchases or account.</p>
+          <Link to="/dashboard/support">Visit help centre →</Link>
         </div>
-
-        {/* Sign Out Button */}
-        <button 
-          className="dashboard-logout-btn" 
-          disabled={busy} 
-          onClick={logout}
-          aria-label="Sign out of account"
-        >
-          <LogOut size={17} />
-          <span>{busy ? 'Signing out…' : 'Sign Out'}</span>
-        </button>
-
-        {error && <p className="form-error" role="alert">{error}</p>}
       </aside>
 
-      {/* Main Content Area */}
-      <main className="dashboard-content">
-        <Outlet />
-      </main>
+      {/* Mainframe */}
+      <div className="fintech-mainframe">
+        {/* Topbar */}
+        <header className="fintech-topbar">
+          <Link to="/dashboard" className="fintech-logo">
+            <span className="fintech-logo-mark">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M7 4v16h11" />
+                <path d="M12 4v11h7" />
+              </svg>
+            </span>
+            <span className="fintech-logo-word">Logs<span>Poll</span></span>
+          </Link>
+
+          <div className="fintech-topbar-breadcrumb">
+            My account <span style={{ margin: '0 8px', color: 'var(--line)' }}>/</span>
+            <strong id="breadcrumb">{getSectionTitle()}</strong>
+          </div>
+
+          <div className="fintech-header-tools">
+            <button
+              type="button"
+              className="fintech-icon-btn"
+              onClick={toggleTheme}
+              aria-label="Toggle light or dark appearance"
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+
+            <button
+              type="button"
+              className="fintech-icon-btn"
+              onClick={() => showToast("You're all caught up! No unread notifications.")}
+              aria-label="Notifications"
+            >
+              <Bell size={18} />
+              <span className="ping" />
+            </button>
+
+            <Link
+              to="/dashboard/profile"
+              className="fintech-avatar"
+              aria-label="Open account settings"
+            >
+              {initials}
+            </Link>
+          </div>
+        </header>
+
+        {/* Content */}
+        <main className="fintech-content" id="main">
+          <Outlet />
+        </main>
+      </div>
+
+      {/* Fixed Mobile Bottom Navigation (< 1000px) */}
+      <nav className="fintech-mobile-nav" aria-label="Bottom navigation">
+        <NavLink
+          to="/dashboard"
+          end
+          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+        >
+          <span className="nav-icon"><House size={19} /></span>
+          <span>Home</span>
+        </NavLink>
+        <NavLink
+          to="/dashboard/wallet"
+          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+        >
+          <span className="nav-icon"><Wallet size={19} /></span>
+          <span>Wallet</span>
+        </NavLink>
+        <NavLink
+          to="/dashboard/orders"
+          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+        >
+          <span className="nav-icon"><ShoppingBag size={19} /></span>
+          <span>Orders</span>
+        </NavLink>
+        <NavLink
+          to="/dashboard/favorites"
+          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+        >
+          <span className="nav-icon"><Heart size={19} /></span>
+          <span>Saved</span>
+        </NavLink>
+        <NavLink
+          to="/dashboard/profile"
+          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+        >
+          <span className="nav-icon"><UserRound size={19} /></span>
+          <span>Profile</span>
+        </NavLink>
+      </nav>
+
+      {/* Global Dashboard Toast */}
+      <div className={`fintech-toast ${toastMessage ? 'show' : ''}`} role="status" aria-live="polite">
+        {toastMessage}
+      </div>
     </div>
+  )
+}
+
+export function DashboardLayout() {
+  return (
+    <DashboardProvider>
+      <DashboardShellInner />
+    </DashboardProvider>
   )
 }
 
@@ -238,8 +304,12 @@ export function CustomerRecords({
   const [supportSuccess, setSupportSuccess] = useState('')
   const [supportError, setSupportError] = useState('')
 
-  // Wallet state
+  // Dashboard & Wallet state
+  const { hideBalance, toggleHideBalance, walletBalanceMinor: sharedBalanceMinor } = useDashboard()
   const [walletBalanceMinor, setWalletBalanceMinor] = useState<number | null>(null)
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransactionItem[]>([])
+  const [showFundSheet, setShowFundSheet] = useState(false)
+  const [selectedTx, setSelectedTx] = useState<WalletTransactionItem | null>(null)
 
   const [searchParams] = useSearchParams()
 
@@ -262,9 +332,10 @@ export function CustomerRecords({
       const isPurchasesMode = mode === 'purchases' || mode === 'downloads'
       const endpoint = isPurchasesMode ? '/api/orders?purchases=true' : '/api/orders'
 
-      void cloudflareRequest<{ wallet: { balance_minor: number } }>('/api/wallet')
+      void cloudflareRequest<{ wallet?: { balance_minor: number }; transactions?: WalletTransactionItem[] }>('/api/wallet')
         .then((data) => {
           if (active && data.wallet) setWalletBalanceMinor(data.wallet.balance_minor)
+          if (active && data.transactions) setWalletTransactions(data.transactions)
         })
         .catch(() => { if (active) setWalletBalanceMinor(null) })
       
@@ -552,27 +623,25 @@ export function CustomerRecords({
   if (mode === 'favorites') {
     return (
       <div className="customer-page-panel">
-        <div className="dashboard-page-header">
-          <div className="header-badge-row">
-            <span className="dashboard-eyebrow">YOUR WISHLIST</span>
+        <div className="fintech-screen-head" style={{ marginBottom: 20 }}>
+          <div>
+            <p className="fintech-eyebrow">YOUR SHORTLIST</p>
+            <h1>Saved Items</h1>
+            <p>Keep the products you're interested in close.</p>
           </div>
-          <h1>Saved Favorites</h1>
-          <p className="dashboard-intro">
-            Keep track of digital products, tools, and accounts you want to purchase later.
-          </p>
         </div>
 
         {favLoading ? (
           <div className="dashboard-loading-state">
             <RefreshCw size={24} className="spin-icon" />
-            <p>Loading your saved favorites…</p>
+            <p>Loading your saved items…</p>
           </div>
         ) : favoriteProducts.length === 0 ? (
           <Empty
             icon={Heart}
-            title="No saved favorites yet"
-            text="Explore the marketplace to bookmark essential digital products and accounts for quick access."
-            actionLabel="Explore Marketplace"
+            title="Nothing saved yet"
+            text="When you save a product, it will show up here for easy access later."
+            actionLabel="Browse products"
             actionLink="/marketplace"
           />
         ) : (
@@ -1055,348 +1124,274 @@ export function CustomerRecords({
     )
   }
 
+  const currentMonth = new Date().getMonth()
+  const currentYear = new Date().getFullYear()
+  const currentMonthName = new Date().toLocaleDateString('en-GB', { month: 'long' })
+
+  const thisMonthOrders = records.filter((r) => {
+    const d = new Date(r.created_at)
+    return d.getMonth() === currentMonth && d.getFullYear() === currentYear
+  })
+  const thisMonthOrdersCount = thisMonthOrders.length
+
+  const thisMonthSpendMinor = thisMonthOrders
+    .filter((r) => r.payment_status === 'paid')
+    .reduce((sum, r) => sum + r.total_minor, 0)
+
+  const totalSpendMinor = records
+    .filter((r) => r.payment_status === 'paid')
+    .reduce((sum, r) => sum + r.total_minor, 0)
+
+  const todayDate = new Date().toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  }).toUpperCase()
+
+  const displayBalanceMinor = walletBalanceMinor ?? sharedBalanceMinor
+
   // -------------------------------------------------------------
-  // VIEW: DEFAULT OVERVIEW
+  // VIEW: DEFAULT OVERVIEW (Matches Reference 1 & 3)
   // -------------------------------------------------------------
   return (
-    <div className="customer-overview-container">
-      {/* Personalized Welcome Header */}
-      <div className="dashboard-welcome-banner">
-        <div className="welcome-content">
-          <div className="welcome-greeting-row">
-            <h1>Welcome back, {firstName}</h1>
-            <span className="welcome-verified-badge">
-              <ShieldCheck size={14} /> Verified Customer
+    <div>
+      {/* Screen Head */}
+      <div className="fintech-screen-head">
+        <div>
+          <p className="fintech-eyebrow">{todayDate}</p>
+          <h1>Hello, {firstName} <span aria-hidden="true">👋</span></h1>
+          <p>Here's what’s happening with your LogsPoll account.</p>
+        </div>
+      </div>
+
+      <div className="fintech-dashboard-grid">
+        {/* Left Column */}
+        <div className="fintech-stack">
+          {/* Wallet Hero Card */}
+          <section className="fintech-wallet-hero" aria-label="Wallet balance">
+            <div className="fintech-hero-overline">
+              <span>LogsPoll Wallet</span>
+              <span className="tag">
+                <i className="online" /> NGN Wallet
+              </span>
+            </div>
+
+            <p className="fintech-hero-amount-label">Available balance</p>
+
+            <div className="fintech-hero-amount">
+              <span className="balance-number">
+                {hideBalance ? '₦ ••••••••' : formatPrice(displayBalanceMinor ?? 0)}
+              </span>
+              <button
+                type="button"
+                className="fintech-eye-btn"
+                onClick={toggleHideBalance}
+                aria-label={hideBalance ? 'Show wallet balance' : 'Hide wallet balance'}
+              >
+                {hideBalance ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+
+            <p className="fintech-hero-sub">
+              <ShieldCheck size={14} /> Only verified payments credit your wallet
+            </p>
+
+            <div className="fintech-hero-actions">
+              <button
+                type="button"
+                className="fintech-btn fintech-btn-orange"
+                onClick={() => setShowFundSheet(true)}
+              >
+                <Plus size={16} /> Fund wallet
+              </button>
+              <Link to="/dashboard/wallet" className="fintech-btn fintech-btn-hero-alt">
+                <Wallet size={16} /> View wallet
+              </Link>
+            </div>
+          </section>
+
+          {/* Account Summary Stats */}
+          <div className="fintech-stats" aria-label="Account summary">
+            <div className="fintech-stat">
+              <div className="fintech-stat-top">
+                <span>Total orders</span>
+                <span className="fintech-stat-icon">
+                  <ShoppingBag size={15} />
+                </span>
+              </div>
+              <div>
+                <strong>{records.length}</strong>
+                <span className="fintech-stat-footer">
+                  {thisMonthOrdersCount > 0 ? `${thisMonthOrdersCount} new this month` : 'Lifetime purchases'}
+                </span>
+              </div>
+            </div>
+
+            <div className="fintech-stat stat-blue">
+              <div className="fintech-stat-top">
+                <span>Monthly spend</span>
+                <span className="fintech-stat-icon">
+                  <ArrowUp size={15} />
+                </span>
+              </div>
+              <div>
+                <strong>
+                  {formatPrice(thisMonthSpendMinor > 0 ? thisMonthSpendMinor : totalSpendMinor)}
+                </strong>
+                <span className="fintech-stat-footer">
+                  {thisMonthSpendMinor > 0 ? `${currentMonthName} spending` : 'Total verified spending'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Marketplace Discovery Banner */}
+          <Link to="/marketplace" className="fintech-shop-banner">
+            <span>
+              <strong>Find something new</strong>
+              <span>Explore products in the LogsPoll marketplace</span>
             </span>
-          </div>
-          <p className="welcome-subtext">
-            Monitor your wallet balance, track live orders, and access delivered digital assets.
-          </p>
-        </div>
-
-        <div className="welcome-actions">
-          <Link to="/dashboard/wallet" className="button button-orange button-small">
-            <Wallet size={16} />
-            <span>Fund Wallet</span>
-          </Link>
-          <Link to="/marketplace" className="button button-outline button-small">
-            <PackageOpen size={16} />
-            <span>Browse Shop</span>
-          </Link>
-        </div>
-      </div>
-
-      {/* 5 Financial and Activity Metric Cards */}
-      <div className="overview-stats-grid">
-        {/* Wallet Balance Card */}
-        <div className="overview-stat-card highlight-card">
-          <div className="stat-card-header">
-            <span className="stat-label">Wallet Balance</span>
-            <div className="stat-icon-wrapper orange">
-              <Wallet size={18} />
-            </div>
-          </div>
-          <strong className="stat-number">
-            {walletBalanceMinor === null ? '₦0.00' : new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(walletBalanceMinor / 100)}
-          </strong>
-          <div className="stat-card-footer">
-            <span className="stat-badge-soft">Available NGN</span>
-            <Link to="/dashboard/wallet" className="stat-link">Fund Wallet →</Link>
-          </div>
-        </div>
-
-        {/* Total Orders Card */}
-        <div className="overview-stat-card">
-          <div className="stat-card-header">
-            <span className="stat-label">Total Orders</span>
-            <div className="stat-icon-wrapper blue">
-              <ShoppingBag size={18} />
-            </div>
-          </div>
-          <strong className="stat-number">{loading ? '—' : records.length}</strong>
-          <div className="stat-card-footer">
-            <span className="stat-subtext">Lifetime purchases</span>
-            <Link to="/dashboard/orders" className="stat-link">View All →</Link>
-          </div>
-        </div>
-
-        {/* Completed Purchases Card */}
-        <div className="overview-stat-card">
-          <div className="stat-card-header">
-            <span className="stat-label">Completed</span>
-            <div className="stat-icon-wrapper green">
-              <CheckCircle2 size={18} />
-            </div>
-          </div>
-          <strong className="stat-number">{loading ? '—' : completedPurchases}</strong>
-          <div className="stat-card-footer">
-            <span className="stat-subtext">Delivered &amp; active</span>
-            <Link to="/dashboard/orders" className="stat-link">Delivered →</Link>
-          </div>
-        </div>
-
-        {/* Pending Orders Card */}
-        <div className="overview-stat-card">
-          <div className="stat-card-header">
-            <span className="stat-label">Pending Orders</span>
-            <div className="stat-icon-wrapper amber">
-              <Clock size={18} />
-            </div>
-          </div>
-          <strong className="stat-number">{loading ? '—' : pendingOrders}</strong>
-          <div className="stat-card-footer">
-            <span className="stat-subtext">Awaiting fulfillment</span>
-            <Link to="/dashboard/orders" className="stat-link">Track →</Link>
-          </div>
-        </div>
-
-        {/* Digital Assets Card */}
-        <div className="overview-stat-card">
-          <div className="stat-card-header">
-            <span className="stat-label">Digital Assets</span>
-            <div className="stat-icon-wrapper purple">
-              <Download size={18} />
-            </div>
-          </div>
-          <strong className="stat-number">{loading ? '—' : completedPurchases}</strong>
-          <div className="stat-card-footer">
-            <span className="stat-subtext">Saved in vault</span>
-            <Link to="/dashboard/purchases" className="stat-link">Open Vault →</Link>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Orders Section */}
-      <section className="dashboard-section-block">
-        <div className="section-header-row">
-          <div>
-            <h2>Recent Orders</h2>
-            <p className="section-subtitle">Real-time payment and order fulfillment status.</p>
-          </div>
-          <Link to="/dashboard/orders" className="text-link">
-            View All ({records.length}) →
+            <span className="fintech-shop-arrow">
+              <ArrowRight size={16} />
+            </span>
           </Link>
         </div>
 
-        {loading ? (
-          <div className="dashboard-loading-state">
-            <RefreshCw size={20} className="spin-icon" />
-            <p>Loading recent orders…</p>
-          </div>
-        ) : records.length === 0 ? (
-          <div className="empty-overview-card">
-            <ShoppingBag size={24} className="empty-icon" />
-            <p>No orders recorded for this account yet.</p>
-            <Link to="/marketplace" className="button button-outline button-small">Browse Marketplace</Link>
-          </div>
-        ) : (
-          <div className="order-cards-list">
-            {records.slice(0, 5).map((order) => {
-              const primaryItem = order.order_items?.[0]
-              const itemsSummary = order.order_items?.map((i) => i.product_name).join(', ') || `Order ${order.reference}`
-              const categoryLabel = primaryItem?.category_name || (primaryItem?.product_name ? primaryItem.product_name.split(' ')[0].toUpperCase() : 'DIGITAL')
+        {/* Right Column */}
+        <div className="fintech-stack">
+          {/* Recent Activity Panel */}
+          <section className="fintech-panel fintech-panel-pad" aria-labelledby="recent-activity-heading">
+            <div className="fintech-panel-heading">
+              <div>
+                <h2 id="recent-activity-heading">Recent activity</h2>
+                <p className="hint">Your latest wallet movements</p>
+              </div>
+              <Link to="/dashboard/wallet" className="fintech-more">
+                <span>View all</span>
+                <ChevronRight size={13} />
+              </Link>
+            </div>
 
-              return (
-                <article className="order-compact-card" key={order.id}>
-                  <div className="order-compact-main">
-                    <div className="order-compact-icon-box">
-                      <BrandIcon 
-                        name={primaryItem?.product_name || order.reference} 
-                        category={primaryItem?.category_name || ''} 
-                        size={24} 
-                      />
-                    </div>
-                    <div className="order-compact-body">
-                      <div className="order-compact-topline">
-                        <span className="order-compact-cat-badge">{categoryLabel}</span>
-                        <span className="order-compact-ref">Ref: {order.reference}</span>
-                        <span className="order-compact-date">
-                          <Clock size={11} className="inline-icon" />
-                          {new Date(order.created_at).toLocaleDateString(undefined, {
-                            day: 'numeric',
-                            month: 'short',
-                            year: 'numeric'
-                          })}
-                        </span>
-                      </div>
-                      <h3 className="order-compact-title">{itemsSummary}</h3>
-                      <div className="order-compact-meta-row">
-                        <span className={`status-pill payment-${order.payment_status}`}>
-                          {order.payment_status === 'paid' && <CheckCircle2 size={12} />}
-                          {order.payment_status === 'pending' && <Clock size={12} />}
-                          {(order.payment_status === 'failed' || order.payment_status === 'cancelled') && <XCircle size={12} />}
-                          {order.payment_status === 'refunded' && <ShieldCheck size={12} />}
-                          <span className="capitalize">{order.payment_status}</span>
-                        </span>
-                        <span className={`status-pill delivery-${order.fulfillment_status}`}>
-                          {order.fulfillment_status === 'delivered' && <CheckCircle2 size={12} />}
-                          {order.fulfillment_status === 'processing' && <RefreshCw size={12} className="spin-slow" />}
-                          {order.fulfillment_status === 'pending' && <Clock size={12} />}
-                          {order.fulfillment_status === 'failed' && <AlertCircle size={12} />}
-                          <span className="capitalize">{order.fulfillment_status}</span>
-                        </span>
-                      </div>
-                    </div>
-                    <div className="order-compact-actions">
-                      <strong className="order-compact-price">{formatPrice(order.total_minor)}</strong>
-                      <Link
-                        to="/dashboard/orders"
-                        className="button button-small button-outline order-details-toggle"
+            {walletTransactions.length > 0 ? (
+              <ul className="fintech-tx-list">
+                {walletTransactions.slice(0, 4).map((tx) => {
+                  const isCredit = tx.direction === 'credit'
+                  const title =
+                    tx.reason ||
+                    (isCredit
+                      ? 'Wallet funding'
+                      : tx.order_reference
+                      ? `Order #${tx.order_reference}`
+                      : 'Digital purchase')
+                  const dateObj = new Date(tx.created_at)
+                  const dateStr = !isNaN(dateObj.getTime())
+                    ? `${dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} · ${dateObj.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+                    : String(tx.created_at)
+
+                  return (
+                    <li key={tx.id}>
+                      <button
+                        type="button"
+                        className="fintech-tx-row"
+                        onClick={() => setSelectedTx(tx)}
                       >
-                        <span>View Details</span>
-                        <ArrowRight size={12} />
-                      </Link>
+                        <span className={`fintech-tx-symbol ${isCredit ? 'credit' : ''}`}>
+                          {isCredit ? <ArrowDown size={16} /> : <ArrowUp size={16} />}
+                        </span>
+                        <span className="fintech-tx-copy">
+                          <strong>{title}</strong>
+                          <small>{dateStr}</small>
+                        </span>
+                        <span className="fintech-tx-right">
+                          <strong className={isCredit ? 'positive' : ''}>
+                            {isCredit ? '+' : '−'}{formatPrice(tx.amount_minor)}
+                          </strong>
+                          <small>{isCredit ? 'Money in' : 'Purchase'} · Done</small>
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : (
+              <div className="fintech-empty-state">
+                <Search size={24} className="icon" />
+                <p>No recent activity recorded yet.</p>
+              </div>
+            )}
+          </section>
+
+          {/* Recent Orders Panel */}
+          <section className="fintech-panel fintech-panel-pad" aria-labelledby="recent-orders-heading">
+            <div className="fintech-panel-heading">
+              <div>
+                <h2 id="recent-orders-heading">Recent orders</h2>
+                <p className="hint">Track your purchases</p>
+              </div>
+              <Link to="/dashboard/orders" className="fintech-more">
+                <span>View all</span>
+                <ChevronRight size={13} />
+              </Link>
+            </div>
+
+            {records.length > 0 ? (
+              <div className="fintech-order-list">
+                {records.slice(0, 3).map((order) => {
+                  const firstItem = order.order_items?.[0]
+                  const title = firstItem?.product_name || `Order #${order.reference}`
+                  const dateObj = new Date(order.created_at)
+                  const dateStr = !isNaN(dateObj.getTime())
+                    ? dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                    : String(order.created_at)
+                  const isDelivered = order.fulfillment_status === 'delivered'
+                  const isProcessing =
+                    order.fulfillment_status === 'processing' || order.payment_status === 'pending'
+
+                  return (
+                    <div className="fintech-order-item" key={order.id}>
+                      <span className="fintech-order-icon">
+                        <ShoppingBag size={18} />
+                      </span>
+                      <span className="fintech-order-info">
+                        <strong>{title}</strong>
+                        <small>#{order.reference} · {dateStr}</small>
+                      </span>
+                      <span className="fintech-order-side">
+                        <strong>{formatPrice(order.total_minor)}</strong>
+                        <span className={`fintech-small-pill ${isProcessing ? 'pending' : ''}`}>
+                          {isDelivered ? 'Delivered' : isProcessing ? 'Processing' : order.payment_status}
+                        </span>
+                      </span>
                     </div>
-                  </div>
-                </article>
-              )
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* Quick Action Shortcuts */}
-      <section className="dashboard-quick-shortcuts">
-        <h2>Quick Shortcuts</h2>
-        <div className="shortcuts-grid">
-          <Link to="/dashboard/wallet" className="shortcut-card">
-            <Wallet size={20} className="shortcut-icon" />
-            <div>
-              <strong>Fund Wallet</strong>
-              <small>Deposit funds via Bachs gateway</small>
-            </div>
-            <ArrowRight size={15} />
-          </Link>
-
-          <Link to="/marketplace" className="shortcut-card">
-            <PackageOpen size={20} className="shortcut-icon" />
-            <div>
-              <strong>Shop Products</strong>
-              <small>Browse published digital products</small>
-            </div>
-            <ArrowRight size={15} />
-          </Link>
-
-          <Link to="/dashboard/orders" className="shortcut-card">
-            <ShoppingBag size={20} className="shortcut-icon" />
-            <div>
-              <strong>Order History</strong>
-              <small>Reconcile fulfillment &amp; payments</small>
-            </div>
-            <ArrowRight size={15} />
-          </Link>
-
-          <Link to="/dashboard/purchases" className="shortcut-card">
-            <Download size={20} className="shortcut-icon" />
-            <div>
-              <strong>Delivery Vault</strong>
-              <small>Delivered credentials &amp; licenses</small>
-            </div>
-            <ArrowRight size={15} />
-          </Link>
-
-          <Link to="/dashboard/support" className="shortcut-card">
-            <HelpCircle size={20} className="shortcut-icon" />
-            <div>
-              <strong>24/7 Support Desk</strong>
-              <small>Submit ticket or get assistance</small>
-            </div>
-            <ArrowRight size={15} />
-          </Link>
-
-          <Link to="/dashboard/profile" className="shortcut-card">
-            <UserRound size={20} className="shortcut-icon" />
-            <div>
-              <strong>Account Profile</strong>
-              <small>Manage personal details &amp; access</small>
-            </div>
-            <ArrowRight size={15} />
-          </Link>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="fintech-empty-state">
+                <ShoppingBag size={24} className="icon" />
+                <p>No orders recorded yet.</p>
+              </div>
+            )}
+          </section>
         </div>
-      </section>
+      </div>
 
-      {/* Trending Now Section */}
-      <TrendingSection />
+      {/* Sheets */}
+      <FundWalletSheet
+        isOpen={showFundSheet}
+        onClose={() => setShowFundSheet(false)}
+        onSuccess={() => setAttempt((a) => a + 1)}
+      />
+
+      <TransactionDetailsSheet
+        transaction={selectedTx}
+        onClose={() => setSelectedTx(null)}
+      />
     </div>
   )
 }
 
-function TrendingSection() {
-  const { formatPrice } = useCurrency()
-  const [products, setProducts] = useState<ProductItem[]>([])
-
-  useEffect(() => {
-    let active = true
-    void cloudflareRequest<{ records: ProductItem[] }>('/api/products?page=1')
-      .then((data) => {
-        if (active) setProducts(data.records.slice(0, 3))
-      })
-      .catch(() => {})
-    return () => {
-      active = false
-    }
-  }, [])
-
-  if (!products.length) return null
-
-  return (
-    <section className="trending-section" aria-label="Trending Products">
-      <div className="trending-heading">
-        <div>
-          <h2>Trending Essentials 🔥</h2>
-          <p className="stat-card-subtext">Popular digital tools and accounts on LogsPoll this week</p>
-        </div>
-        <Link className="text-link" to="/marketplace">
-          View All Products →
-        </Link>
-      </div>
-
-      <div className="trending-grid">
-        {products.map((product, index) => {
-          const rankClass = index === 0 ? 'trending-rank-1' : index === 1 ? 'trending-rank-2' : 'trending-rank-3'
-          return (
-            <article className="trending-card" key={product.id}>
-              <span className={`trending-rank-tag ${rankClass}`}>
-                <Star size={11} className="inline-icon" /> #{index + 1}
-              </span>
-
-              <Link to={`/products/${product.slug}`} className="live-product-icon">
-                <ProductArtwork
-                  name={product.name}
-                  category={product.category_name || 'Digital'}
-                  path={product.image_path}
-                  images={product.supplier_image_urls}
-                />
-              </Link>
-
-              <div className="trending-card-body">
-                <div className="product-badges-row">
-                  <span className="product-category-badge">{product.category_name || 'Tool'}</span>
-                  {product.server_number ? (
-                    <span className={`server-badge server-badge-${product.server_number}`}>
-                      Server {product.server_number}{product.server_number === 4 ? ' (AI Tools)' : ''}
-                    </span>
-                  ) : null}
-                </div>
-
-                <h3>
-                  <Link to={`/products/${product.slug}`}>{product.name}</Link>
-                </h3>
-
-                <div className="trending-card-footer">
-                  <strong className="product-price">{formatPrice(product.price_minor)}</strong>
-                  <Link to={`/products/${product.slug}`} className="text-link">
-                    View Details →
-                  </Link>
-                </div>
-              </div>
-            </article>
-          )
-        })}
-      </div>
-    </section>
-  )
-}
 
 function Empty({ 
   icon: Icon = PackageOpen,
@@ -1427,10 +1422,26 @@ function Empty({
 
 export function Profile() {
   const { session } = useAuth()
+  const { theme, toggleTheme, hideBalance, toggleHideBalance, showToast } = useDashboard()
+  const [alertsOn, setAlertsOn] = useState(true)
   const [name, setName] = useState(String(session?.user.user_metadata?.full_name || session?.user.user_metadata?.name || ''))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+
+  const displayName = String(
+    session?.user.user_metadata?.full_name || 
+    session?.user.user_metadata?.name || 
+    session?.user.email?.split('@')[0] || 
+    'Customer'
+  )
+
+  const initials = displayName
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join('') || 'LP'
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -1454,12 +1465,79 @@ export function Profile() {
 
   return (
     <section className="customer-page-panel profile-page">
-      <div className="dashboard-page-header">
-        <div className="header-badge-row">
-          <span className="dashboard-eyebrow">IDENTITY &amp; ACCOUNT</span>
+      <div className="fintech-screen-head" style={{ marginBottom: 20 }}>
+        <div>
+          <p className="fintech-eyebrow">YOUR ACCOUNT</p>
+          <h1>Profile &amp; Settings</h1>
+          <p>Make LogsPoll work your way.</p>
         </div>
-        <h1>Profile &amp; Account Settings</h1>
-        <p className="dashboard-intro">Manage your personal information, email address, and account preferences.</p>
+      </div>
+
+      {/* Profile Card & Settings Panel Matching Reference 3 */}
+      <div className="fintech-stack" style={{ marginBottom: 24 }}>
+        <div className="fintech-panel fintech-profile-card">
+          <span className="fintech-avatar">{initials}</span>
+          <div>
+            <strong>{displayName}</strong>
+            <small>Personal account · Verified Customer</small>
+          </div>
+        </div>
+
+        <div className="fintech-panel fintech-settings-panel">
+          <div className="fintech-setting-row">
+            <span className="fintech-setting-icon"><Moon size={18} /></span>
+            <div className="fintech-setting-copy">
+              <strong>Dark appearance</strong>
+              <small>Choose a comfortable theme</small>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={theme === 'dark'}
+              className={`fintech-switch ${theme === 'dark' ? 'on' : ''}`}
+              onClick={toggleTheme}
+              aria-label="Dark appearance"
+            />
+          </div>
+
+          <div className="fintech-setting-row">
+            <span className="fintech-setting-icon"><EyeOff size={18} /></span>
+            <div className="fintech-setting-copy">
+              <strong>Hide wallet balance</strong>
+              <small>Keep your balance private on screen</small>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={hideBalance}
+              className={`fintech-switch ${hideBalance ? 'on' : ''}`}
+              onClick={toggleHideBalance}
+              aria-label="Hide wallet balance"
+            />
+          </div>
+
+          <div className="fintech-setting-row">
+            <span className="fintech-setting-icon"><Bell size={18} /></span>
+            <div className="fintech-setting-copy">
+              <strong>Transaction alerts</strong>
+              <small>Get notified when payments are confirmed</small>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={alertsOn}
+              className={`fintech-switch ${alertsOn ? 'on' : ''}`}
+              onClick={() => {
+                setAlertsOn((prev) => {
+                  const next = !prev
+                  showToast(next ? 'Transaction alerts enabled.' : 'Transaction alerts disabled.')
+                  return next
+                })
+              }}
+              aria-label="Transaction alerts"
+            />
+          </div>
+        </div>
       </div>
 
       <div className="profile-columns">

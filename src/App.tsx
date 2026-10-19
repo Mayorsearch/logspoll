@@ -78,6 +78,7 @@ export default function App() {
                     <Route path="purchases" element={<CustomerRecords key="purchases" mode="purchases" />} />
                     <Route path="downloads" element={<CustomerRecords key="downloads" mode="purchases" />} />
                     <Route path="favorites" element={<CustomerRecords key="favorites" mode="favorites" />} />
+                    <Route path="saved" element={<CustomerRecords key="saved" mode="favorites" />} />
                     <Route path="support" element={<CustomerRecords key="support" mode="support" />} />
                     <Route path="wallet" element={<WalletPage />} />
                     <Route path="transactions" element={<WalletPage />} />

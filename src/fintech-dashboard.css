@@ -1,0 +1,1763 @@
+/* ==========================================================================
+   LogsPoll — Mobile-First Customer Dashboard & Premium Wallet Design System
+   Matches Reference 1 (Dashboard), Reference 2 (Wallet), & Reference 3 (HTML)
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --panel-subtle: #fafbfc;
+  --ink: #171b24;
+  --secondary: #5f6775;
+  --muted: #88909c;
+  --line: #e9ebef;
+  --orange: #f36a2b;
+  --orange-dark: #dd5620;
+  --orange-wash: #fff0e8;
+  --positive: #119b73;
+  --positive-wash: #eaf9f2;
+  --blue: #5074ae;
+  --blue-wash: #ecf3ff;
+  --shadow: 0 12px 40px rgba(20, 27, 38, 0.035);
+  --radius: 20px;
+  --font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+}
+
+body.dark,
+html[data-site-theme="dark"],
+.fintech-app.dark {
+  color-scheme: dark;
+  --bg: #10131a;
+  --panel: #1a1f29;
+  --panel-subtle: #202631;
+  --ink: #f3f5f8;
+  --secondary: #b4bdc9;
+  --muted: #929ca9;
+  --line: #303744;
+  --orange-wash: #39291f;
+  --positive-wash: #19372d;
+  --blue-wash: #24354b;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+}
+
+/* Base Dashboard App Shell */
+.fintech-app {
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+.fintech-app *,
+.fintech-app *::before,
+.fintech-app *::after {
+  box-sizing: border-box;
+}
+
+/* Sidebar (Hidden on mobile/tablet, shown on desktop >= 1000px) */
+.fintech-sidebar {
+  display: none;
+}
+
+/* Topbar */
+.fintech-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 18px 13px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  min-height: 72px;
+  position: relative;
+  z-index: 3;
+}
+
+.fintech-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  white-space: nowrap;
+  text-decoration: none;
+  color: inherit;
+}
+
+.fintech-logo-mark {
+  width: 34px;
+  height: 34px;
+  background: var(--orange);
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  box-shadow: 0 5px 12px rgba(239, 104, 48, 0.25);
+  font-weight: 900;
+  font-size: 18px;
+}
+
+.fintech-logo-word {
+  font-size: 22px;
+  font-weight: 820;
+  letter-spacing: -1.1px;
+  color: var(--ink);
+}
+
+.fintech-logo-word span {
+  color: var(--orange);
+}
+
+.fintech-topbar-breadcrumb {
+  display: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fintech-topbar-breadcrumb strong {
+  color: var(--ink);
+  font-weight: 750;
+}
+
+.fintech-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fintech-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--secondary);
+  cursor: pointer;
+  transition: transform 0.15s, background-color 0.15s;
+}
+
+.fintech-icon-btn:hover {
+  background: var(--panel-subtle);
+  color: var(--ink);
+}
+
+.fintech-icon-btn:active {
+  transform: scale(0.96);
+}
+
+.fintech-icon-btn .ping {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  position: absolute;
+  right: 9px;
+  top: 7px;
+  background: var(--orange);
+  border: 1px solid var(--panel);
+}
+
+.fintech-avatar {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--orange-wash);
+  color: var(--orange);
+  font-size: 13px;
+  font-weight: 800;
+  border: 1px solid rgba(243, 106, 43, 0.2);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* Main Content Area */
+.fintech-mainframe {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fintech-content {
+  padding: 24px 16px calc(105px + env(safe-area-inset-bottom, 0px));
+  max-width: 1150px;
+  margin: 0 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Screen Headings */
+.fintech-eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 1.8px;
+  color: var(--orange);
+  font-weight: 820;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+}
+
+.fintech-screen-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.fintech-screen-head h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.95px;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.fintech-screen-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.fintech-small-secure {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--positive);
+  padding: 6px 10px;
+  background: var(--positive-wash);
+  border-radius: 9px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+/* Grids */
+.fintech-dashboard-grid,
+.fintech-wallet-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.fintech-stack {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* ==========================================================================
+   Wallet Hero Card (Dark Charcoal Radial Gradient)
+   ========================================================================== */
+.fintech-wallet-hero {
+  background: radial-gradient(circle at 98% -6%, #403d3d 0%, #252831 44%, #1b1e26 84%);
+  border-radius: 24px;
+  padding: 22px;
+  color: #ffffff;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: 236px;
+  box-shadow: 0 20px 32px rgba(27, 30, 38, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fintech-wallet-hero::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 235px;
+  height: 235px;
+  border-radius: 50%;
+  right: -82px;
+  top: -100px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 0 0 34px rgba(255, 255, 255, 0.03), 0 0 0 74px rgba(255, 255, 255, 0.02);
+}
+
+.fintech-wallet-hero::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 150px;
+  height: 150px;
+  right: 12%;
+  bottom: -102px;
+  border-radius: 50%;
+  filter: blur(28px);
+  background: rgba(243, 106, 43, 0.18);
+}
+
+.fintech-hero-overline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  color: #d1d4db;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.fintech-hero-overline .tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  color: #a9f3d6;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 6px 10px;
+  border-radius: 100px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-weight: 700;
+}
+
+.fintech-hero-overline .tag .online {
+  display: inline-block;
+  height: 6px;
+  width: 6px;
+  background: #70ddb5;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(112, 221, 181, 0.25);
+}
+
+.fintech-hero-amount-label {
+  color: #aeb2bb;
+  font-size: 11.5px;
+  margin: 24px 0 8px;
+}
+
+.fintech-hero-amount {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 32px;
+  font-weight: 820;
+  letter-spacing: -1.3px;
+  white-space: nowrap;
+  line-height: 1.15;
+}
+
+.fintech-eye-btn {
+  background: transparent;
+  color: #bec2ca;
+  border: 0;
+  padding: 4px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.fintech-eye-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.fintech-hero-sub {
+  color: #b1b5bf;
+  font-size: 11px;
+  margin: 10px 0 22px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fintech-hero-sub svg {
+  color: #c3c6cd;
+}
+
+.fintech-hero-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* Buttons */
+.fintech-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 12px 14px;
+  min-height: 44px;
+  line-height: 1.3;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.15s, background-color 0.15s, border-color 0.15s;
+}
+
+.fintech-btn:active {
+  transform: translateY(1px);
+}
+
+.fintech-btn-orange {
+  color: #ffffff;
+  background: var(--orange);
+}
+
+.fintech-btn-orange:hover {
+  background: var(--orange-dark);
+}
+
+.fintech-btn-hero-alt {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.fintech-btn-hero-alt:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.fintech-btn-outline {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.fintech-btn-outline:hover {
+  background: var(--panel-subtle);
+  border-color: var(--muted);
+}
+
+.fintech-btn-soft {
+  background: var(--orange-wash);
+  color: var(--orange);
+  border-color: transparent;
+}
+
+.fintech-btn-soft:hover {
+  background: rgba(243, 106, 43, 0.2);
+}
+
+/* Account Stats Cards */
+.fintech-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.fintech-stat {
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 16px 14px;
+  min-height: 112px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  box-shadow: var(--shadow);
+}
+
+.fintech-stat-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.fintech-stat-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--orange-wash);
+  color: var(--orange);
+}
+
+.fintech-stat.stat-blue .fintech-stat-icon {
+  background: var(--blue-wash);
+  color: var(--blue);
+}
+
+.fintech-stat strong {
+  display: block;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  font-size: 22px;
+  margin-top: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.fintech-stat-footer {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+/* Marketplace / Shop Banner */
+.fintech-shop-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  border-radius: 16px;
+  padding: 15px 16px;
+  background: var(--orange-wash);
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.15s, background-color 0.15s;
+}
+
+.fintech-shop-banner:hover {
+  background: rgba(243, 106, 43, 0.15);
+}
+
+.fintech-shop-banner strong {
+  font-size: 12.5px;
+  display: block;
+  color: var(--ink);
+}
+
+.fintech-shop-banner span span {
+  display: block;
+  color: var(--secondary);
+  font-size: 10.5px;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.fintech-shop-arrow {
+  width: 32px;
+  height: 32px;
+  border-radius: 11px;
+  background: var(--panel);
+  display: grid;
+  place-items: center;
+  color: var(--orange);
+  flex: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+
+/* Standard Panels */
+.fintech-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.fintech-panel-pad {
+  padding: 18px 16px;
+}
+
+.fintech-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.fintech-panel-heading h2 {
+  font-size: 15px;
+  letter-spacing: -0.3px;
+  line-height: 1.2;
+  margin: 0;
+  font-weight: 780;
+  color: var(--ink);
+}
+
+.fintech-panel-heading .hint {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
+.fintech-more {
+  border: 0;
+  background: transparent;
+  color: var(--orange);
+  font-size: 11px;
+  font-weight: 780;
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  white-space: nowrap;
+  padding: 6px 0;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.fintech-more:hover {
+  color: var(--orange-dark);
+}
+
+/* Transaction List & Rows */
+.fintech-tx-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fintech-tx-list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.fintech-tx-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  text-align: left;
+  gap: 12px;
+  background: transparent;
+  padding: 12px 0;
+  border: 0;
+  color: var(--ink);
+  min-width: 0;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.fintech-tx-row:hover .fintech-tx-copy strong {
+  color: var(--orange);
+}
+
+.fintech-tx-symbol {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--orange);
+  background: var(--orange-wash);
+}
+
+.fintech-tx-symbol.credit {
+  color: var(--positive);
+  background: var(--positive-wash);
+}
+
+.fintech-tx-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.fintech-tx-copy strong {
+  font-size: 12px;
+  font-weight: 750;
+  display: block;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.fintech-tx-copy small {
+  display: block;
+  color: var(--muted);
+  font-size: 10.5px;
+  margin-top: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fintech-tx-right {
+  text-align: right;
+  margin-left: auto;
+  flex: none;
+  max-width: 44%;
+}
+
+.fintech-tx-right strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: -0.15px;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.fintech-tx-right strong.positive {
+  color: var(--positive);
+}
+
+.fintech-tx-right small {
+  display: block;
+  color: var(--muted);
+  font-size: 9.5px;
+  margin-top: 4px;
+}
+
+/* Status Pills */
+.fintech-small-pill {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 750;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--positive-wash);
+  color: var(--positive);
+  text-transform: capitalize;
+}
+
+.fintech-small-pill.pending {
+  background: #fff5e2;
+  color: #a77824;
+}
+
+body.dark .fintech-small-pill.pending,
+html[data-site-theme="dark"] .fintech-small-pill.pending {
+  background: #3d3322;
+  color: #e8b75d;
+}
+
+.fintech-small-pill.failed {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+/* Order List (Overview) */
+.fintech-order-list {
+  display: grid;
+  gap: 0;
+}
+
+.fintech-order-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.fintech-order-item:first-child {
+  border-top: 0;
+}
+
+.fintech-order-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--panel-subtle);
+  border: 1px solid var(--line);
+  color: var(--secondary);
+  flex: none;
+}
+
+.fintech-order-item .fintech-order-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.fintech-order-info strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  color: var(--ink);
+}
+
+.fintech-order-info small {
+  color: var(--muted);
+  font-size: 10px;
+  display: block;
+  margin-top: 4px;
+}
+
+.fintech-order-side {
+  text-align: right;
+  flex: none;
+}
+
+.fintech-order-side strong {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   Wallet Page Panels & Sections
+   ========================================================================== */
+.fintech-funding-explainer {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-radius: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.fintech-funding-explainer .bolt {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--orange-wash);
+  color: var(--orange);
+  flex: none;
+}
+
+.fintech-funding-explainer h3 {
+  font-size: 12.5px;
+  margin: 0 0 5px;
+  font-weight: 780;
+  color: var(--ink);
+}
+
+.fintech-funding-explainer p {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* How funding works */
+.fintech-how {
+  padding: 18px 16px;
+}
+
+.fintech-how h2 {
+  font-size: 14.5px;
+  margin: 0 0 14px;
+  letter-spacing: -0.2px;
+  color: var(--ink);
+  font-weight: 780;
+}
+
+.fintech-how-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 14px;
+}
+
+.fintech-step-num {
+  height: 26px;
+  width: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--orange-wash);
+  color: var(--orange);
+  font-size: 10.5px;
+  font-weight: 800;
+  flex: none;
+}
+
+.fintech-how-step strong {
+  font-size: 11.5px;
+  display: block;
+  margin: 1px 0 4px;
+  color: var(--ink);
+}
+
+.fintech-how-step p {
+  color: var(--muted);
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+/* Transactions History Panel */
+.fintech-history-panel .fintech-panel-heading {
+  padding: 18px 16px 6px;
+  margin: 0;
+}
+
+.fintech-history-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 8px;
+}
+
+.fintech-filter-bar {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.fintech-filter-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.fintech-filter {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--secondary);
+  border-radius: 9px;
+  font-size: 10.5px;
+  font-weight: 720;
+  padding: 7px 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.fintech-filter.active {
+  color: var(--orange);
+  background: var(--orange-wash);
+  border-color: transparent;
+}
+
+.fintech-search-trigger {
+  flex: none;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  background: var(--panel-subtle);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  width: 34px;
+  height: 34px;
+  color: var(--secondary);
+  cursor: pointer;
+}
+
+.fintech-tx-search {
+  padding: 4px 16px 12px;
+}
+
+.fintech-tx-search input {
+  width: 100%;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-subtle);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--ink);
+  outline: 0;
+}
+
+.fintech-tx-search input:focus {
+  border-color: var(--orange);
+}
+
+.fintech-group-label {
+  padding: 10px 16px 4px;
+  color: var(--muted);
+  background: var(--panel-subtle);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  font-weight: 800;
+}
+
+.fintech-history-list {
+  padding: 0 16px;
+}
+
+.fintech-history-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  color: var(--muted);
+  gap: 10px;
+}
+
+.fintech-empty-state {
+  text-align: center;
+  padding: 34px 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.fintech-empty-state .icon {
+  display: block;
+  margin: 0 auto 10px;
+  color: var(--orange);
+}
+
+/* ==========================================================================
+   Mobile Bottom Navigation
+   ========================================================================== */
+.fintech-mobile-nav {
+  position: fixed;
+  z-index: 40;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: stretch;
+  padding: 8px max(7px, env(safe-area-inset-left, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(7px, env(safe-area-inset-right, 0px));
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.04);
+}
+
+.fintech-mobile-nav .nav-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  padding: 0 2px 2px;
+  min-height: 48px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.15s, color 0.15s;
+}
+
+.fintech-mobile-nav .nav-icon {
+  width: 36px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  transition: background-color 0.2s;
+}
+
+.fintech-mobile-nav .nav-icon svg {
+  height: 19px;
+  width: 19px;
+}
+
+.fintech-mobile-nav .nav-link span:last-child {
+  font-size: 9.5px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.fintech-mobile-nav .nav-link.active {
+  color: var(--orange);
+}
+
+.fintech-mobile-nav .nav-link.active .nav-icon {
+  background: var(--orange-wash);
+}
+
+.fintech-mobile-nav .nav-link:active {
+  transform: scale(0.96);
+}
+
+/* ==========================================================================
+   Bottom Sheets & Overlays
+   ========================================================================== */
+.fintech-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(13, 18, 28, 0.56);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  animation: fintechFadeIn 0.2s ease;
+}
+
+@keyframes fintechFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.fintech-sheet {
+  background: var(--panel);
+  width: 100%;
+  border-radius: 24px 24px 0 0;
+  padding: 12px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+  max-height: 92dvh;
+  overflow-y: auto;
+  box-shadow: 0 -18px 55px rgba(0, 0, 0, 0.2);
+  animation: fintechSlideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fintechSlideUp {
+  from { transform: translateY(32px); opacity: 0.6; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.fintech-handle {
+  width: 38px;
+  height: 4px;
+  border-radius: 10px;
+  background: var(--line);
+  margin: 0 auto 16px;
+}
+
+.fintech-sheet-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.fintech-sheet-title h2 {
+  font-size: 18px;
+  letter-spacing: -0.5px;
+  margin: 0;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.fintech-sheet-title .close {
+  border: 0;
+  background: var(--panel-subtle);
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--secondary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.fintech-sheet-title .close:hover {
+  color: var(--ink);
+  background: var(--line);
+}
+
+.fintech-sheet-subtitle {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin: -8px 0 18px;
+  line-height: 1.55;
+}
+
+.fintech-input-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 760;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+
+.fintech-amount-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1.5px solid var(--line);
+  background: var(--panel-subtle);
+  border-radius: 14px;
+  padding: 12px 16px;
+  transition: border-color 0.15s;
+}
+
+.fintech-amount-box:focus-within {
+  border-color: var(--orange);
+}
+
+.fintech-amount-box span {
+  font-size: 22px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.fintech-amount-box input {
+  font-size: 26px;
+  font-weight: 800;
+  width: 100%;
+  min-width: 0;
+  outline: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+}
+
+.fintech-quick-amounts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 12px 0 20px;
+}
+
+.fintech-quick-amounts button {
+  border: 1px solid var(--line);
+  color: var(--secondary);
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 9px 2px;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.fintech-quick-amounts button:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+  background: var(--orange-wash);
+}
+
+.fintech-notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--panel-subtle);
+  border: 1px solid var(--line);
+  padding: 13px;
+  border-radius: 13px;
+  font-size: 11px;
+  color: var(--secondary);
+  line-height: 1.55;
+  margin: 16px 0 20px;
+}
+
+.fintech-notice svg {
+  color: var(--orange);
+  flex: none;
+  margin-top: 1px;
+}
+
+.fintech-full {
+  width: 100%;
+}
+
+.fintech-field-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+}
+
+.fintech-field-line span {
+  color: var(--muted);
+}
+
+.fintech-field-line strong {
+  text-align: right;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+/* Temporary Bank Account Box */
+.fintech-bank-box {
+  margin: 16px 0;
+  background: var(--panel-subtle);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 16px;
+}
+
+.fintech-bank-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.fintech-bank-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.fintech-bank-val {
+  font-size: 12.5px;
+  font-weight: 750;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fintech-mono-num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--orange);
+}
+
+.fintech-copy-btn {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.fintech-copy-btn:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.fintech-detail-top {
+  text-align: center;
+  padding: 8px 0 16px;
+}
+
+.fintech-detail-top .fintech-tx-symbol {
+  margin: 0 auto;
+  width: 52px;
+  height: 52px;
+  border-radius: 17px;
+}
+
+.fintech-detail-amount {
+  font-size: 28px;
+  font-weight: 820;
+  letter-spacing: -0.7px;
+  margin: 10px 0 6px;
+  color: var(--ink);
+}
+
+/* Toast */
+.fintech-toast {
+  position: fixed;
+  left: 14px;
+  right: 14px;
+  bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  background: #20242b;
+  color: #ffffff;
+  border-radius: 13px;
+  padding: 13px 16px;
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.2);
+  display: none;
+  max-width: 440px;
+  margin: 0 auto;
+}
+
+.fintech-toast.show {
+  display: block;
+  animation: fintechSlideUp 0.2s ease;
+}
+
+/* ==========================================================================
+   Responsive Breakpoints Specification
+   ========================================================================== */
+
+/* 1. Compact Mobile Layout (320px–355px) */
+@media (max-width: 355px) {
+  .fintech-content {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .fintech-wallet-hero {
+    padding: 18px;
+  }
+  .fintech-hero-amount {
+    font-size: 26px;
+  }
+  .fintech-stat {
+    padding: 13px 11px;
+  }
+  .fintech-stat strong {
+    font-size: 20px;
+  }
+  .fintech-topbar {
+    padding-left: 13px;
+    padding-right: 13px;
+  }
+  .fintech-logo-word {
+    font-size: 20px;
+  }
+  .fintech-mobile-nav .nav-link span:last-child {
+    font-size: 8.5px;
+  }
+  .fintech-quick-amounts {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* 2. Large Mobile Layout (520px–759px) */
+@media (min-width: 520px) {
+  .fintech-content {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+  .fintech-wallet-hero {
+    padding: 26px 28px;
+    min-height: 256px;
+  }
+  .fintech-hero-amount {
+    font-size: 36px;
+  }
+  .fintech-hero-amount-label {
+    margin-top: 32px;
+  }
+}
+
+/* 3. Tablet Layout (760px–999px) */
+@media (min-width: 760px) {
+  .fintech-content {
+    padding: 32px 30px 115px;
+  }
+  .fintech-dashboard-grid {
+    grid-template-columns: minmax(0, 1.04fr) minmax(0, 1fr);
+    gap: 20px;
+  }
+  .fintech-wallet-grid {
+    grid-template-columns: minmax(290px, 0.85fr) minmax(0, 1.15fr);
+    gap: 20px;
+  }
+  .fintech-screen-head h1 {
+    font-size: 32px;
+  }
+  .fintech-panel-pad {
+    padding: 22px;
+  }
+  .fintech-stats {
+    gap: 14px;
+  }
+  .fintech-sheet {
+    max-width: 480px;
+    margin-bottom: 7vh;
+    border-radius: 24px;
+    padding: 24px 26px;
+  }
+  .fintech-overlay {
+    align-items: center;
+  }
+  .fintech-handle {
+    display: none;
+  }
+  .fintech-toast {
+    bottom: 30px;
+  }
+}
+
+/* 4. Desktop Layout with Sidebar (1000px–1279px) */
+@media (min-width: 1000px) {
+  .fintech-app {
+    display: grid;
+    grid-template-columns: 236px minmax(0, 1fr);
+  }
+
+  .fintech-sidebar {
+    display: flex;
+    background: #1c2029;
+    color: #aeb5c1;
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    flex-direction: column;
+    padding: 28px 14px 22px;
+    min-height: 580px;
+    border-right: 1px solid #282f3c;
+    z-index: 10;
+  }
+
+  .fintech-sidebar .fintech-logo {
+    color: #ffffff;
+    padding: 0 10px 32px;
+  }
+
+  .fintech-sidebar .fintech-logo-word {
+    color: #ffffff;
+  }
+
+  .fintech-side-heading {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.7px;
+    color: #717b8d;
+    margin: 8px 14px 14px;
+  }
+
+  .fintech-side-links {
+    display: grid;
+    gap: 5px;
+  }
+
+  .fintech-side-links .side-nav-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 0;
+    border-radius: 11px;
+    text-align: left;
+    padding: 12px 14px;
+    font-size: 12.5px;
+    font-weight: 650;
+    color: #aeb5c1;
+    background: transparent;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+  }
+
+  .fintech-side-links .side-nav-link:hover {
+    background: #272d37;
+    color: #ffffff;
+  }
+
+  .fintech-side-links .side-nav-link.active {
+    background: #34323a;
+    color: #ffffff;
+  }
+
+  .fintech-side-links .side-nav-link.active svg {
+    color: var(--orange);
+  }
+
+  .fintech-side-spacer {
+    flex: 1;
+  }
+
+  .fintech-side-tip {
+    border-radius: 14px;
+    padding: 16px;
+    background: #242933;
+    border: 1px solid #323946;
+    margin: 5px 2px;
+  }
+
+  .fintech-side-tip strong {
+    font-size: 12px;
+    color: #ffffff;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .fintech-side-tip p {
+    font-size: 11px;
+    line-height: 1.55;
+    color: #a6afbd;
+    margin: 0 0 10px;
+  }
+
+  .fintech-side-tip a,
+  .fintech-side-tip button {
+    font-size: 11px;
+    border: 0;
+    background: none;
+    color: #ff9c69;
+    font-weight: 760;
+    padding: 0;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .fintech-side-tip a:hover,
+  .fintech-side-tip button:hover {
+    text-decoration: underline;
+  }
+
+  .fintech-mobile-nav {
+    display: none;
+  }
+
+  .fintech-topbar {
+    padding: 18px 36px;
+    min-height: 80px;
+  }
+
+  .fintech-topbar .fintech-logo {
+    display: none;
+  }
+
+  .fintech-topbar-breadcrumb {
+    display: block;
+  }
+
+  .fintech-content {
+    max-width: 1240px;
+    padding: 32px 36px 60px;
+  }
+
+  .fintech-dashboard-grid {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  }
+
+  .fintech-wallet-grid {
+    grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.25fr);
+  }
+
+  .fintech-hero-amount {
+    font-size: 38px;
+  }
+}
+
+/* 5. Wide Desktop Layout (1280px and above) */
+@media (min-width: 1280px) {
+  .fintech-app {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+
+  .fintech-dashboard-grid {
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
+  }
+
+  .fintech-wallet-grid {
+    grid-template-columns: minmax(340px, 0.85fr) minmax(0, 1.2fr);
+  }
+
+  .fintech-panel-pad {
+    padding: 24px;
+  }
+
+  .fintech-wallet-hero {
+    padding: 28px 32px;
+  }
+
+  .fintech-hero-amount {
+    font-size: 40px;
+  }
+
+  .fintech-content {
+    padding-left: 45px;
+    padding-right: 45px;
+  }
+}
+
+/* Profile and Settings Panel */
+.fintech-profile-card {
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.fintech-profile-card .fintech-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  font-size: 16px;
+}
+
+.fintech-profile-card strong {
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.fintech-profile-card small {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+
+.fintech-settings-panel {
+  padding: 0 16px;
+}
+
+.fintech-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 0;
+}
+
+.fintech-setting-row + .fintech-setting-row {
+  border-top: 1px solid var(--line);
+}
+
+.fintech-setting-icon {
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  width: 38px;
+  height: 38px;
+  background: var(--panel-subtle);
+  border: 1px solid var(--line);
+  color: var(--secondary);
+  flex: none;
+}
+
+.fintech-setting-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.fintech-setting-copy strong {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.fintech-setting-copy small {
+  color: var(--muted);
+  font-size: 10.5px;
+  display: block;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.fintech-switch {
+  height: 26px;
+  width: 44px;
+  border-radius: 30px;
+  padding: 3px;
+  background: #cbd0d7;
+  border: 0;
+  transition: background .2s;
+  flex: none;
+  cursor: pointer;
+  position: relative;
+}
+
+.fintech-switch::before {
+  content: "";
+  display: block;
+  background: #ffffff;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  transition: transform .2s;
+}
+
+.fintech-switch.on {
+  background: var(--orange);
+}
+
+.fintech-switch.on::before {
+  transform: translateX(18px);
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .fintech-app *,
+  .fintech-app *::before,
+  .fintech-app *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
