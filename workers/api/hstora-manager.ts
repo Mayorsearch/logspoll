@@ -247,6 +247,7 @@ export async function hstoraInternalDiag(request: Request, env: ApiEnv) {
         'X-Signature': sig,
       }),
       Accept: 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 LogsPoll/2.0',
       ...extraHeaders
     })
     try {
@@ -263,23 +264,20 @@ export async function hstoraInternalDiag(request: Request, env: ApiEnv) {
   }
 
   const variations: Array<{ name: string; url: string; template: string; secret: string | Uint8Array; headers: Record<string, string>; sigTransform?: (s: string) => string; noAuth?: boolean }> = [
-    { name: '1_doc_node_standard', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
-    ...(hexBytes ? [{ name: '2_secret_32_raw_bytes', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: hexBytes, headers: {} }] : []),
-    { name: '3_secret_no_prefix', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secretHex, headers: {} },
-    { name: '4_sha256_empty_body', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', secret: secret, headers: {} },
-    { name: '5_no_trailing_newline', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}', secret: secret, headers: {} },
-    { name: '6_no_empty_query_field', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
-    { name: '7_with_origin_logspoll_https', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://logspoll.com' } },
-    { name: '8_with_origin_logspoll_domain', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'logspoll.com' } },
-    { name: '9_with_referer_logspoll', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Referer: 'https://logspoll.com/' } },
-    { name: '10_with_origin_hstora', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://hstora.com' } },
-    { name: '11_catalog_no_query', url: 'https://hstora.com/api/v1/catalog', template: 'GET\n/api/v1/catalog\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
-    { name: '12_catalog_with_query', url: 'https://hstora.com/api/v1/catalog?page=1&limit=5', template: 'GET\n/api/v1/catalog\npage=1&limit=5\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
-    { name: '13_path_no_v1', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
-    { name: '14_uppercase_sig', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {}, sigTransform: s => s.toUpperCase() },
-    { name: '15_browser_ua', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 LogsPoll/2.0' } },
-    { name: '16_root_metadata_signed', url: 'https://hstora.com/api/v1/', template: 'GET\n/api/v1/\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
-    { name: '17_root_metadata_no_auth', url: 'https://hstora.com/api/v1/', template: '', secret: '', headers: {}, noAuth: true }
+    { name: '1_no_origin', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: {} },
+    { name: '2_origin_https_logspoll', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://logspoll.com' } },
+    { name: '3_origin_naked_logspoll', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'logspoll.com' } },
+    { name: '4_origin_http_logspoll', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'http://logspoll.com' } },
+    { name: '5_origin_https_www_logspoll', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://www.logspoll.com' } },
+    { name: '6_origin_www_logspoll', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'www.logspoll.com' } },
+    { name: '7_referer_https_logspoll_slash', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Referer: 'https://logspoll.com/' } },
+    { name: '8_referer_https_logspoll_noslash', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Referer: 'https://logspoll.com' } },
+    { name: '9_origin_and_referer_logspoll', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://logspoll.com', Referer: 'https://logspoll.com/' } },
+    { name: '10_origin_hstora', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://hstora.com' } },
+    { name: '11_origin_pages_dev', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://logspoll.pages.dev' } },
+    { name: '12_origin_localhost', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'http://localhost' } },
+    ...(creds.allowedOrigin ? [{ name: '13_stored_allowed_origin', url: 'https://hstora.com/api/v1/balance', template: 'GET\n/api/v1/balance\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: creds.allowedOrigin } }] : []),
+    { name: '14_catalog_with_origin_logspoll', url: 'https://hstora.com/api/v1/catalog', template: 'GET\n/api/v1/catalog\n\n{TIMESTAMP}\n{NONCE}\n', secret: secret, headers: { Origin: 'https://logspoll.com' } }
   ]
 
   const results = await Promise.all(variations.map(v => testVar(v.name, v.url, v.template, v.secret, v.headers, v.sigTransform, v.noAuth)))
@@ -288,7 +286,8 @@ export async function hstoraInternalDiag(request: Request, env: ApiEnv) {
     key_len: key.length,
     secret_len: secret.length,
     secret_prefix: secret.slice(0, 8),
-    secret_is_hex: Boolean(hexBytes),
+    stored_allowed_origin: creds.allowedOrigin ?? null,
+    stored_base_url: creds.baseUrl ?? null,
     results
   })
 }
