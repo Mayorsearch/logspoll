@@ -230,11 +230,14 @@ export async function hstoraInternalDiag(request: Request, env: ApiEnv) {
     crypto.getRandomValues(nonceBytes)
     const nonce = Array.from(nonceBytes, b => b.toString(16).padStart(2, '0')).join('')
     const canonical = canonicalTemplate.replace('{TIMESTAMP}', timestamp).replace('{NONCE}', nonce)
-    const secretKey = (typeof rawSecret === 'string' ? new TextEncoder().encode(rawSecret) : rawSecret) as BufferSource
-    const keyObj = await crypto.subtle.importKey('raw', secretKey, {name: 'HMAC', hash: 'SHA-256'}, false, ['sign'])
-    const sigBytes = await crypto.subtle.sign('HMAC', keyObj, new TextEncoder().encode(canonical))
-    let sig = Array.from(new Uint8Array(sigBytes), b => b.toString(16).padStart(2, '0')).join('')
-    if (sigTransform) sig = sigTransform(sig)
+    let sig = ''
+    if (!noAuth) {
+      const secretKey = (typeof rawSecret === 'string' ? new TextEncoder().encode(rawSecret) : rawSecret) as BufferSource
+      const keyObj = await crypto.subtle.importKey('raw', secretKey, {name: 'HMAC', hash: 'SHA-256'}, false, ['sign'])
+      const sigBytes = await crypto.subtle.sign('HMAC', keyObj, new TextEncoder().encode(canonical))
+      sig = Array.from(new Uint8Array(sigBytes), b => b.toString(16).padStart(2, '0')).join('')
+      if (sigTransform) sig = sigTransform(sig)
+    }
 
     const headers = new Headers({
       ...(noAuth ? {} : {
