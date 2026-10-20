@@ -296,7 +296,26 @@ export async function bulkPublishHstora(db: Database, markup_bps: number, usdRat
     )
     SELECT
       COALESCE(h.product_id, lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-      ?,
+      COALESCE(
+        (SELECT c.id FROM categories c WHERE c.active=1 AND (
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%facebook%' AND c.slug='ypg-buy-facebook-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%instagram%' AND c.slug='ypg-buy-instagram-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%tiktok%' AND c.slug='ypg-browse-tiktok-accounts-for-sale') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%twitter%' AND c.slug='ypg-buy-twitter-x-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%telegram%' AND c.slug='ypg-buy-telegram-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%gmail%' AND c.slug='ypg-buy-gmail-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%linkedin%' AND c.slug='ypg-buy-linkedin-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%discord%' AND c.slug='ypg-buy-discord-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%reddit%' AND c.slug='ypg-buy-reddit-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%youtube%' AND c.slug='ypg-buy-youtube-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%apple%' AND c.slug='ypg-buy-apple-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%icloud%' AND c.slug='ypg-buy-apple-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%dating%' AND c.slug='ypg-buy-dating-accounts') OR
+          (lower(json_extract(h.metadata,'$.name')) LIKE '%vpn%' AND c.slug='ypg-buy-vpn-accounts')
+        ) LIMIT 1),
+        (SELECT c.id FROM categories c WHERE c.active=1 AND lower(c.name)=lower(json_extract(h.metadata,'$.category.name')) LIMIT 1),
+        ?
+      ),
       'hstora-' || h.external_id,
       substr(COALESCE(json_extract(h.metadata,'$.name'), 'Server 1 Product'), 1, 200),
       substr(COALESCE(h.manual_description, json_extract(h.metadata,'$.description'), json_extract(h.metadata,'$.name'), 'HStora verified digital product'), 1, 10000),
@@ -311,8 +330,10 @@ export async function bulkPublishHstora(db: Database, markup_bps: number, usdRat
       1
     FROM hstora_catalog_items h
     WHERE h.approval_status='approved' AND h.selling_price_minor>0
+      AND COALESCE(CAST(json_extract(h.metadata,'$.stock') AS INTEGER), 0) > 0
+      AND COALESCE(json_extract(h.metadata,'$.supplier_available'), 1) <> 0
     ON CONFLICT(slug) DO UPDATE SET
-      status='active',
+      status=excluded.status,
       publication_verified=1,
       authorized_resale=1,
       price_minor=${restore_overrides ? "excluded.price_minor" : "CASE WHEN products.pricing_mode='override' THEN products.price_minor ELSE excluded.price_minor END"},
@@ -320,7 +341,7 @@ export async function bulkPublishHstora(db: Database, markup_bps: number, usdRat
       category_id=excluded.category_id`).bind(hstoraCat),
   db.prepare(`UPDATE hstora_catalog_items
     SET product_id=(SELECT p.id FROM products p WHERE p.slug='hstora-' || hstora_catalog_items.external_id),
-        published=1
+        published=CASE WHEN COALESCE(CAST(json_extract(metadata,'$.stock') AS INTEGER), 0) > 0 AND COALESCE(json_extract(metadata,'$.supplier_available'), 1) <> 0 THEN 1 ELSE 0 END
     WHERE approval_status='approved'`),
   db.prepare(`INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
     SELECT

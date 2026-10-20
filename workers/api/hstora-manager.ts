@@ -187,14 +187,29 @@ export async function syncHstoraBatch(env:ApiEnv){
   if(due.results.length){const refreshed=await Promise.all(due.results.map(async item=>({...await readHstoraDetail(credentials,item.external_id),stock_checked_at:Date.now()})));await commit(refreshed.map(detail=>db.prepare('UPDATE hstora_catalog_items SET metadata=?,checked_at=? WHERE external_id=?').bind(JSON.stringify(detail),detail.stock_checked_at,detail.id)));return}
   const fresh=!row.job_id||['idle','complete'].includes(row.phase),job=fresh?crypto.randomUUID():row.job_id!,page=fresh?1:row.page
   if(fresh||row.phase==='listings'){
-   const batch=await readHstoraPage(credentials,page,25)
-   if(!fresh&&row.total!==batch.total){await commit([db.prepare("UPDATE hstora_connection SET phase='idle',job_id=NULL,page=1,total=NULL,scanned=0,requested=1,last_status='Supplier total changed; restarting private snapshot' WHERE id='hstora'")]);return}
-   const writes=batch.items.map(item=>db.prepare('INSERT INTO hstora_snapshot_items(job_id,external_id,metadata) VALUES(?,?,?)').bind(job,item.id,JSON.stringify({...item,stock_checked_at:Date.now()})))
-   writes.push(db.prepare("UPDATE hstora_connection SET job_id=?,page=?,total=?,scanned=?,phase=?,requested=0,last_status='Catalog batch saved' WHERE id='hstora'").bind(job,page+1,batch.total,Math.min(page*25,batch.total),batch.next_page===null?'details':'listings'))
-   await commit(writes);return
+   let currentPage = page
+   let nextPhase = 'listings'
+   const deadline = Date.now() + 25000
+   while (Date.now() < deadline && nextPhase === 'listings') {
+     const batch = await readHstoraPage(credentials, currentPage, 25)
+     if (!fresh && row.total && row.total !== batch.total) {
+       await commit([db.prepare("UPDATE hstora_connection SET phase='idle',job_id=NULL,page=1,total=NULL,scanned=0,requested=1,last_status='Supplier total changed; restarting private snapshot' WHERE id='hstora'")]);
+       return
+     }
+     const writes = batch.items.map(item => db.prepare('INSERT INTO hstora_snapshot_items(job_id,external_id,metadata,detail_done) VALUES(?,?,?,?)').bind(job, item.id, JSON.stringify({...item, stock_checked_at: Date.now()}), item.requires_details ? 0 : 1))
+     if (batch.next_page === null) {
+       const pendingDetails = await db.prepare("SELECT count(*) n FROM hstora_snapshot_items WHERE job_id=? AND detail_done=0").bind(job).first<{n:number}>()
+       nextPhase = (pendingDetails?.n ?? 0) > 0 ? 'details' : 'finalize'
+     }
+     writes.push(db.prepare("UPDATE hstora_connection SET job_id=?,page=?,total=?,scanned=?,phase=?,requested=0,last_status='Catalog batch saved' WHERE id='hstora'").bind(job, currentPage + 1, batch.total, Math.min(currentPage * 25, batch.total), nextPhase))
+     await commit(writes)
+     currentPage++
+     if (batch.next_page === null) break
+   }
+   return
   }
   if(row.phase==='details'){
-   const items=await db.prepare('SELECT external_id,metadata FROM hstora_snapshot_items WHERE job_id=? AND detail_done=0 LIMIT 5').bind(job).all<{external_id:string;metadata:string}>()
+   const items=await db.prepare('SELECT external_id,metadata FROM hstora_snapshot_items WHERE job_id=? AND detail_done=0 LIMIT 25').bind(job).all<{external_id:string;metadata:string}>()
    if(items.results.length){const details=await Promise.all(items.results.map(async item=>{const old=JSON.parse(item.metadata),detail=await readHstoraDetail(credentials,item.external_id);return {...old,...detail,description:detail.description||old.description,images:detail.images.length?detail.images:old.images,category:detail.category??old.category,stock_checked_at:Date.now()}}));await commit(details.map(detail=>db.prepare('UPDATE hstora_snapshot_items SET metadata=?,detail_done=1 WHERE job_id=? AND external_id=?').bind(JSON.stringify(detail),job,detail.id)));return}
    await commit([db.prepare("UPDATE hstora_connection SET phase='finalize' WHERE id='hstora'")]);return
   }
