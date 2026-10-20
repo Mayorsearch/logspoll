@@ -225,6 +225,6 @@ export async function syncHstoraBatch(env:ApiEnv){
     db.prepare("UPDATE hstora_connection SET phase='complete',last_success=?,last_status='Complete private snapshot; review required',requested=0 WHERE id='hstora'").bind(now),
    ])
   }
- }catch(error){const message=error instanceof HstoraError?error.message:'HStora storage or credential operation failed.';await db.prepare("UPDATE hstora_connection SET last_status=?,next_attempt=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND revision=? AND lease_owner=?").bind(message,Date.now()+(error instanceof HstoraError?([401,403].includes(error.status)?600000:error.retryAfterMs):60000),row.revision,owner).run()}
+ }catch(error){const message=error instanceof HstoraError?error.message:(error instanceof Error?error.message:'HStora storage or credential operation failed.');await db.prepare("UPDATE hstora_connection SET last_status=?,next_attempt=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND revision=? AND lease_owner=?").bind(message,Date.now()+(error instanceof HstoraError?([401,403].includes(error.status)?600000:error.retryAfterMs):60000),row.revision,owner).run()}
 }
 
