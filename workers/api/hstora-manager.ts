@@ -177,10 +177,10 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
 export async function syncHstoraBatch(env:ApiEnv){
  if(env.CATALOG_SYNC_ENABLED!=='true'||!env.DB)return
  const db=env.DB,now=Date.now(),owner=crypto.randomUUID()
- const row=await db.prepare("UPDATE hstora_connection SET lease_owner=?,lease_until=? WHERE id='hstora' AND enabled=1 AND next_attempt<=? AND (EXISTS(SELECT 1 FROM hstora_catalog_items WHERE approval_status='approved' AND COALESCE(json_extract(metadata,'$.supplier_available'),1)<>0 AND checked_at<?) OR requested=1 OR phase IN('listings','details','finalize') OR last_success IS NOT NULL AND last_success<=?) AND (lease_until IS NULL OR lease_until<=?) RETURNING *").bind(owner,now+60000,now,now-1800000,now-43200000,now).first<Connection>()
+ const row=await db.prepare("UPDATE hstora_connection SET lease_owner=?,lease_until=? WHERE id='hstora' AND enabled=1 AND next_attempt<=? AND (EXISTS(SELECT 1 FROM hstora_catalog_items WHERE approval_status='approved' AND COALESCE(json_extract(metadata,'$.supplier_available'),1)<>0 AND checked_at<?) OR requested=1 OR phase IN('listings','details','finalize') OR last_success IS NOT NULL AND last_success<=?) AND (lease_until IS NULL OR lease_until<=?) RETURNING *").bind(owner,now+180000,now,now-1800000,now-43200000,now).first<Connection>()
  if(!row)return
  const fence=()=>db.prepare("INSERT INTO hstora_sync_fences(owner,valid) SELECT ?,CASE WHEN EXISTS(SELECT 1 FROM hstora_connection WHERE id='hstora' AND enabled=1 AND revision=? AND lease_owner=? AND lease_until>?) THEN 1 ELSE 0 END").bind(owner,row.revision,owner,Date.now())
- async function commit(statements:Statement[]){await db.batch([fence(),...statements,db.prepare('DELETE FROM hstora_sync_fences WHERE owner=?').bind(owner),db.prepare("UPDATE hstora_connection SET lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND lease_owner=?").bind(owner)])}
+ async function commit(statements:Statement[], releaseLease = true){await db.batch([fence(),...statements,db.prepare('DELETE FROM hstora_sync_fences WHERE owner=?').bind(owner),...(releaseLease?[db.prepare("UPDATE hstora_connection SET lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND lease_owner=?").bind(owner)]:[] )])}
  try{
   const credentials=JSON.parse(await openCredential(row.ciphertext,row.nonce,'hstora',env.SUPPLIER_ENCRYPTION_KEY)) as HstoraCredentials
   const due=await db.prepare("SELECT external_id FROM hstora_catalog_items WHERE approval_status='approved' AND COALESCE(json_extract(metadata,'$.supplier_available'),1)<>0 AND checked_at<? ORDER BY checked_at LIMIT 5").bind(now-1800000).all<{external_id:string}>()
@@ -201,10 +201,14 @@ export async function syncHstoraBatch(env:ApiEnv){
        const pendingDetails = await db.prepare("SELECT count(*) n FROM hstora_snapshot_items WHERE job_id=? AND detail_done=0").bind(job).first<{n:number}>()
        nextPhase = (pendingDetails?.n ?? 0) > 0 ? 'details' : 'finalize'
      }
+     const isLast = batch.next_page === null || Date.now() >= deadline - 2000
      writes.push(db.prepare("UPDATE hstora_connection SET job_id=?,page=?,total=?,scanned=?,phase=?,requested=0,last_status='Catalog batch saved' WHERE id='hstora'").bind(job, currentPage + 1, batch.total, Math.min(currentPage * 25, batch.total), nextPhase))
-     await commit(writes)
+     await commit(writes, isLast)
+     if (isLast) break
      currentPage++
-     if (batch.next_page === null) break
+   }
+   if (nextPhase === 'listings') {
+     await db.prepare("UPDATE hstora_connection SET lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND lease_owner=?").bind(owner).run().catch(()=>{})
    }
    return
   }
