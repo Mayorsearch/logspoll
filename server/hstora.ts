@@ -99,14 +99,21 @@ async function get(credentials:HstoraCredentials,path:string,query='',timeout=20
  return object(envelope.data)
 }
 export function normalizeHstoraProduct(value:unknown){
- const p=object(value),id=externalId(p.id),name=text(p.name,2000),currency=text(p.currency,3)
- if(!name||!/^[A-Z]{3}$/.test(currency)||!Number.isSafeInteger(p.stock_available)||Number(p.stock_available)<0||Number(p.stock_available)>1000000)throw new HstoraError('Invalid HStora product identity, currency or stock.')
+ const p=object(value),id=externalId(p.id)
+ const name=text(p.name ?? p.title,2000)
+ const rawCurrency=text(p.currency,3)
+ const currency=rawCurrency ? rawCurrency.toUpperCase() : 'USD'
+ const rawStock=p.stock_available !== undefined ? p.stock_available : (p.stock !== undefined ? p.stock : (p.quantity !== undefined ? p.quantity : (p.inventory !== undefined ? p.inventory : 0)))
+ const stock=typeof rawStock === 'string' && /^\d+$/.test(rawStock) ? parseInt(rawStock, 10) : Number(rawStock)
+ if(!name) throw new HstoraError('Invalid HStora product name.')
+ if(!/^[A-Z]{3}$/.test(currency)) throw new HstoraError('Invalid HStora product currency: ' + currency)
+ if(!Number.isSafeInteger(stock)||stock<0||stock>10000000) throw new HstoraError('Invalid HStora product stock: ' + JSON.stringify(rawStock))
  const description=text(p.description,100000),shortDescription=text(p.short_description,10000)
  const supplied=[p.image_url,p.image,...(Array.isArray(p.images)?p.images:[])]
  const images=[...new Set(supplied.map(v=>v&&typeof v==='object'?(v as Record<string,unknown>).url:v).filter((v):v is string=>typeof v==='string').filter(v=>{try{const url=new URL(v);return Boolean(safeProductImage(url.href))}catch{return false}}))]
  const tiers=(Array.isArray(p.price_tiers)?p.price_tiers:[]).map(value=>{const tier=object(value);if(!Number.isSafeInteger(tier.min_quantity)||Number(tier.min_quantity)<1)throw new HstoraError('Invalid HStora bulk pricing.');return {min_quantity:Number(tier.min_quantity),unit_price:decimal(tier.unit_price)}})
  const category=p.category&&typeof p.category==='object'&&!Array.isArray(p.category)?object(p.category):null
- return {supplier:'hstora' as const,id,name,description,short_description:shortDescription,price:decimal(p.price),currency,stock:Number(p.stock_available),images,price_tiers:tiers,variants:(Array.isArray(p.variants)?p.variants:[]).map(value=>{const v=object(value);return {id:externalId(v.id),name:text(v.name,2000),...(v.price!==undefined?{price:decimal(v.price)}:{}),...(Number.isSafeInteger(v.stock_available)&&Number(v.stock_available)>=0?{stock:Number(v.stock_available)}:{})}}),category:category?{id:String(category.id??''),name:text(category.name??category.title,2000)}:null,storefront_category:HSTORA_STOREFRONT_CATEGORY,requires_details:!description,review_required:true as const}
+ return {supplier:'hstora' as const,id,name,description,short_description:shortDescription,price:decimal(p.price),currency,stock,images,price_tiers:tiers,variants:(Array.isArray(p.variants)?p.variants:[]).map(value=>{const v=object(value);const vStock=v.stock_available !== undefined ? v.stock_available : v.stock;return {id:externalId(v.id),name:text(v.name,2000),...(v.price!==undefined?{price:decimal(v.price)}:{}),...(Number.isSafeInteger(vStock)&&Number(vStock)>=0?{stock:Number(vStock)}:{})}}),category:category?{id:String(category.id??''),name:text(category.name??category.title,2000)}:null,storefront_category:HSTORA_STOREFRONT_CATEGORY,requires_details:!description,review_required:true as const}
 }
 export async function readHstoraPage(credentials:HstoraCredentials,page=1,limit=50){
  if(!Number.isSafeInteger(page)||page<1||!Number.isSafeInteger(limit)||limit<1||limit>100)throw new HstoraError('Invalid HStora page.',400)
