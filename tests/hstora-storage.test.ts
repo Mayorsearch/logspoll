@@ -34,3 +34,18 @@ test('bounded checkpoint resumes and publishes only a complete private snapshot,
   const before=calls;await syncHstoraBatch(env);assert.equal(calls,before)
  }finally{globalThis.fetch=old}
 })
+
+test('snapshot finalization handles deduplicated pagination drift without blocking publication',async()=>{
+ const {sqlite,env}=setup(),sealed=await sealCredential(JSON.stringify({key:'hs_pk_test',secret:'hs_sk_test'}),'hstora',env.SUPPLIER_ENCRYPTION_KEY)
+ sqlite.prepare("INSERT INTO hstora_connection(id,ciphertext,nonce,enabled,phase,job_id,page,total,scanned) VALUES('hstora',?,?,1,'finalize','drift-job-1',128,3169,3169)").run(sealed.ciphertext,sealed.nonce)
+ for(let i=1;i<=3148;i++){
+   sqlite.prepare("INSERT INTO hstora_snapshot_items(job_id,external_id,metadata,detail_done) VALUES('drift-job-1',?,?,1)")
+     .run(String(i),JSON.stringify({id:String(i),name:'Item '+i,price:'0.50',currency:'USD',stock:10,description:'Valid description',stock_checked_at:Date.now()}))
+ }
+ await syncHstoraBatch(env)
+ const count=sqlite.prepare("SELECT count(*) n FROM hstora_catalog_items").get()!.n
+ assert.equal(count,3148)
+ const conn=sqlite.prepare("SELECT phase,last_status FROM hstora_connection WHERE id='hstora'").get()!
+ assert.equal(conn.phase,'complete')
+ assert.match(conn.last_status,/3148 products imported/)
+})

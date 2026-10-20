@@ -9,6 +9,9 @@ type Status = {
   scanned: number
   total: number | null
   imported: number
+  in_stock?: number
+  published?: number
+  rejected?: number
   last_status: string
   last_success: number | null
   fx_rate_minor: number | null
@@ -318,17 +321,25 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
               <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>IMPORTED PRODUCTS</div>
               <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: 4 }}>{status.imported}</div>
               <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
-                {status.with_images} images · {status.with_descriptions} descriptions
+                {status.in_stock ?? 0} in stock · {status.published ?? 0} published
               </div>
             </div>
 
             <div style={{ background: 'var(--admin-subtle, #f8fafc)', padding: 12, borderRadius: 8 }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>SYNC PHASE</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>SYNC PHASE & PROGRESS</div>
               <div style={{ fontSize: '1.1rem', fontWeight: 600, marginTop: 4, textTransform: 'capitalize' }}>
                 {status.phase}
               </div>
               <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
-                {status.scanned}/{status.total ?? 'unknown'} scanned
+                {status.scanned}/{status.total ?? 'unknown'} processed
+              </div>
+            </div>
+
+            <div style={{ background: 'var(--admin-subtle, #f8fafc)', padding: 12, borderRadius: 8 }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>REJECTED / UNPUBLISHED</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: 4 }}>{status.rejected ?? 0}</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
+                0 stock or review required
               </div>
             </div>
 

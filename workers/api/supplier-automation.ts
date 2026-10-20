@@ -317,8 +317,8 @@ export async function bulkPublishHstora(db: Database, markup_bps: number, usdRat
         ?
       ),
       'hstora-' || h.external_id,
-      substr(COALESCE(json_extract(h.metadata,'$.name'), 'Server 1 Product'), 1, 200),
-      substr(COALESCE(h.manual_description, json_extract(h.metadata,'$.description'), json_extract(h.metadata,'$.name'), 'HStora verified digital product'), 1, 10000),
+      substr(COALESCE(NULLIF(trim(json_extract(h.metadata,'$.name')), ''), 'Server 1 Product'), 1, 200),
+      substr(COALESCE(NULLIF(trim(h.manual_description), ''), NULLIF(trim(json_extract(h.metadata,'$.description')), ''), NULLIF(trim(json_extract(h.metadata,'$.name')), ''), 'HStora verified digital product'), 1, 10000),
       h.selling_price_minor,
       'HStora',
       1,

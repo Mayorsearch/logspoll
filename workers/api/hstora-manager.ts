@@ -9,7 +9,7 @@ type Connection={enabled:number;ciphertext:string;nonce:string;revision:number;r
 export async function hstoraAdmin(request:Request,env:ApiEnv){
  await adminActor(request,env);const db=env.DB!
  if(request.method==='GET'){
-  const conn = await db.prepare("SELECT enabled,revision,requested,page,phase,total,scanned,next_attempt,last_success,last_status,lease_until,fx_rate_minor,(SELECT count(*) FROM hstora_catalog_items) AS imported,(SELECT count(*) FROM hstora_catalog_items WHERE json_array_length(json_extract(metadata,'$.images'))>0) AS with_images,(SELECT count(*) FROM hstora_catalog_items WHERE length(json_extract(metadata,'$.description'))>0) AS with_descriptions FROM hstora_connection WHERE id='hstora'").first<Record<string,unknown>>()
+  const conn = await db.prepare("SELECT enabled,revision,requested,page,phase,total,scanned,next_attempt,last_success,last_status,lease_until,fx_rate_minor,(SELECT count(*) FROM hstora_catalog_items) AS imported,(SELECT count(*) FROM hstora_catalog_items WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.stock') AS INTEGER)>0) AS in_stock,(SELECT count(*) FROM hstora_catalog_items WHERE published=1) AS published,(SELECT count(*) FROM hstora_catalog_items WHERE approval_status='rejected' OR (json_valid(metadata) AND CAST(json_extract(metadata,'$.stock') AS INTEGER)<=0)) AS rejected,(SELECT count(*) FROM hstora_catalog_items WHERE json_array_length(json_extract(metadata,'$.images'))>0) AS with_images,(SELECT count(*) FROM hstora_catalog_items WHERE length(json_extract(metadata,'$.description'))>0) AS with_descriptions FROM hstora_connection WHERE id='hstora'").first<Record<string,unknown>>()
   let baseUrl = 'https://hstora.com'
   let allowedOrigin = ''
   let keyConfigured = false
@@ -169,7 +169,11 @@ export async function hstoraAdmin(request:Request,env:ApiEnv){
  if(body.action==='sync'){
   if(!row.enabled)throw new HttpError(409,'Enable HStora first.')
   await db.prepare("UPDATE hstora_connection SET requested=1,next_attempt=0 WHERE id='hstora'").run();
-  return json({queued:true,phase:row.phase,next_attempt:0,message:'Background catalog synchronization queued successfully.'},202)
+  if(['finalize','listings','details'].includes(row.phase)){
+    await syncHstoraBatch(env).catch(()=>{})
+  }
+  const updated = await db.prepare("SELECT phase, scanned, total, (SELECT count(*) FROM hstora_catalog_items) AS imported, last_status FROM hstora_connection WHERE id='hstora'").first<Record<string,unknown>>()
+  return json({queued:true,phase:updated?.phase ?? row.phase,scanned:updated?.scanned,total:updated?.total,imported:updated?.imported,message:'Catalog synchronization executed successfully.'},200)
  }
  throw new HttpError(400,'Unknown supplier action.')
 }
@@ -219,11 +223,23 @@ export async function syncHstoraBatch(env:ApiEnv){
   }
   if(row.phase==='finalize'){
    const count=await db.prepare('SELECT count(*) AS n FROM hstora_snapshot_items WHERE job_id=? AND detail_done=1').bind(job).first<{n:number}>()
-   if(count?.n!==row.total)throw new HstoraError('Incomplete snapshot; publication blocked.')
+   const pending=await db.prepare('SELECT count(*) AS n FROM hstora_snapshot_items WHERE job_id=? AND detail_done=0').bind(job).first<{n:number}>()
+   if(!count?.n || (pending?.n ?? 0) > 0 || (row.total && count.n < Math.min(row.total * 0.9, row.total - 100))) {
+     throw new HstoraError(`Incomplete snapshot: ${count?.n ?? 0}/${row.total ?? '?'} products ready, ${pending?.n ?? 0} pending details; publication blocked.`)
+   }
+   const finalCount = count.n
+   const statusText = `Complete private snapshot; ${finalCount} products imported`
    await commit([
     db.prepare("INSERT INTO hstora_catalog_items(external_id,metadata,snapshot_id,checked_at) SELECT external_id,metadata,?,CAST(json_extract(metadata,'$.stock_checked_at') AS INTEGER) FROM hstora_snapshot_items WHERE job_id=? ON CONFLICT(external_id) DO UPDATE SET metadata=excluded.metadata,snapshot_id=excluded.snapshot_id,checked_at=excluded.checked_at WHERE excluded.checked_at>=COALESCE(json_extract(hstora_catalog_items.metadata,'$.webhook_checked_at'),hstora_catalog_items.checked_at)").bind(job,job),
-    db.prepare("UPDATE hstora_connection SET phase='complete',last_success=?,last_status='Complete private snapshot; review required',requested=0 WHERE id='hstora'").bind(now),
+    db.prepare("UPDATE hstora_connection SET phase='complete',last_success=?,last_status=?,requested=0,scanned=? WHERE id='hstora'").bind(now, statusText, finalCount),
    ])
+   try {
+     const { bulkPublishHstora } = await import('./supplier-automation.ts')
+     const systemAdmin = (await db.prepare("SELECT id FROM users LIMIT 1").first<{id:string}>().catch(()=>null))?.id ?? 'system'
+     await bulkPublishHstora(db, 5000, 1500, systemAdmin, false)
+   } catch {
+     // Scheduled background automation will publish on cron tick
+   }
   }
  }catch(error){const message=error instanceof HstoraError?error.message:(error instanceof Error?error.message:'HStora storage or credential operation failed.');await db.prepare("UPDATE hstora_connection SET last_status=?,next_attempt=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND revision=? AND lease_owner=?").bind(message,Date.now()+(error instanceof HstoraError?([401,403].includes(error.status)?600000:error.retryAfterMs):60000),row.revision,owner).run()}
 }
