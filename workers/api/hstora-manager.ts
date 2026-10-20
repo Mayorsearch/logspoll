@@ -196,7 +196,7 @@ export async function syncHstoraBatch(env:ApiEnv){
        await commit([db.prepare("UPDATE hstora_connection SET phase='idle',job_id=NULL,page=1,total=NULL,scanned=0,requested=1,last_status='Supplier total changed; restarting private snapshot' WHERE id='hstora'")]);
        return
      }
-     const writes = batch.items.map(item => db.prepare('INSERT INTO hstora_snapshot_items(job_id,external_id,metadata,detail_done) VALUES(?,?,?,?)').bind(job, item.id, JSON.stringify({...item, stock_checked_at: Date.now()}), item.requires_details ? 0 : 1))
+     const writes = batch.items.map(item => db.prepare('INSERT INTO hstora_snapshot_items(job_id,external_id,metadata,detail_done) VALUES(?,?,?,?) ON CONFLICT(job_id,external_id) DO UPDATE SET metadata=excluded.metadata,detail_done=excluded.detail_done').bind(job, item.id, JSON.stringify({...item, stock_checked_at: Date.now()}), item.requires_details ? 0 : 1))
      if (batch.next_page === null) {
        const pendingDetails = await db.prepare("SELECT count(*) n FROM hstora_snapshot_items WHERE job_id=? AND detail_done=0").bind(job).first<{n:number}>()
        nextPhase = (pendingDetails?.n ?? 0) > 0 ? 'details' : 'finalize'
