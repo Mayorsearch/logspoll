@@ -7,7 +7,7 @@ import {
   Key, Check, Download, HelpCircle, Search, 
   Clock, CheckCircle2, XCircle, AlertCircle, MessageSquare,
   ChevronDown, ChevronUp, Wallet, RefreshCw, Store,
-  Sun, Moon, Bell, Eye, EyeOff, Plus, ChevronRight, ArrowDown, ArrowUp, Send
+  Sun, Moon, Bell, Eye, EyeOff, Plus, ChevronRight, ArrowDown, ArrowUp, Send, LogOut
 } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { cloudflareAuth, cloudflareRequest } from '../lib/cloudflare-auth'
@@ -44,6 +44,20 @@ function DashboardShellInner() {
   const { session } = useAuth()
   const location = useLocation()
   const { theme, toggleTheme, toastMessage, showToast } = useDashboard()
+  const [signingOut, setSigningOut] = useState(false)
+
+  async function handleLogout() {
+    if (signingOut) return
+    setSigningOut(true)
+    try {
+      await cloudflareAuth('sign-out', {})
+      window.location.assign('/login')
+    } catch {
+      window.location.assign('/login')
+    } finally {
+      setSigningOut(false)
+    }
+  }
 
   const displayName = String(
     session?.user.user_metadata?.full_name || 
@@ -124,6 +138,18 @@ function DashboardShellInner() {
             <UserRound size={18} />
             <span>Account Settings</span>
           </NavLink>
+
+          <button
+            type="button"
+            className="side-nav-link"
+            style={{ width: '100%', textAlign: 'left', background: 'none', border: 0, cursor: 'pointer', color: '#ef4444' }}
+            onClick={handleLogout}
+            disabled={signingOut}
+            aria-label="Sign out of account"
+          >
+            <LogOut size={18} />
+            <span>{signingOut ? 'Signing out…' : 'Sign Out'}</span>
+          </button>
         </nav>
 
         <div className="fintech-side-spacer" />
@@ -181,6 +207,18 @@ function DashboardShellInner() {
             >
               {initials}
             </Link>
+
+            <button
+              type="button"
+              className="fintech-icon-btn"
+              onClick={handleLogout}
+              disabled={signingOut}
+              title="Sign Out"
+              aria-label="Sign Out"
+              style={{ color: '#ef4444' }}
+            >
+              <LogOut size={17} />
+            </button>
           </div>
         </header>
 
@@ -1586,6 +1624,32 @@ export function Profile() {
         </div>
 
         <AccountSettings embedded />
+
+        <div className="profile-details-card profile-session-card" style={{ marginTop: 20 }}>
+          <div className="card-title-row">
+            <LogOut size={20} className="title-icon" style={{ color: '#ef4444' }} />
+            <h2>Account Session</h2>
+          </div>
+          <p className="security-desc" style={{ fontSize: 13, color: 'var(--muted)', margin: '8px 0 16px', lineHeight: 1.5 }}>
+            Sign out of your LogsPoll account on this device. You will need to sign in again to access your wallet and orders.
+          </p>
+          <button
+            type="button"
+            className="dashboard-logout-btn"
+            style={{ width: '100%', minHeight: 46 }}
+            onClick={async () => {
+              try {
+                await cloudflareAuth('sign-out', {})
+                window.location.assign('/login')
+              } catch {
+                window.location.assign('/login')
+              }
+            }}
+          >
+            <LogOut size={16} />
+            <span>Sign Out of Account</span>
+          </button>
+        </div>
       </div>
     </section>
   )
@@ -1597,6 +1661,22 @@ export function AccountSettings({ embedded = false }: { embedded?: boolean }) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [hasPendingInvite, setHasPendingInvite] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    if (!session) return
+    cloudflareRequest<{ invited: boolean }>('/api/account/admin-enrollment')
+      .then((data) => {
+        if (active && data?.invited) {
+          setHasPendingInvite(true)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [session])
 
   async function reset() {
     if (!session?.user.email || busy) return
@@ -1608,19 +1688,6 @@ export function AccountSettings({ embedded = false }: { embedded?: boolean }) {
       navigate('/reset-password', { state: { email: session.user.email, sentAt: Date.now() } })
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : 'Unable to request password reset.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function acceptAdmin() {
-    setBusy(true)
-    setError('')
-    try {
-      await cloudflareRequest('/api/account/admin-enrollment', {})
-      window.location.assign('/admin')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Enrollment unavailable.')
     } finally {
       setBusy(false)
     }
@@ -1641,6 +1708,21 @@ export function AccountSettings({ embedded = false }: { embedded?: boolean }) {
         </div>
       )}
 
+      {hasPendingInvite && (
+        <div style={{ background: '#fff3e9', border: '1px solid #fed7aa', borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <ShieldCheck size={20} style={{ color: 'var(--orange)', flexShrink: 0 }} />
+            <div>
+              <strong style={{ display: 'block', fontSize: 13, color: '#9a3412' }}>Administrator Invitation Pending</strong>
+              <span style={{ fontSize: 11.5, color: '#c2410c' }}>You have an active invitation to join the administrator team.</span>
+            </div>
+          </div>
+          <Link to="/accept-invitation" className="button button-orange" style={{ padding: '6px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>
+            Review Invitation →
+          </Link>
+        </div>
+      )}
+
       <div className="security-settings-box">
         <div className="card-title-row">
           <Key size={20} className="title-icon" />
@@ -1655,10 +1737,6 @@ export function AccountSettings({ embedded = false }: { embedded?: boolean }) {
           <button className="button button-orange" onClick={reset} disabled={busy} type="button">
             {busy ? <RefreshCw size={15} className="spin-icon" /> : <Key size={15} />}
             <span>{busy ? 'Sending Code…' : 'Send Password Reset Code'}</span>
-          </button>
-
-          <button className="button button-outline" onClick={() => void acceptAdmin()} disabled={busy} type="button">
-            Accept Administrator Invitation
           </button>
         </div>
 

@@ -158,9 +158,24 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
 
     try {
       const res = await cloudflareRequest<{
-        success: boolean
+        success?: boolean
+        ok?: boolean
         error?: string
-        attempt: {
+        attemptId?: string
+        reference?: string
+        amount_minor?: number
+        amountMinor?: number
+        amount?: number
+        fee_minor?: number
+        feeMinor?: number
+        credited_minor?: number
+        creditedMinor?: number
+        status?: string
+        checkout_url?: string
+        checkoutUrl?: string
+        bank_transfer?: BankTransferDetails | null
+        bankTransfer?: BankTransferDetails | null
+        attempt?: {
           id: string
           reference: string
           amount_minor: number
@@ -175,21 +190,32 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
         amount: numericAmount,
         channel: 'bank_transfer',
         request_id: crypto.randomUUID(),
+        requestId: crypto.randomUUID(),
       })
 
-      if (!res.success || !res.attempt) {
+      const isSuccess = Boolean(res.ok || res.success)
+      const attemptId = res.attempt?.id || res.attemptId
+      const reference = String(res.attempt?.reference || res.reference || attemptId || '')
+      const checkoutUrl = res.attempt?.checkout_url || res.checkout_url || res.checkoutUrl
+      const bankTransfer = res.attempt?.bank_transfer || res.bank_transfer || res.bankTransfer || null
+      const amountMinor = res.attempt?.amount_minor ?? res.amount_minor ?? res.amountMinor ?? Math.round(numericAmount * 100)
+      const amount = res.attempt?.amount ?? res.amount ?? numericAmount
+      const feeMinor = res.attempt?.fee_minor ?? res.fee_minor ?? res.feeMinor ?? 0
+      const creditedMinor = res.attempt?.credited_minor ?? res.credited_minor ?? res.creditedMinor ?? amountMinor
+
+      if (!isSuccess || !attemptId) {
         throw new Error(res.error || 'Failed to initiate deposit.')
       }
 
       setActiveSession({
-        attemptId: res.attempt.id,
-        reference: res.attempt.reference,
-        amountMinor: res.attempt.amount_minor,
-        amount: res.attempt.amount,
-        feeMinor: res.attempt.fee_minor ?? 0,
-        creditedMinor: res.attempt.credited_minor ?? res.attempt.amount_minor,
-        checkoutUrl: res.attempt.checkout_url,
-        bankTransfer: res.attempt.bank_transfer,
+        attemptId,
+        reference,
+        amountMinor,
+        amount,
+        feeMinor,
+        creditedMinor,
+        checkoutUrl,
+        bankTransfer,
         status: 'awaiting_payment',
       })
     } catch (err) {
@@ -270,9 +296,26 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
             </div>
 
             {error && (
-              <div className="fintech-notice" style={{ borderColor: 'rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.05)', color: '#dc2626' }}>
-                <AlertCircle size={16} />
-                <span>{error}</span>
+              <div
+                className="fintech-notice fintech-notice-error"
+                role="alert"
+                style={{
+                  borderColor: 'rgba(239, 68, 68, 0.4)',
+                  background: 'rgba(239, 68, 68, 0.08)',
+                  color: '#dc2626',
+                  padding: '12px 14px',
+                  borderRadius: 12,
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  marginTop: 10,
+                }}
+              >
+                <AlertCircle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
+                <div style={{ flex: 1, fontSize: 12.5, lineHeight: 1.45 }}>
+                  <strong style={{ display: 'block', marginBottom: 2 }}>Unable to Initiate Deposit</strong>
+                  <span>{error}</span>
+                </div>
               </div>
             )}
 

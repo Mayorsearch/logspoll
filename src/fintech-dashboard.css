@@ -1079,13 +1079,18 @@ html[data-site-theme="dark"] .fintech-small-pill.pending {
 .fintech-overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 1000;
   background: rgba(13, 18, 28, 0.56);
   backdrop-filter: blur(4px);
   display: flex;
   justify-content: center;
   align-items: flex-end;
   animation: fintechFadeIn 0.2s ease;
+}
+
+/* Hide floating widgets when a fintech overlay or sheet is active */
+body:has(.fintech-overlay) .floating-chat-container {
+  display: none !important;
 }
 
 @keyframes fintechFadeIn {

@@ -84,8 +84,8 @@ export async function adminOperations(request:Request,env:ApiEnv){
  return json({saved:true,id})
 }
 export async function adminEnrollment(request:Request,env:ApiEnv){const user=await identity(request,env),db=env.DB!
- const invite=await db.prepare('SELECT user_id FROM admin_invitations WHERE user_id=? AND accepted_at IS NULL AND expires_at>?').bind(user.id,Date.now()).first()
- if(request.method==='GET')return json({invited:Boolean(invite)})
+ const invite=await db.prepare('SELECT user_id, invited_by, expires_at FROM admin_invitations WHERE user_id=? AND accepted_at IS NULL AND expires_at>?').bind(user.id,Date.now()).first<{user_id:string;invited_by:string;expires_at:number}>()
+ if(request.method==='GET')return json({invited:Boolean(invite), expires_at: invite?.expires_at ?? null})
  if(request.method!=='POST')throw new HttpError(405,'Method not permitted.');await bodyJSON(request)
  const session=await createAuth(env).api.getSession({headers:request.headers});if(!invite||!session||Date.now()-new Date(session.session.createdAt).getTime()>900000)throw new HttpError(403,'Current invitation and a fresh verified sign-in required.')
  const fence=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO admin_write_fences(id,valid) SELECT ?,CASE WHEN EXISTS(SELECT 1 FROM admin_invitations WHERE user_id=? AND accepted_at IS NULL AND expires_at>? AND EXISTS(SELECT 1 FROM users u JOIN user_roles r ON r.user_id=u.id WHERE u.id=admin_invitations.invited_by AND u.status='active' AND r.role='admin')) THEN 1 ELSE 0 END").bind(fence,user.id,Date.now()),db.prepare("UPDATE user_roles SET role='admin' WHERE user_id=?").bind(user.id),db.prepare('UPDATE admin_invitations SET accepted_at=? WHERE user_id=?').bind(Date.now(),user.id),db.prepare('DELETE FROM admin_write_fences WHERE id=?').bind(fence),db.prepare("INSERT INTO audit_logs(id,actor_id,table_name,record_id,action) VALUES(?,?,'user_roles',?,'UPDATE')").bind(fence,user.id,user.id)])

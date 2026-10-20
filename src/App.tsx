@@ -18,6 +18,7 @@ import { ProtectedRoute, AdminGate } from './auth/ProtectedRoute'
 import { AuthPage, AuthCallback, RecoveryRedirect } from './pages/Auth'
 import { DashboardLayout, CustomerRecords, Profile, AccountSettings } from './pages/Dashboard'
 import { WalletPage } from './pages/WalletPage'
+import { AcceptInvitation } from './pages/AcceptInvitation'
 
 export default function App() {
   return (
@@ -66,6 +67,8 @@ export default function App() {
                 <Route path="reset-password" element={<AuthPage key="reset" mode="reset" />} />
                 <Route path="auth/callback" element={<AuthCallback />} />
                 <Route path="admin/login" element={<AuthPage key="admin" mode="admin" />} />
+                <Route path="accept-invitation" element={<AcceptInvitation />} />
+                <Route path="admin/invitation" element={<AcceptInvitation />} />
 
                 <Route path="cart" element={<Cart />} />
 

@@ -213,8 +213,8 @@ export async function initiateWalletFunding(request: Request, env: ApiEnv, user:
 
   const feeMinor = 0
   const creditedMinor = amountMinor - feeMinor
-  const requestId = body.requestId ?? crypto.randomUUID()
-  if (typeof requestId !== 'string' || !/^[0-9a-f-]{36}$/i.test(requestId)) throw new HttpError(400,'Valid funding request ID required.')
+  const rawRequestId = body.requestId ?? body.request_id
+  const requestId = typeof rawRequestId === 'string' && /^[0-9a-f-]{36}$/i.test(rawRequestId) ? rawRequestId : crypto.randomUUID()
   const idempotencyKey = 'wf_' + user.id + '_' + requestId
   const previous = await db.prepare('SELECT * FROM wallet_funding_attempts WHERE idempotency_key=? AND customer_id=?').bind(idempotencyKey,user.id).first<FundingAttemptRecord>()
   if (previous && (previous.amount_minor !== amountMinor || previous.provider_mode !== mode)) throw new HttpError(409,'Funding request does not match the original amount or environment.')
@@ -261,8 +261,22 @@ export async function initiateWalletFunding(request: Request, env: ApiEnv, user:
     "UPDATE wallet_funding_attempts SET checkout_id=?, status='open', bank_details=?, updated_at=? WHERE id=? AND status IN ('initiating','open')"
   ).bind(session.checkoutId, bankDetailsJson, Date.now(), attemptId).run()
 
+  const attemptObj = {
+    id: attemptId,
+    reference,
+    amount_minor: amountMinor,
+    amount: amountMinor / 100,
+    fee_minor: feeMinor,
+    credited_minor: creditedMinor,
+    status: 'open',
+    checkout_url: session.checkoutUrl,
+    bank_transfer: bankTransfer ?? null,
+  }
+
   return json({
     ok: true,
+    success: true,
+    attempt: attemptObj,
     attemptId,
     reference,
     checkoutId: session.checkoutId,
@@ -273,6 +287,12 @@ export async function initiateWalletFunding(request: Request, env: ApiEnv, user:
     creditedMinor,
     amount: amountMinor / 100,
     creditedAmount: creditedMinor / 100,
+    depositFeePercentage: 0,
+    depositFeeCappedAt: 0,
+    minDeposit: MIN_WALLET_FUND_MINOR / 100,
+    maxDeposit: MAX_WALLET_FUND_MINOR / 100,
+    currency: 'NGN',
+    customer: { id: user.id, email: user.email },
   })
 }
 
