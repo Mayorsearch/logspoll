@@ -89,14 +89,12 @@ function DashboardShellInner() {
     <div className={`fintech-app ${theme === 'dark' ? 'dark' : ''}`}>
       {/* Desktop Persistent Sidebar (>= 1000px) */}
       <aside className="fintech-sidebar" aria-label="Desktop navigation">
-        <Link to="/dashboard" className="fintech-logo">
-          <span className="fintech-logo-mark">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M7 4v16h11" />
-              <path d="M12 4v11h7" />
-            </svg>
-          </span>
-          <span className="fintech-logo-word">Logs<span>Poll</span></span>
+        <Link to="/dashboard" className="fintech-logo" aria-label="LogsPoll Dashboard">
+          <img
+            src="/logo-dark.png"
+            alt="LogsPoll"
+            style={{ height: 32, width: 'auto', display: 'block' }}
+          />
         </Link>
 
         <div className="fintech-side-heading">MY ACCOUNT</div>
@@ -165,14 +163,12 @@ function DashboardShellInner() {
       <div className="fintech-mainframe">
         {/* Topbar */}
         <header className="fintech-topbar">
-          <Link to="/dashboard" className="fintech-logo">
-            <span className="fintech-logo-mark">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M7 4v16h11" />
-                <path d="M12 4v11h7" />
-              </svg>
-            </span>
-            <span className="fintech-logo-word">Logs<span>Poll</span></span>
+          <Link to="/dashboard" className="fintech-logo" aria-label="LogsPoll Dashboard">
+            <img
+              src={theme === 'dark' ? '/logo-dark.png' : '/logo-light.png'}
+              alt="LogsPoll"
+              style={{ height: 28, width: 'auto', display: 'block' }}
+            />
           </Link>
 
           <div className="fintech-topbar-breadcrumb">

@@ -169,6 +169,15 @@ export function AuthPage({ mode }: { mode: Mode }) {
       <div className="auth-card">
         {/* Brand Header */}
         <div className="auth-card-heading">
+          <div className="auth-brand" style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
+            <Link to="/" aria-label="LOGSPOLL home">
+              <img
+                src="/logo-light.png"
+                alt="LogsPoll"
+                style={{ height: 36, width: 'auto', display: 'block' }}
+              />
+            </Link>
+          </div>
           <h1 className="auth-page-title">{codeFlow && mode !== 'reset' ? 'Enter Verification Code' : titles[mode]}</h1>
           <p className="auth-intro">
             {codeFlow

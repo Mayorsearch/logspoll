@@ -317,7 +317,9 @@ export default function CloudflareAdmin() {
     <header className="demo-topbar admin-reference-topbar">
       <div className="admin-reference-brand">
         <button type="button" className="icon-button demo-menu" aria-label="Open admin navigation" aria-expanded={open} onClick={() => setOpen(true)}><Menu size={20}/></button>
-        <Link to="/" className="brand">LOGS<span>POLL</span></Link>
+        <Link to="/" className="brand" aria-label="LOGSPOLL home">
+          <img src="/logo-dark.png" alt="LogsPoll" style={{ height: 26, width: 'auto', display: 'block' }} />
+        </Link>
         <span className="admin-hq">ADMIN HQ</span>
       </div>
       <div className="admin-topbar-actions">
@@ -329,7 +331,7 @@ export default function CloudflareAdmin() {
     </header>
     <aside className={`demo-sidebar ${open ? 'is-open' : ''}`} id="admin-navigation" aria-label="Admin navigation">
       <button type="button" className="icon-button demo-close" onClick={() => setOpen(false)} aria-label="Close admin navigation"><X size={19}/></button>
-      <div className="demo-workspace admin-workspace"><span className="demo-avatar">LP</span><div><strong>Admin workspace</strong><small>LOGSPOLL operations</small></div></div>
+      <div className="demo-workspace admin-workspace"><img src="/favicon-32x32.png" alt="LogsPoll" style={{ width: 32, height: 32, borderRadius: 8 }} /><div><strong>Admin workspace</strong><small>LOGSPOLL operations</small></div></div>
       <span className="demo-nav-label">OPERATIONS CONTROL</span>
       <nav>
         {d1Nav.map(({slug,label,Icon}) => <Fragment key={slug}>
