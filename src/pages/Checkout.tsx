@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import { useCart } from '../lib/cart'
 import { useAuth } from '../auth/AuthProvider'
@@ -80,17 +80,18 @@ export function Checkout() {
   const [wallet, setWallet] = useState<{ balance_minor: number; status: string } | null>(null)
   const [loadingWallet, setLoadingWallet] = useState(false)
 
-  // Fetch customer wallet on mount
+  // Fetch customer wallet on mount.
   useEffect(() => {
-    if (session) {
+    let active = true
+    queueMicrotask(() => {
+      if (!active || !session) return
       setLoadingWallet(true)
       void cloudflareRequest<{ wallet: { balance_minor: number; status: string } }>('/api/wallet')
-        .then(res => {
-          if (res.wallet) setWallet(res.wallet)
-        })
-        .catch(() => {})
-        .finally(() => setLoadingWallet(false))
-    }
+        .then(res => { if (active && res.wallet) setWallet(res.wallet) })
+        .catch(() => { /* Wallet failures never assume a spendable balance. */ })
+        .finally(() => { if (active) setLoadingWallet(false) })
+    })
+    return () => { active = false }
   }, [session])
 
   // 1. Check order status if active order ID exists
@@ -121,37 +122,53 @@ export function Checkout() {
   }
 
   useEffect(() => {
-    if (activeOrderId) {
-      void checkOrderStatus(activeOrderId)
-    }
+    let active = true
+    queueMicrotask(() => { if (active && activeOrderId) void checkOrderStatus(activeOrderId) })
+    return () => { active = false }
+    // Recheck when the active order or signed-in customer changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeOrderId, session])
 
   // 2. Fetch live product data for items currently in cart
+  const priceRequest = useRef(0)
   const ids = items.map(i => i.id).sort().join(',')
-  useEffect(() => {
+
+  const refreshProducts = useCallback(async () => {
+    const requestId = ++priceRequest.current
     if (!ids || orderStatus) {
       setLoadingProducts(false)
       return
     }
-    let active = true
     setLoadingProducts(true)
     setCartError('')
 
-    void cloudflareRequest<{ records: Product[] }>(`/api/products?ids=${encodeURIComponent(ids)}`)
-      .then(res => {
-        if (active) setProducts(res.records || [])
-      })
-      .catch(err => {
-        if (active) setCartError(err instanceof Error ? err.message : 'Unable to verify items.')
-      })
-      .finally(() => {
-        if (active) setLoadingProducts(false)
-      })
-
-    return () => {
-      active = false
+    try {
+      const res = await cloudflareRequest<{ records: Product[]; blockedItems?: Array<{ reason: string }> }>('/api/cart/refresh-prices', { ids: ids.split(',') })
+      if (requestId !== priceRequest.current) return false
+      if (res.blockedItems?.length) setCartError(res.blockedItems.map(item => item.reason).join(' '))
+      setProducts(res.records || [])
+      return !res.blockedItems?.length
+    } catch (err) {
+      if (requestId !== priceRequest.current) return false
+      setCartError(err instanceof Error ? err.message : 'Unable to verify items.')
+      return false
+    } finally {
+      if (requestId === priceRequest.current) {
+        setLoadingProducts(false)
+      }
     }
   }, [ids, orderStatus])
+
+  useEffect(() => {
+    let active = true
+    queueMicrotask(() => {
+      if (active) void refreshProducts()
+    })
+    return () => {
+      active = false
+      priceRequest.current++
+    }
+  }, [refreshProducts])
 
   // Compute live subtotal
   const subtotalMinor = items.reduce((sum, item) => {
@@ -199,7 +216,13 @@ export function Checkout() {
           await checkOrderStatus(res.orderId)
         }
       } catch (err) {
-        setCheckoutError(err instanceof Error ? err.message : 'Wallet payment failed.')
+        const msg = err instanceof Error ? err.message : 'Wallet payment failed.'
+        if (msg.includes('Supplier pricing refresh is pending') || msg.includes('pricing refresh') || msg.includes('Price updated')) {
+          const refreshed = await refreshProducts()
+          setCheckoutError(refreshed ? 'Prices updated. Review your total before selecting Pay again.' : msg)
+        } else {
+          setCheckoutError(msg)
+        }
       } finally {
         setSubmitting(false)
       }
@@ -239,6 +262,10 @@ export function Checkout() {
         if (response.status === 409 && data.error === 'Idempotency request does not match the original checkout.') {
           checkoutRequestId(sessionStorage, session.user.id, items, true)
           throw new Error('Your cart changed. Its checkout reference is refreshed; select Pay again. Existing orders are unchanged.')
+        }
+        if (data.error?.includes('Supplier pricing refresh is pending') || data.error?.includes('pricing refresh') || data.error?.includes('Price updated')) {
+          const refreshed = await refreshProducts()
+          throw new Error(refreshed ? 'Prices updated. Review your total before selecting Pay again.' : data.error)
         }
         throw new Error(data.error || 'Payment gateway connection was not accepted.')
       }
@@ -735,6 +762,8 @@ export function Checkout() {
                 disabled={
                   submitting ||
                   loadingProducts ||
+                  Boolean(cartError) ||
+                  items.some(item => !products.some(product => product.id === item.id && product.available_quantity >= item.quantity)) ||
                   !items.length ||
                   subtotalMinor <= 0 ||
                   (paymentMethod === 'wallet' && (wallet?.balance_minor ?? 0) < subtotalMinor)

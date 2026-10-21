@@ -1,5 +1,5 @@
 import HstoraWebhookPanel from './HstoraWebhookPanel'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { cloudflareRequest } from '../lib/cloudflare-auth'
 import { Globe, Key, Lock, RefreshCw, Play, Power, AlertCircle, CheckCircle2, DollarSign } from 'lucide-react'
 
@@ -9,6 +9,18 @@ type Status = {
   scanned: number
   total: number | null
   imported: number
+  discovered: number
+  sellable: number
+  out_of_stock: number
+  pending_details: number
+  failed_details: number
+  unavailable_details: number
+  requested: number
+  next_attempt: number
+  last_error: string | null
+  last_progress_at: number | null
+  attention_required: boolean
+  scheduler_healthy: boolean
   in_stock?: number
   published?: number
   rejected?: number
@@ -36,24 +48,47 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
   const [rate, setRate] = useState('1500')
   const key = useRef<HTMLInputElement>(null)
   const secret = useRef<HTMLInputElement>(null)
+  const edited = useRef({ baseUrl: false, allowedOrigin: false, rate: false })
+  const refreshing = useRef(false)
+  const refreshQueued = useRef(false)
 
-  async function refresh() {
+  const refresh = useCallback(async function refreshStatus() {
+    if (refreshing.current) {
+      refreshQueued.current = true
+      return
+    }
+    refreshing.current = true
     try {
       const result = await cloudflareRequest<{ connection: Status | null }>('/api/admin/hstora')
       setStatus(result.connection)
-      if (result.connection?.base_url) setBaseUrl(result.connection.base_url)
-      if (result.connection?.allowed_origin) setAllowedOrigin(result.connection.allowed_origin)
-      if (result.connection?.fx_rate_minor) setRate(String(result.connection.fx_rate_minor / 100))
+      if (!edited.current.baseUrl && result.connection?.base_url) setBaseUrl(result.connection.base_url)
+      if (!edited.current.allowedOrigin && result.connection?.allowed_origin !== undefined) setAllowedOrigin(result.connection.allowed_origin)
+      if (!edited.current.rate && result.connection?.fx_rate_minor) setRate(String(result.connection.fx_rate_minor / 100))
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Supplier settings unavailable.')
       setIsError(true)
+    } finally {
+      refreshing.current = false
+      if (refreshQueued.current) {
+        refreshQueued.current = false
+        void refreshStatus()
+      }
     }
-  }
+  }, [])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Fetch supplier configuration on mount
     void refresh()
-  }, [])
+  }, [refresh])
+
+  const activeSync = Boolean(status?.enabled && (status.requested || ['listings', 'details', 'finalize'].includes(status.phase)))
+  useEffect(() => {
+    if (!activeSync || busy) return
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh()
+    }, 30000)
+    return () => window.clearInterval(interval)
+  }, [activeSync, busy, refresh])
 
   async function action(act: string) {
     if (act === 'toggle' && status?.enabled && !confirm('Disable HStora? Active catalog synchronization stops. Existing records remain safely stored in D1.')) {
@@ -179,7 +214,7 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
             <input
               type="url"
               value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
+              onChange={(e) => { edited.current.baseUrl = true; setBaseUrl(e.target.value) }}
               placeholder="https://hstora.com"
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--admin-border, #cbd5e1)', fontSize: '0.875rem' }}
             />
@@ -192,7 +227,7 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
             <input
               type="url"
               value={allowedOrigin}
-              onChange={(e) => setAllowedOrigin(e.target.value)}
+              onChange={(e) => { edited.current.allowedOrigin = true; setAllowedOrigin(e.target.value) }}
               placeholder="Leave blank for standard headers"
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--admin-border, #cbd5e1)', fontSize: '0.875rem' }}
             />
@@ -231,7 +266,7 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
             <input
               inputMode="decimal"
               value={rate}
-              onChange={(e) => setRate(e.target.value)}
+              onChange={(e) => { edited.current.rate = true; setRate(e.target.value) }}
               placeholder="1500.00"
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--admin-border, #cbd5e1)', fontSize: '0.875rem' }}
             />
@@ -305,6 +340,13 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
           </div>
         )}
 
+        {status?.attention_required && (
+          <div role="alert" style={{ marginTop: 18, padding: '12px 16px', borderRadius: 8, background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#b91c1c', fontSize: '0.875rem', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            <AlertCircle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div>Sync needs attention: {status.scheduler_healthy ? 'progress has stalled or supplier requests keep failing.' : 'the scheduler is not reporting healthy activity.'} Check the last error and retry time below.</div>
+          </div>
+        )}
+
         {/* Metrics Display */}
         {status && (
           <div
@@ -318,10 +360,10 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
             }}
           >
             <div style={{ background: 'var(--admin-subtle, #f8fafc)', padding: 12, borderRadius: 8 }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>IMPORTED PRODUCTS</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: 4 }}>{status.imported}</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>DISCOVERED / IMPORTED</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: 4 }}>{status.discovered ?? status.scanned} / {status.imported}</div>
               <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
-                {status.in_stock ?? 0} in stock · {status.published ?? 0} published
+                {status.published ?? 0} published
               </div>
             </div>
 
@@ -333,13 +375,24 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
               <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
                 {status.scanned}/{status.total ?? 'unknown'} processed
               </div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
+                Last progress: {status.last_progress_at ? new Date(status.last_progress_at).toLocaleString() : 'Not recorded'}
+              </div>
             </div>
 
             <div style={{ background: 'var(--admin-subtle, #f8fafc)', padding: 12, borderRadius: 8 }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>REJECTED / UNPUBLISHED</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: 4 }}>{status.rejected ?? 0}</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>STOCK & AVAILABILITY</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: 4 }}>{status.sellable ?? 0} sellable</div>
               <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
-                0 stock or review required
+                {status.out_of_stock ?? 0} out of stock · {status.unavailable_details ?? 0} supplier-unavailable
+              </div>
+            </div>
+
+            <div style={{ background: 'var(--admin-subtle, #f8fafc)', padding: 12, borderRadius: 8 }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--admin-muted, #64748b)', fontWeight: 600 }}>PRODUCT DETAILS</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: 4 }}>{status.pending_details ?? 0} pending</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
+                {status.failed_details ?? 0} failed
               </div>
             </div>
 
@@ -348,13 +401,17 @@ export default function HstoraManager({ onComplete }: { onComplete?: () => void 
               <div style={{ fontSize: '0.875rem', fontWeight: 600, marginTop: 6 }}>
                 {status.last_success ? new Date(status.last_success).toLocaleString() : 'Never'}
               </div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 4 }}>
+                Next retry: {status.next_attempt ? new Date(status.next_attempt).toLocaleString() : 'No retry scheduled'}
+              </div>
             </div>
 
-            <div style={{ background: status.last_status?.includes('failed') || status.last_status?.includes('HTTP') ? 'rgba(239, 68, 68, 0.08)' : 'var(--admin-subtle, #f8fafc)', padding: 12, borderRadius: 8, border: status.last_status?.includes('failed') || status.last_status?.includes('HTTP') ? '1px solid rgba(239, 68, 68, 0.25)' : 'none' }}>
-              <div style={{ fontSize: '0.75rem', color: status.last_status?.includes('failed') || status.last_status?.includes('HTTP') ? '#b91c1c' : 'var(--admin-muted, #64748b)', fontWeight: 600 }}>LAST STATUS / ERROR LOG</div>
-              <div style={{ fontSize: '0.8rem', marginTop: 4, color: status.last_status?.includes('failed') || status.last_status?.includes('HTTP') ? '#991b1b' : 'var(--admin-text, #1e293b)', overflowWrap: 'anywhere' }}>
-                {status.last_status || 'Ready'}
+            <div style={{ background: status.last_error ? 'rgba(239, 68, 68, 0.08)' : 'var(--admin-subtle, #f8fafc)', padding: 12, borderRadius: 8, border: status.last_error ? '1px solid rgba(239, 68, 68, 0.25)' : 'none' }}>
+              <div style={{ fontSize: '0.75rem', color: status.last_error ? '#b91c1c' : 'var(--admin-muted, #64748b)', fontWeight: 600 }}>LAST STATUS / ERROR LOG</div>
+              <div style={{ fontSize: '0.8rem', marginTop: 4, color: status.last_error ? '#991b1b' : 'var(--admin-text, #1e293b)', overflowWrap: 'anywhere' }}>
+                {status.last_error || status.last_status || 'Ready'}
               </div>
+              {status.last_error && <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 4 }}>{status.last_status}</div>}
             </div>
           </div>
         )}

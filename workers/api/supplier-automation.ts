@@ -1,5 +1,6 @@
 import {adminActor,bodyJSON} from './admin.ts'
-import {calculateSellingPrice} from '../../server/pricing.ts'
+import {calculateSellingPrice,convertSupplierCost} from '../../server/pricing.ts'
+import type {FxQuote} from '../../server/pricing.ts'
 import {nativeCostMinor,approveHstoraAutomatically} from './hstora-review.ts'
 import {approveYoungpgAutomatically} from './supplier-review.ts'
 import {bulkPublishDigitalCore} from './digitalcore-manager.ts'
@@ -37,50 +38,95 @@ export type GlobalPricingConfig = {
 }
 
 type Policy={restore_pending:number;run_requested:number;auto_approve:number;review_reference:string;delivery_type:string;approval_cursor:string;provider:string;markup_bps:number;automatic_pricing:number;auto_publish:number;updated_by:string;revision:number;cursor:string;lease_owner:string}
-type Row={id:string;category_id?:string;category_slug?:string;category_name?:string;price_minor:number;pricing_mode:string;description:string;status:string;publication_verified:number;available_quantity:number;enabled:number;checked_at:number;stock:number;approval:string;authorized_resale:number;evidence:string|null;category_active:number;cost_minor:number|null;native_price:string|null;native_currency:string|null;removed?:number}
+type Row={id:string;name?:string;category_id?:string;category_slug?:string;category_name?:string;price_minor:number;pricing_mode:string;description:string;status:string;publication_verified:number;available_quantity:number;enabled:number;checked_at:number;stock:number;approval:string;authorized_resale:number;evidence:string|null;category_active:number;cost_minor:number|null;native_price:string|null;native_currency:string|null;removed?:number;pricing_state?:string}
 const providers=['youngpg','hstora','shopviaclone22','digitalcore']
-const source=`FROM products p JOIN categories cat ON cat.id=p.category_id JOIN verified_product_stock v ON v.id=p.id LEFT JOIN product_authorizations a ON a.product_id=p.id LEFT JOIN supplier_products sp ON sp.product_id=p.id LEFT JOIN staging_supplier_feed_items f ON f.connection_id=sp.connection_id AND f.external_id=sp.external_id LEFT JOIN staging_supplier_connections c ON c.id=sp.connection_id LEFT JOIN hstora_catalog_items h ON h.product_id=p.id LEFT JOIN hstora_connection hc ON hc.id='hstora' LEFT JOIN shopviaclone22_catalog_items s3 ON s3.product_id=p.id LEFT JOIN shopviaclone22_connection sc ON sc.id='shopviaclone22'`
-const providerWhere="((?='youngpg' AND c.provider='youngpg') OR (?='hstora' AND h.product_id IS NOT NULL) OR (?='shopviaclone22' AND s3.product_id IS NOT NULL))"
+const source=`FROM products p JOIN categories cat ON cat.id=p.category_id JOIN verified_product_stock v ON v.id=p.id LEFT JOIN product_authorizations a ON a.product_id=p.id LEFT JOIN supplier_products sp ON sp.product_id=p.id LEFT JOIN staging_supplier_feed_items f ON f.connection_id=sp.connection_id AND f.external_id=sp.external_id LEFT JOIN staging_supplier_connections c ON c.id=sp.connection_id LEFT JOIN hstora_catalog_items h ON h.product_id=p.id LEFT JOIN hstora_connection hc ON hc.id='hstora' LEFT JOIN shopviaclone22_catalog_items s3 ON s3.product_id=p.id LEFT JOIN shopviaclone22_connection sc ON sc.id='shopviaclone22' LEFT JOIN digitalcore_catalog_items dc ON dc.product_id=p.id LEFT JOIN digitalcore_connection dcc ON dcc.id='digitalcore'`
+const providerWhere="((?='youngpg' AND c.provider='youngpg') OR (?='hstora' AND h.product_id IS NOT NULL) OR (?='shopviaclone22' AND s3.product_id IS NOT NULL) OR (?='digitalcore' AND dc.product_id IS NOT NULL))"
+const pricingState=`json_object('category',p.category_id,'active',cat.active,'available',v.available_quantity,'rights',a.evidence,'authorized',p.authorized_resale,
+ 'h_id',h.external_id,'h_metadata',h.metadata,'h_checked',h.checked_at,'h_snapshot',h.snapshot_id,'h_approval',h.approval_status,'hc_enabled',hc.enabled,'hc_revision',hc.revision,
+ 'f_connection',f.connection_id,'f_id',f.external_id,'f_cost',f.supplier_cost_minor,'f_checked',f.source_checked_at,'f_snapshot',f.snapshot_id,'f_approval',f.approval,'c_enabled',c.enabled,'c_revision',c.revision,
+ 's3_id',s3.external_id,'s3_cost',s3.cost_minor,'s3_raw',s3.raw_metadata,'s3_checked',s3.checked_at,'s3_snapshot',s3.snapshot_id,'s3_stock',s3.stock,'s3_approval',s3.approval_status,'sc_enabled',sc.enabled,'sc_revision',sc.revision,
+ 'dc_id',dc.external_id,'dc_cost',dc.cost_minor,'dc_raw',dc.raw_metadata,'dc_checked',dc.checked_at,'dc_snapshot',dc.snapshot_id,'dc_stock',dc.stock,'dc_approval',dc.approval_status,'dcc_enabled',dcc.enabled,'dcc_revision',dcc.revision)`
+const fxState="json_object('rate',usd_to_ngn_rate,'status',fx_status,'observed',fx_updated_at,'override_active',fx_override_active,'override_rate',fx_override_rate)"
+const fxMaxAgeMs=3600000
+type PricingFx={quote:FxQuote|null;state:string|null}
 
-async function rows(env:ApiEnv,provider:string,cursor='',limit=25,ids?:string[]){
- return (await env.DB!.prepare(`SELECT p.id,p.category_id,cat.slug category_slug,cat.name category_name,p.price_minor,p.pricing_mode,p.description,p.status,p.publication_verified,p.authorized_resale,v.available_quantity,a.evidence,cat.active category_active,CASE WHEN s3.product_id IS NOT NULL THEN sc.enabled WHEN h.product_id IS NOT NULL THEN hc.enabled ELSE c.enabled END enabled,CASE WHEN s3.product_id IS NOT NULL THEN s3.checked_at WHEN h.product_id IS NOT NULL THEN h.checked_at ELSE f.source_checked_at END checked_at,CASE WHEN s3.product_id IS NOT NULL THEN s3.stock WHEN h.product_id IS NOT NULL THEN CAST(json_extract(h.metadata,'$.stock') AS INTEGER) ELSE f.stock_quantity END stock,CASE WHEN s3.product_id IS NOT NULL THEN s3.approval_status WHEN h.product_id IS NOT NULL THEN h.approval_status ELSE f.approval END approval,COALESCE(s3.cost_minor, f.supplier_cost_minor) cost_minor,json_extract(h.metadata,'$.price') native_price,json_extract(h.metadata,'$.currency') native_currency,CASE WHEN json_extract(h.metadata,'$.supplier_available')=0 THEN 1 ELSE 0 END removed ${source} WHERE ${providerWhere} AND p.id>? ${ids?`AND p.id IN (${ids.map(()=>'?').join(',')})`:''} ORDER BY p.id LIMIT ?`).bind(provider,provider,provider,cursor,...(ids??[]),limit).all<Row>()).results
+async function verifiedPricingFx(db:Database,now:number):Promise<PricingFx>{
+ const config=await db.prepare(`SELECT *,${fxState} pricing_state FROM global_pricing_config WHERE id='global'`).first<{usd_to_ngn_rate:number;fx_status:string;fx_updated_at:number;fx_override_active:number;fx_override_rate:number|null;pricing_state:string}>()
+ if(!config)return {quote:null,state:null}
+ const rate=config.fx_override_active===1?config.fx_override_rate:config.usd_to_ngn_rate
+ const valid=config.fx_status==='active'&&Number.isFinite(rate)&&Number(rate)>0&&Number.isSafeInteger(config.fx_updated_at)&&config.fx_updated_at>0&&config.fx_updated_at<=now&&now-config.fx_updated_at<=fxMaxAgeMs
+ return {quote:valid?{base:'USD',quote:'NGN',rate:String(rate),observedAt:config.fx_updated_at,maxAgeMs:fxMaxAgeMs}:null,state:config.pricing_state}
 }
 
-export function automationDecision(row:Row,policy:Pick<Policy,'markup_bps'|'automatic_pricing'|'auto_publish'>&{provider?:string},now:number,restore=false,categoryRules:CategoryRule[]=[]){
- const reasons:string[]=[];let price=row.price_minor,cost:number|null=null
+async function rows(env:ApiEnv,provider:string,cursor='',limit=25,ids?:string[]){
+ return (await env.DB!.prepare(`SELECT p.id,p.name,p.category_id,cat.slug category_slug,cat.name category_name,p.price_minor,p.pricing_mode,p.description,p.status,p.publication_verified,p.authorized_resale,v.available_quantity,a.evidence,cat.active category_active,
+   CASE WHEN dc.product_id IS NOT NULL THEN dcc.enabled WHEN s3.product_id IS NOT NULL THEN sc.enabled WHEN h.product_id IS NOT NULL THEN hc.enabled ELSE c.enabled END enabled,
+   CASE WHEN dc.product_id IS NOT NULL THEN dc.checked_at WHEN s3.product_id IS NOT NULL THEN s3.checked_at WHEN h.product_id IS NOT NULL THEN h.checked_at ELSE f.source_checked_at END checked_at,
+   CASE WHEN dc.product_id IS NOT NULL THEN dc.stock WHEN s3.product_id IS NOT NULL THEN s3.stock WHEN h.product_id IS NOT NULL THEN CAST(json_extract(h.metadata,'$.stock') AS INTEGER) ELSE f.stock_quantity END stock,
+   CASE WHEN dc.product_id IS NOT NULL THEN dc.approval_status WHEN s3.product_id IS NOT NULL THEN s3.approval_status WHEN h.product_id IS NOT NULL THEN h.approval_status ELSE f.approval END approval,
+   COALESCE(dc.cost_minor, s3.cost_minor, f.supplier_cost_minor) cost_minor,
+   json_extract(h.metadata,'$.price') native_price,json_extract(h.metadata,'$.currency') native_currency,
+   CASE WHEN json_extract(h.metadata,'$.supplier_available')=0 THEN 1 ELSE 0 END removed,${pricingState} pricing_state
+   ${source} WHERE ${providerWhere} AND p.id>? ${ids?`AND p.id IN (${ids.map(()=>'?').join(',')})`:''} ORDER BY p.id LIMIT ?`).bind(provider,provider,provider,provider,cursor,...(ids??[]),limit).all<Row>()).results
+}
+
+export function automationDecision(row:Row,policy:Pick<Policy,'markup_bps'|'automatic_pricing'|'auto_publish'>&{provider?:string},now:number,restore=false,categoryRules:CategoryRule[]=[],fx:FxQuote|null=null){
+ const reasons:string[]=[];let price=row.price_minor,cost:number|null=null,pricingError:string|null=null
  const fresh=row.enabled===1&&row.checked_at<=now&&row.checked_at>now-86400000
  if(!fresh)reasons.push('Enable supplier and verify stock within safe grace window.')
  const catRule=row.category_id?categoryRules.find(r=>r.category_id===row.category_id&&(!policy.provider||r.provider===policy.provider)):null
- const effectiveMarkupBps=catRule&&catRule.markup_bps>0?catRule.markup_bps:policy.markup_bps
+ const effectiveMarkupBps=catRule?catRule.markup_bps:policy.markup_bps
  if(policy.automatic_pricing&&(row.pricing_mode==='auto'||restore)){
-  if(!fresh)reasons.push('Current supplier cost is unverified.')
-  else if(row.native_currency&&row.native_currency!=='NGN')reasons.push('A timestamped, verified currency conversion is required; no USD assumption was made.')
-  else{
-   cost=row.native_price!==null?nativeCostMinor(row.native_price,100):row.cost_minor
-   if(cost===null||!Number.isSafeInteger(cost)||cost<1)reasons.push('Positive verified supplier cost required.')
-   else price=calculateSellingPrice(cost,{id:'supplier',enabled:true,mode:'markup',rateBps:effectiveMarkupBps,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
-  }
+  if(!fresh)pricingError='Current supplier cost is unverified. Supplier stock and pricing must be verified before checkout.'
+  else try{
+   const currency=row.native_currency?.toUpperCase()
+   if(currency&&currency!=='NGN'&&(!fx||fx.base!==currency))pricingError=`A timestamped, verified currency conversion is required. The ${currency} exchange rate is missing or stale; please try again after it is verified.`
+   else if(row.native_price!==null){
+    if(!currency)pricingError='Supplier currency is unverified; pricing must be verified before checkout.'
+    else cost=convertSupplierCost(String(row.native_price),currency,'NGN',fx,now)
+   }else cost=row.cost_minor
+   if(!pricingError){
+    if(cost===null||!Number.isSafeInteger(cost)||cost<1)pricingError='Positive verified supplier cost required before checkout.'
+    else price=calculateSellingPrice(cost,{id:'supplier',enabled:true,mode:'markup',rateBps:effectiveMarkupBps,fixedMinor:0,minProfitMinor:0,feeBps:0,feeFixedMinor:0,fxBufferBps:0,roundingMinor:1}).sellingPriceMinor
+   }
+  }catch(error){pricingError=error instanceof Error&&/exchange rate/i.test(error.message)?'The supplier exchange rate is missing or stale; please try again after it is verified.':'Supplier pricing configuration or cost is invalid; verification is required before checkout.'}
+  if(pricingError)reasons.push(pricingError)
  }
  let rights=false
  try{
   const evidence=JSON.parse(row.evidence??'null')
   rights=evidence?.delivery===true&&evidence?.privacy===true&&evidence?.provider===true
  }catch{/* Missing evidence is never approval. */}
- const pricingReady=!policy.automatic_pricing||row.pricing_mode!=='auto'&&!restore||cost!==null&&reasons.length===0
+ const pricingReady=!policy.automatic_pricing||row.pricing_mode!=='auto'&&!restore||cost!==null&&pricingError===null
  const eligible=pricingReady&&fresh&&row.approval==='approved'&&row.authorized_resale===1&&row.category_active===1&&row.available_quantity>0&&rights&&row.description.trim().length>=20&&price>0
  if(policy.auto_publish&&!eligible)reasons.push('Publication requires approved sourcing/delivery evidence, active category, real description, price and verified sellable stock.')
- return {price,cost,eligible,publish:Boolean(policy.auto_publish&&eligible),unpublish:Boolean(policy.auto_publish&&row.enabled===1&&(row.removed===1||fresh&&row.stock===0)),managed:Boolean(policy.automatic_pricing&&(row.pricing_mode==='auto'||restore)&&cost!==null&&!reasons.some(r=>r.includes('currency')||r.includes('cost'))),reasons}
+ return {price,cost,eligible,publish:Boolean(policy.auto_publish&&eligible),unpublish:Boolean(policy.auto_publish&&row.enabled===1&&(row.removed===1||fresh&&row.stock===0)),managed:Boolean(policy.automatic_pricing&&(row.pricing_mode==='auto'||restore)&&cost!==null&&pricingError===null),pricingError,reasons}
+}
+
+function pricingFence(db:Database,id:string,row:Row,policy:Policy,categoryRules:CategoryRule[],fx:PricingFx,leased=false,verifyFx=true){
+ const rule=categoryRules.find(rule=>rule.category_id===row.category_id&&rule.provider===policy.provider)
+ const ruleGuard=rule?'EXISTS(SELECT 1 FROM supplier_category_rules WHERE id=? AND provider=? AND category_id=? AND markup_bps=? AND updated_at=?)':'NOT EXISTS(SELECT 1 FROM supplier_category_rules WHERE provider=? AND category_id IS ?)'
+ const ruleArgs=rule?[rule.id,rule.provider,rule.category_id,rule.markup_bps,rule.updated_at]:[policy.provider,row.category_id??null]
+ const foreign=Boolean(verifyFx&&row.native_currency&&row.native_currency.toUpperCase()!=='NGN')
+ const fxGuard=foreign?`AND EXISTS(SELECT 1 FROM global_pricing_config WHERE id='global' AND ${fxState}=? AND fx_status='active' AND fx_updated_at<=CAST(unixepoch('subsec')*1000 AS INTEGER) AND fx_updated_at>=CAST(unixepoch('subsec')*1000 AS INTEGER)-${fxMaxAgeMs})`:''
+ const leaseGuard=leased?"AND EXISTS(SELECT 1 FROM supplier_automation WHERE provider=? AND lease_owner=? AND lease_until>CAST(unixepoch('subsec')*1000 AS INTEGER)) AND EXISTS(SELECT 1 FROM user_roles WHERE user_id=? AND role='admin')":''
+ return db.prepare(`INSERT INTO admin_write_fences(id,valid) SELECT ?,CASE WHEN
+  EXISTS(SELECT 1 ${source} WHERE ${providerWhere} AND p.id=? AND p.price_minor=? AND p.pricing_mode=? AND ${pricingState}=?)
+  AND EXISTS(SELECT 1 FROM supplier_automation WHERE provider=? AND revision=? AND markup_bps=? AND automatic_pricing=? AND auto_publish=? AND updated_by=?)
+  AND ${ruleGuard} ${fxGuard} ${leaseGuard} THEN 1 ELSE 0 END`).bind(id,policy.provider,policy.provider,policy.provider,policy.provider,row.id,row.price_minor,row.pricing_mode,row.pricing_state,policy.provider,policy.revision,policy.markup_bps,policy.automatic_pricing,policy.auto_publish,policy.updated_by,...ruleArgs,...(foreign?[fx.state]:[]),...(leased?[policy.provider,policy.lease_owner,policy.updated_by]:[]))
 }
 
 async function apply(env:ApiEnv,policy:Policy,items:Row[],restore=false,categoryRules:CategoryRule[]=[]){
  let changed=0,published=0,unpublished=0,blocked=0;const now=Date.now(),writes:Statement[]=[]
+ const fx=await verifiedPricingFx(env.DB!,now)
  for(const row of items){
-  const decision=automationDecision(row,policy,now,restore,categoryRules)
+  const decision=automationDecision(row,policy,now,restore,categoryRules,fx.quote)
   if(decision.reasons.length)blocked++
   const repricing=decision.managed&&(decision.price!==row.price_minor||row.pricing_mode!=='auto'),publishing=decision.publish&&(row.publication_verified!==1||row.status!=='active'),hiding=decision.unpublish&&row.publication_verified===1
   if(!repricing&&!publishing&&!hiding)continue
   const fence=crypto.randomUUID()
-  writes.push(env.DB!.prepare(`INSERT INTO admin_write_fences(id,valid) SELECT ?,CASE WHEN EXISTS(SELECT 1 FROM products p WHERE p.id=? AND p.price_minor=? AND p.pricing_mode=?) AND EXISTS(SELECT 1 FROM supplier_automation WHERE provider=? AND revision=? AND lease_owner=? AND lease_until>CAST(unixepoch('subsec')*1000 AS INTEGER)) AND EXISTS(SELECT 1 FROM user_roles WHERE user_id=? AND role='admin') AND EXISTS(SELECT 1 ${source} WHERE p.id=? AND a.evidence IS ? AND p.authorized_resale=? AND cat.active=? AND v.available_quantity=? AND CASE WHEN h.product_id IS NULL THEN f.source_checked_at ELSE h.checked_at END=? AND f.supplier_cost_minor IS ? AND json_extract(h.metadata,'$.price') IS ? AND json_extract(h.metadata,'$.currency') IS ? AND CASE WHEN h.product_id IS NULL THEN c.enabled ELSE hc.enabled END=?) THEN 1 ELSE 0 END`).bind(fence,row.id,row.price_minor,row.pricing_mode,policy.provider,policy.revision,policy.lease_owner,policy.updated_by,row.id,row.evidence,row.authorized_resale,row.category_active,row.available_quantity,row.checked_at,row.cost_minor,row.native_price,row.native_currency,row.enabled))
+  writes.push(pricingFence(env.DB!,fence,row,policy,categoryRules,fx,true,decision.managed&&(repricing||publishing)))
   if(repricing){
    writes.push(env.DB!.prepare('UPDATE hstora_catalog_items SET selling_price_minor=? WHERE product_id=? AND selling_price_minor IS NOT ?').bind(decision.price,row.id,decision.price))
    writes.push(env.DB!.prepare('UPDATE shopviaclone22_catalog_items SET selling_price_minor=? WHERE product_id=? AND selling_price_minor IS NOT ?').bind(decision.price,row.id,decision.price))
@@ -1099,7 +1145,7 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
     old_price_minor:row.price_minor,
     ...automationDecision(row,draft,Date.now(),body.restore_overrides===true,catRules)
    }))
-   const totalCount=(await db.prepare(`SELECT count(*) n ${source} WHERE ${providerWhere}`).bind(provider,provider,provider).first<{n:number}>().catch(()=>({n:items.length})))?.n??items.length
+   const totalCount=(await db.prepare(`SELECT count(*) n ${source} WHERE ${providerWhere}`).bind(provider,provider,provider,provider).first<{n:number}>().catch(()=>({n:items.length})))?.n??items.length
    return json({items,total:totalCount,eligible_count:items.filter(i=>i.eligible).length,boundedBatch:25})
   }
 
@@ -1129,14 +1175,62 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
 export {batch as runSupplierAutomationBatch}
 
 export async function assertAutomationQuotes(env:ApiEnv,ids:string[]){
+ if(!ids.length)return
  if(!await env.DB!.prepare("SELECT 1 FROM sqlite_master WHERE name='supplier_automation'").first())return
- const policies=(await env.DB!.prepare('SELECT * FROM supplier_automation WHERE automatic_pricing=1').all<Policy>()).results
+ const plan=await pricingRefreshPlan(env,ids)
+ if(plan.blockedItems.length)throw new HttpError(409,plan.blockedItems[0].reason)
+ if(plan.changes.length){
+  await savePricingRefresh(env.DB!,plan)
+  throw new HttpError(409,'Supplier pricing refresh completed. Review the updated cart prices before checkout.')
+ }
+}
+
+type PricingChange={row:Row;policy:Policy;categoryRules:CategoryRule[];price:number}
+type PricingRefreshPlan={changes:PricingChange[];blockedItems:Array<{id:string;reason:string}>;fx:PricingFx}
+
+async function pricingRefreshPlan(env:ApiEnv,ids:string[]):Promise<PricingRefreshPlan>{
+ const db=env.DB!,now=Date.now(),fx=await verifiedPricingFx(db,now)
+ const changes:PricingChange[]=[],blockedItems:PricingRefreshPlan['blockedItems']=[]
+ const policies=(await db.prepare('SELECT * FROM supplier_automation WHERE automatic_pricing=1').all<Policy>()).results
  for(const policy of policies){
-  const catRules=(await env.DB!.prepare('SELECT * FROM supplier_category_rules WHERE provider=?').bind(policy.provider).all<CategoryRule>().catch(()=>({results:[]}))).results
-  for(const row of await rows(env,policy.provider,'',25,ids)){
+  if(!providers.includes(policy.provider))continue
+  const categoryRules=(await db.prepare('SELECT * FROM supplier_category_rules WHERE provider=?').bind(policy.provider).all<CategoryRule>()).results
+  for(const row of await rows(env,policy.provider,'',ids.length,ids)){
    if(row.pricing_mode!=='auto')continue
-   const quote=automationDecision(row,policy,Date.now(),false,catRules)
-   if(!quote.managed||quote.price!==row.price_minor)throw new HttpError(409,'Supplier pricing refresh is pending. Refresh the cart before checkout.')
+   const quote=automationDecision(row,policy,now,false,categoryRules,fx.quote)
+   let reason:string|null=null
+   if(row.enabled!==1||row.removed===1||row.stock<=0)reason=`"${row.name||'Selected product'}" is currently unavailable from the supplier. Please remove it from your cart before checkout.`
+   else if(!quote.managed)reason=quote.pricingError||'Supplier pricing is unverified; please try again after it is verified.'
+   else if(row.available_quantity<=0)reason=`"${row.name||'Selected product'}" needs a fresh supplier stock check before checkout. Please try again after stock is verified.`
+   if(reason)blockedItems.push({id:row.id,reason})
+   else if(quote.price!==row.price_minor)changes.push({row,policy,categoryRules,price:quote.price})
   }
  }
+ return {changes,blockedItems,fx}
+}
+
+async function savePricingRefresh(db:Database,plan:PricingRefreshPlan){
+ const writes:Statement[]=[]
+ for(const {row,policy,categoryRules,price} of plan.changes){
+  const fence=crypto.randomUUID()
+  writes.push(pricingFence(db,fence,row,policy,categoryRules,plan.fx),
+   db.prepare("UPDATE products SET price_minor=? WHERE id=? AND pricing_mode='auto' AND price_minor=?").bind(price,row.id,row.price_minor))
+  if(policy.provider==='hstora')writes.push(db.prepare('UPDATE hstora_catalog_items SET selling_price_minor=? WHERE product_id=?').bind(price,row.id))
+  if(policy.provider==='shopviaclone22')writes.push(db.prepare('UPDATE shopviaclone22_catalog_items SET selling_price_minor=? WHERE product_id=?').bind(price,row.id))
+  if(policy.provider==='digitalcore')writes.push(db.prepare('UPDATE digitalcore_catalog_items SET selling_price_minor=? WHERE product_id=?').bind(price,row.id))
+  if(policy.provider==='youngpg')writes.push(db.prepare('UPDATE staging_supplier_feed_items SET selling_price_minor=? WHERE (connection_id,external_id) IN (SELECT connection_id,external_id FROM supplier_products WHERE product_id=?)').bind(price,row.id))
+  writes.push(db.prepare("UPDATE admin_write_fences SET valid=CASE WHEN EXISTS(SELECT 1 FROM products WHERE id=? AND pricing_mode='auto' AND price_minor=?) THEN 1 ELSE 0 END WHERE id=?").bind(row.id,price,fence),db.prepare('DELETE FROM admin_write_fences WHERE id=?').bind(fence))
+ }
+ if(writes.length)try{await db.batch(writes)}catch(error){
+  if(error instanceof Error&&/CHECK constraint failed: valid\s*=\s*1/i.test(error.message))throw new HttpError(409,'Product pricing changed during verification. Please refresh your cart and try again.')
+  throw error
+ }
+}
+
+export async function revalidateProductPrices(env:ApiEnv,ids:string[]){
+ if(!ids.length||!env.DB)return {updatedCount:0,changedItems:[],blockedItems:[]}
+ const plan=await pricingRefreshPlan(env,ids)
+ await savePricingRefresh(env.DB,plan)
+ const changedItems=plan.changes.map(({row,price})=>({id:row.id,name:row.name||'Product',oldPriceMinor:row.price_minor,newPriceMinor:price,diffMinor:price-row.price_minor}))
+ return {updatedCount:changedItems.length,changedItems,blockedItems:plan.blockedItems}
 }

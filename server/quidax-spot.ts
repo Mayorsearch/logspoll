@@ -86,15 +86,16 @@ export async function fetchQuidaxUsdtNgnTicker(customUrl?: string): Promise<Quid
     throw new QuidaxSpotError('Invalid JSON received from Quidax Spot API.', 502, 'invalid_json')
   }
 
-  if (json.status !== 'success' || !json.data || !json.data.ticker) {
+  const data = (json as any)?.data
+  const ticker = data?.usdtngn?.ticker || data?.ticker
+  if (!ticker) {
     throw new QuidaxSpotError('Quidax Spot API did not return successful ticker data.', 502, 'invalid_payload')
   }
 
-  const ticker = json.data.ticker
-  const sellPrice = Number(ticker.sell)
-  const buyPrice = Number(ticker.buy)
-  const highPrice = Number(ticker.high)
-  const lowPrice = Number(ticker.low)
+  const sellPrice = Number(ticker.sell || ticker.last || ticker.buy)
+  const buyPrice = Number(ticker.buy || ticker.last || ticker.sell)
+  const highPrice = Number(ticker.high || sellPrice)
+  const lowPrice = Number(ticker.low || sellPrice)
 
   if (!Number.isFinite(sellPrice) || sellPrice < REASONABLE_MIN_RATE || sellPrice > REASONABLE_MAX_RATE) {
     throw new QuidaxSpotError(`Quidax Spot rate ₦${sellPrice} is outside reasonable bounds (₦500–₦5,000).`, 502, 'out_of_bounds')
@@ -109,10 +110,100 @@ export async function fetchQuidaxUsdtNgnTicker(customUrl?: string): Promise<Quid
     sell: roundedRate,
     high: Math.round(highPrice * 100) / 100,
     low: Math.round(lowPrice * 100) / 100,
-    at: json.data.at || Date.now(),
+    at: data?.at || data?.usdtngn?.at || Date.now(),
     source: 'quidax_spot_proxy',
     proxyAsset: 'USDT',
-    label: 'Quidax Spot Orderbook Ticker (Ask: ₦' + roundedRate.toFixed(2) + '/USDT) — Secondary Spot Proxy',
+    label: 'Quidax Spot Orderbook Ticker (Ask: ₦' + roundedRate.toFixed(2) + '/USDT) — Verified Nigerian Market Proxy',
   }
+}
+
+export type FxMarketResult = {
+  valid: boolean
+  rate: number
+  source: 'quidax_spot_proxy' | 'open_er_api'
+  details: string
+  timestamp: number
+}
+
+/**
+ * Secondary verifiable interbank FX reference using Open Exchange Rates API.
+ */
+export async function fetchOpenExchangeRateUsd(): Promise<FxMarketResult> {
+  const url = 'https://open.er-api.com/v6/latest/USD'
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 LogsPoll/2.0',
+      },
+      signal: AbortSignal.timeout(8000),
+    })
+  } catch (err) {
+    throw new QuidaxSpotError('Open Exchange Rates connection timed out or unreachable.', 504, 'network_failure')
+  }
+
+  if (!response.ok) {
+    throw new QuidaxSpotError(`Open Exchange Rates API returned HTTP ${response.status}.`, response.status, 'http_error')
+  }
+
+  let json: { result?: string; rates?: Record<string, number>; time_last_update_unix?: number }
+  try {
+    json = (await response.json()) as any
+  } catch {
+    throw new QuidaxSpotError('Invalid JSON received from Open Exchange Rates API.', 502, 'invalid_json')
+  }
+
+  const ngnRate = Number(json?.rates?.NGN)
+  if (!Number.isFinite(ngnRate) || ngnRate < REASONABLE_MIN_RATE || ngnRate > REASONABLE_MAX_RATE) {
+    throw new QuidaxSpotError(`Open Exchange Rates NGN rate ₦${ngnRate} is outside reasonable bounds (₦500–₦5,000).`, 502, 'out_of_bounds')
+  }
+
+  const rounded = Math.round(ngnRate * 100) / 100
+  const timestamp = (json.time_last_update_unix ? json.time_last_update_unix * 1000 : Date.now())
+
+  return {
+    valid: true,
+    rate: rounded,
+    source: 'open_er_api',
+    details: `Open Exchange Rates Interbank FX (₦${rounded.toFixed(2)}/USD)`,
+    timestamp,
+  }
+}
+
+/**
+ * Multi-tier verifiable FX resolver.
+ * 1. Quidax Spot Orderbook (USDT/NGN Nigerian exchange ask rate)
+ * 2. Open Exchange Rates Interbank (USD/NGN global official rate)
+ */
+export async function fetchLiveMarketFxRate(): Promise<FxMarketResult> {
+  let firstError: string | null = null
+  try {
+    const q = await fetchQuidaxUsdtNgnTicker()
+    if (q.valid) {
+      return {
+        valid: true,
+        rate: q.rate,
+        source: 'quidax_spot_proxy',
+        details: q.label,
+        timestamp: q.at || Date.now(),
+      }
+    }
+  } catch (err) {
+    firstError = err instanceof Error ? err.message : String(err)
+  }
+
+  try {
+    const o = await fetchOpenExchangeRateUsd()
+    if (o.valid) {
+      return o
+    }
+  } catch (err) {
+    const secondError = err instanceof Error ? err.message : String(err)
+    throw new QuidaxSpotError(`Exchange rate synchronization failed: ${firstError || 'Quidax error'}; ${secondError}`, 502, 'all_sources_failed')
+  }
+
+  throw new QuidaxSpotError('No valid exchange rate available from verified FX providers.', 502, 'no_valid_rate')
 }
 

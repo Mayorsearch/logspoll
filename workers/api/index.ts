@@ -1,4 +1,4 @@
-import {supplierAutomation,runSupplierAutomation} from './supplier-automation.ts'
+import {supplierAutomation,runSupplierAutomation,revalidateProductPrices} from './supplier-automation.ts'
 import {runFulfillment} from './fulfillment.ts'
 import {stagingBachsWebhook} from './bachs-staging.ts'
 import {bachsCheckout} from './bachs-checkout.ts'
@@ -20,7 +20,7 @@ import { catalogAdmin, catalogWritesReady, refreshPublishedStock, refreshSupplie
 import {paymentReadiness} from './payment-readiness.ts'
 import { authReady, consumeVerification, createAuth, identity } from './auth.ts'
 import { drainMail, enqueueMail, drainBusinessMail } from './mail.ts'
-import { adminOperations, adminEnrollment, adminActor } from './admin.ts'
+import { adminOperations, adminEnrollment, adminActor, bodyJSON } from './admin.ts'
 import { customerRead, customerWrite, publicReviews } from './customer.ts'
 import type { ApiEnv, Execution } from './types.ts'
 export async function apiFetch(request: Request, env: ApiEnv, context?: Execution) {
@@ -130,6 +130,22 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
       const { reconcileWalletFundingAttempt } = await import('./wallet.ts')
       const res = await reconcileWalletFundingAttempt(env, attempt)
       return json(res)
+    }
+    if (url.pathname === '/api/cart/refresh-prices' || url.pathname === '/api/cart/refresh') {
+      if (request.method !== 'POST') throw new HttpError(405, 'POST required.')
+      if (origin !== url.origin || !request.headers.get('Content-Type')?.startsWith('application/json')) throw new HttpError(403, 'Same-origin JSON required.')
+      const body = await bodyJSON(request, 8192)
+      if (!body || !Array.isArray(body.ids) || body.ids.length > 25 || body.ids.some(id => typeof id !== 'string' || !/^[a-f\d-]{36}$/i.test(id))) throw new HttpError(400, 'Select between 1 and 25 valid products.')
+      const ids = [...new Set(body.ids)] as string[]
+      if (!ids.length) return json({ records: [], priceChanged: false, changedItems: [], blockedItems: [] })
+      const visible = await env.DB.prepare(`SELECT id FROM storefront_products WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all<{ id: string }>()
+      const reval = await revalidateProductPrices(env, visible.results.map(row => row.id))
+      const readURL = new URL('/api/products', url.origin)
+      readURL.searchParams.set('ids', ids.join(','))
+      const response = await customerRead(new Request(readURL), env, null)
+      if (!response) throw new HttpError(503, 'Cart products unavailable.')
+      const products = await response.json() as { records: unknown[] }
+      return json({ records: products.records, priceChanged: reval.updatedCount > 0, changedItems: reval.changedItems, blockedItems: reval.blockedItems })
     }
     if (url.pathname === '/api/checkout' || url.pathname === '/api/v1/checkout') return await bachsCheckout(request, env)
     if (url.pathname === '/api/bachs/order' || url.pathname === '/api/v1/order' || /^\/api\/(?:v1\/)?orders\/[^/]+\/status$/.test(url.pathname)) {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useCart } from '../lib/cart'
 import { cloudflareRequest } from '../lib/cloudflare-auth'
@@ -40,12 +40,15 @@ export function Cart() {
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState<boolean>(Boolean(items.length))
   const [error, setError] = useState<string>('')
+  const [priceNotice, setPriceNotice] = useState<string>('')
   const [refreshing, setRefreshing] = useState<boolean>(false)
 
+  const priceRequest = useRef(0)
   const ids = items.map(item => item.id).sort().join(',')
 
   // Fetch real-time stock and prices from production D1
-  const fetchProducts = async (isManual = false) => {
+  const fetchProducts = useCallback(async (isManual = false) => {
+    const requestId = ++priceRequest.current
     if (!ids) {
       setProducts([])
       setLoading(false)
@@ -54,19 +57,31 @@ export function Cart() {
     if (isManual) setRefreshing(true)
     else setLoading(true)
     setError('')
+    if (isManual) setPriceNotice('')
 
     try {
-      const res = await cloudflareRequest<{ records: Product[] }>(
-        `/api/products?ids=${encodeURIComponent(ids)}`
+      const res = await cloudflareRequest<{ records: Product[]; priceChanged?: boolean; changedItems?: Array<{ name: string }>; blockedItems?: Array<{ reason: string }> }>(
+        '/api/cart/refresh-prices', { ids: ids.split(',') }
       )
+      if (requestId !== priceRequest.current) return false
+      if (res.blockedItems?.length) setError(res.blockedItems.map(item => item.reason).join(' '))
       setProducts(res.records || [])
+      if (res.priceChanged && res.changedItems && res.changedItems.length > 0) {
+        const itemNames = res.changedItems.map(i => i.name).join(', ')
+        setPriceNotice(`Prices were revalidated and updated for: ${itemNames}. Please review your updated total.`)
+      } else if (isManual && !res.blockedItems?.length) {
+        setPriceNotice('Current catalog prices retrieved. Availability is checked again at checkout.')
+      }
     } catch (err) {
+      if (requestId !== priceRequest.current) return false
       setError(err instanceof Error ? err.message : 'Unable to verify real-time product prices.')
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (requestId === priceRequest.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
-  }
+  }, [ids])
 
   useEffect(() => {
     let active = true
@@ -75,8 +90,9 @@ export function Cart() {
     })
     return () => {
       active = false
+      priceRequest.current++
     }
-  }, [ids])
+  }, [fetchProducts])
 
   // Map items to their validated live product record
   const cartEntries = items.map(item => {
@@ -159,12 +175,21 @@ export function Cart() {
                   style={{ width: 'auto', padding: '6px 12px', fontSize: '0.8rem' }}
                   onClick={() => void fetchProducts(true)}
                   disabled={refreshing || loading}
-                  title="Verify latest stock and prices against production D1"
+                  title="Retrieve verified catalog prices and current recorded availability"
                 >
                   <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
-                  <span>Verify Stock</span>
+                  <span>Refresh Prices</span>
                 </button>
               </div>
+
+              {priceNotice && (
+                <div className="checkout-verification-notice" style={{ background: 'rgba(255, 101, 0, 0.08)', borderColor: '#ff6500', color: '#ff6500' }}>
+                  <ShieldCheck size={18} />
+                  <div>
+                    <strong>Price update:</strong> {priceNotice}
+                  </div>
+                </div>
+              )}
 
               {error && (
                 <div className="checkout-verification-notice" style={{ background: 'rgba(239, 68, 68, 0.08)', borderColor: '#ef4444', color: '#dc2626' }}>
@@ -380,7 +405,7 @@ export function Cart() {
                   type="button"
                   className="cart-primary-btn"
                   onClick={() => navigate('/checkout')}
-                  disabled={loading || !items.length || subtotalMinor <= 0}
+                  disabled={loading || refreshing || Boolean(error) || !items.length || subtotalMinor <= 0}
                 >
                   <Lock size={16} /> Proceed to Secure Checkout
                 </button>
