@@ -204,3 +204,37 @@ test('only a matching completed wallet debit authorizes fulfillment, with no Bac
  await runFulfillment(env);await runFulfillment(env)
  assert.equal(buys,1);assert.equal(sql.prepare('SELECT fulfillment_status FROM orders WHERE id=?').get(order)!.fulfillment_status,'delivered')
 })
+
+test('admin override fulfills order when supplier price increased',async t=>{
+ const{sql,env}=await fixture();t.after(()=>sql.close());let buys=0
+ t.mock.method(globalThis,'fetch',async(url,init)=>{
+  if(init?.method==='POST'){buys++;return happy(url,init)}
+  return Response.json({success:true,data:{id:12,slug:'subscription-test',price_ngn:'500.00',available_stock:5}})
+ })
+ await runFulfillment(env)
+ assert.equal(buys,0)
+ assert.equal(sql.prepare('SELECT state FROM fulfillment_jobs').get()!.state,'blocked')
+
+ const res=await fulfillPaidOrder(env,order,{adminOverride:true})
+ assert.equal(res.success,true)
+ assert.equal(buys,1)
+ assert.equal(sql.prepare('SELECT fulfillment_status FROM orders').get()!.fulfillment_status,'delivered')
+ assert.equal(sql.prepare('SELECT instructions FROM product_entitlements').get()!.instructions,'licensed-activation-token')
+})
+
+test('stale FX rate falls back to configured usd_to_ngn_rate without blocking USD fulfillment',async t=>{
+ const creds={apiKey:'dc_test_key',baseUrl:'https://digitalcore.top'}
+ const ref='req_dc_stale_fx'
+ t.mock.method(globalThis,'fetch',async(url,init)=>{
+  const u=new URL(String(url))
+  if(init?.method==='POST'){
+   return Response.json({success:true,order_id:'ord_dc_88',quantity:1,items:['dc:credential:fallback']})
+  }
+  return Response.json({id:'dc_prod_44',price:'2.00',stock:5})
+ })
+ // When fxRate is passed with fallback '1400.0'
+ const plan=await prepareDelivery('digitalcore',creds,{externalId:'dc_prod_44',quantity:1,requestId:ref,maxCostMinor:450000,fxRate:'1400.0'})
+ const delivery=await plan.buy()
+ assert.equal(delivery.receipt,'ord_dc_88')
+ assert.equal(delivery.delivered,true)
+})

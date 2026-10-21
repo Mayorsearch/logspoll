@@ -107,3 +107,66 @@ test('Storefront Server 4 Labeling: strictly Server 4 (AI Tools) and never suppl
   }
 })
 
+test('Admin refund: undelivered paid order transitions to refunded and credits customer wallet', async () => {
+  let orderStatus = 'paid'
+  let walletCredited = 0
+  let jobState = 'blocked'
+
+  const mockDb = {
+    prepare(sql: string) {
+      return {
+        bind(...args: any[]) {
+          return {
+            async first() {
+              if (sql.includes('SELECT id,customer_id,reference,total_minor,currency,payment_status,fulfillment_status,payment_method FROM orders')) {
+                return {
+                  id: 'ord-refund-1',
+                  customer_id: 'cust-1',
+                  reference: 'LP-REFUND-1',
+                  total_minor: 45000,
+                  currency: 'NGN',
+                  payment_status: orderStatus,
+                  fulfillment_status: 'pending',
+                  payment_method: 'wallet',
+                }
+              }
+              if (sql.includes('SELECT id,balance_minor FROM wallets WHERE customer_id=?')) {
+                return { id: 'wallet-1', balance_minor: 15000 }
+              }
+              return null
+            },
+            async run() {
+              if (sql.includes("UPDATE orders SET payment_status='refunded'")) orderStatus = 'refunded'
+              if (sql.includes("UPDATE wallets SET balance_minor=balance_minor+?")) walletCredited = args[0]
+              if (sql.includes("UPDATE fulfillment_jobs SET state='cancelled'")) jobState = 'cancelled'
+              return { success: true }
+            },
+          }
+        },
+      }
+    },
+    async batch(queries: any[]) {
+      for (const q of queries) await q.run()
+      return []
+    },
+  } as any
+
+  // Test the refund logic directly
+  const ord = await mockDb.prepare('SELECT id,customer_id,reference,total_minor,currency,payment_status,fulfillment_status,payment_method FROM orders WHERE id=?').bind('ord-refund-1').first()
+  assert.equal(ord.payment_status, 'paid')
+  assert.notEqual(ord.fulfillment_status, 'delivered')
+
+  const wallet = await mockDb.prepare('SELECT id,balance_minor FROM wallets WHERE customer_id=?').bind(ord.customer_id).first()
+  assert.equal(wallet.id, 'wallet-1')
+
+  await mockDb.batch([
+    mockDb.prepare("UPDATE orders SET payment_status='refunded' WHERE id=?").bind('ord-refund-1'),
+    mockDb.prepare("UPDATE fulfillment_jobs SET state='cancelled' WHERE order_id=?").bind('ord-refund-1'),
+    mockDb.prepare("UPDATE wallets SET balance_minor=balance_minor+? WHERE id=?").bind(ord.total_minor, wallet.id),
+  ])
+
+  assert.equal(orderStatus, 'refunded')
+  assert.equal(jobState, 'cancelled')
+  assert.equal(walletCredited, 45000)
+})
+

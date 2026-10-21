@@ -77,7 +77,30 @@ export async function adminOperations(request:Request,env:ApiEnv){
  }else if(b.action==='moderate_review'){table='reviews';if(!['approved','rejected'].includes(String(b.status)))throw new HttpError(400,'Invalid moderation status.');writes.push(db.prepare("UPDATE reviews SET status=?,reviewed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?").bind(String(b.status),id))
  }else if(b.action==='settings'){table='website_settings';const value=JSON.stringify(b.value);if(!b.value||typeof b.value!=='object'||Array.isArray(b.value)||value.length>16000)throw new HttpError(400,'Settings object required.');writes.push(db.prepare("INSERT INTO website_settings(key,value) VALUES('general',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(value))
  }else if(b.action==='deliver'){table='orders';const items=await db.prepare("SELECT i.id FROM order_items i JOIN orders o ON o.id=i.order_id WHERE o.id=? AND o.payment_status='paid' AND o.fulfillment_status<>'delivered'").bind(id).all<{id:string}>();if(!items.results.length)throw new HttpError(409,'Undelivered paid order required.');const instructions=text(b.instructions,1,20000);writes.push(db.prepare("INSERT INTO admin_write_fences(id,valid) SELECT ?,CASE WHEN EXISTS(SELECT 1 FROM orders WHERE id=? AND payment_status='paid' AND fulfillment_status<>'delivered') THEN 1 ELSE 0 END").bind(id,id));for(const item of items.results)writes.push(db.prepare('INSERT INTO product_entitlements(id,order_item_id,instructions) VALUES(?,?,?) ON CONFLICT(order_item_id) DO NOTHING').bind(crypto.randomUUID(),item.id,instructions));writes.push(db.prepare("UPDATE orders SET fulfillment_status='delivered' WHERE id=? AND payment_status='paid'").bind(id),db.prepare('DELETE FROM admin_write_fences WHERE id=?').bind(id));const order=await db.prepare('SELECT customer_id FROM orders WHERE id=?').bind(id).first<{customer_id:string}>();kind='order_delivered';recipient=order!.customer_id
- }else if(b.action==='fulfill_automated'){const {fulfillPaidOrder}=await import('./fulfillment.ts');const res=await fulfillPaidOrder(env,id);return json(res)}else throw new HttpError(400,'Unknown administrator action.')
+ }else if(b.action==='fulfill_automated'){const {fulfillPaidOrder}=await import('./fulfillment.ts');const res=await fulfillPaidOrder(env,id,{adminOverride:true});return json(res)
+ }else if(b.action==='refund_order'){
+  table='orders'
+  const ord=await db.prepare("SELECT id,customer_id,reference,total_minor,currency,payment_status,fulfillment_status,payment_method FROM orders WHERE id=?").bind(id).first<{id:string;customer_id:string;reference:string;total_minor:number;currency:string;payment_status:string;fulfillment_status:string;payment_method:string}>()
+  if(!ord)throw new HttpError(404,'Order not found.')
+  if(ord.payment_status!=='paid'||ord.fulfillment_status==='delivered')throw new HttpError(409,'Only undelivered paid orders can be refunded.')
+  writes.push(
+   db.prepare("INSERT INTO admin_write_fences(id,valid) SELECT ?,CASE WHEN EXISTS(SELECT 1 FROM orders WHERE id=? AND payment_status='paid' AND fulfillment_status<>'delivered') THEN 1 ELSE 0 END").bind(id,id),
+   db.prepare("UPDATE orders SET payment_status='refunded',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND payment_status='paid'").bind(id),
+   db.prepare("UPDATE fulfillment_jobs SET state='cancelled',last_error='Order refunded by administrator.',lease_owner=NULL,lease_until=NULL,updated_at=? WHERE order_id=?").bind(Date.now(),id),
+   db.prepare('DELETE FROM admin_write_fences WHERE id=?').bind(id)
+  )
+  if(ord.payment_method==='wallet'){
+   const wallet=await db.prepare("SELECT id,balance_minor FROM wallets WHERE customer_id=? AND status='active'").bind(ord.customer_id).first<{id:string;balance_minor:number}>()
+   if(wallet){
+    const before=wallet.balance_minor,after=before+ord.total_minor,txId=crypto.randomUUID(),txRef='TX-REF-'+id.slice(0,8).toUpperCase()+'-'+Date.now().toString(36).toUpperCase()
+    writes.push(
+     db.prepare("UPDATE wallets SET balance_minor=balance_minor+?,updated_at=? WHERE id=? AND status='active' AND balance_minor=?").bind(ord.total_minor,Date.now(),wallet.id,before),
+     db.prepare("INSERT INTO wallet_transactions(id,wallet_id,customer_id,reference,type,direction,amount_minor,balance_before_minor,balance_after_minor,status,order_id,actor_id,reason,created_at) VALUES(?,?,?,?,'refund','credit',?,?,CASE WHEN changes()=1 THEN ? ELSE -1 END,'completed',?,?,?,?)").bind(txId,wallet.id,ord.customer_id,txRef,ord.total_minor,before,after,id,actor.id,`Refund for unfulfilled order ${ord.reference}`,Date.now())
+    )
+   }
+  }
+  kind='refund_completed';recipient=ord.customer_id
+ }else throw new HttpError(400,'Unknown administrator action.')
  const event=crypto.randomUUID();writes.push(db.prepare('INSERT INTO audit_logs(id,actor_id,table_name,record_id,action) VALUES(?,?,?,?,?)').bind(event,actor.id,table,id,'UPDATE'))
  if(kind&&recipient)writes.push(db.prepare('INSERT INTO business_mail_events(id,kind,user_id,created_at) VALUES(?,?,?,?)').bind(event,kind,recipient,Date.now()))
  try{await db.batch(writes)}catch{throw new HttpError(409,'Save blocked: verify current record, unique slug, authorization and fresh in-stock publication requirements.')}

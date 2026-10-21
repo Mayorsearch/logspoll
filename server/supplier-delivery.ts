@@ -7,7 +7,7 @@ export class DeliveryError extends Error {
  readonly state:'retry'|'blocked'|'uncertain'
  constructor(message:string,state:'retry'|'blocked'|'uncertain'='blocked'){super(message);this.name='DeliveryError';this.state=state}
 }
-type Input={externalId:string;slug?:string;quantity:number;requestId:string;maxCostMinor:number;fxRate?:string;recovering?:boolean}
+type Input={externalId:string;slug?:string;quantity:number;requestId:string;maxCostMinor:number;fxRate?:string;recovering?:boolean;adminOverride?:boolean}
 type Credentials={key?:string;secret?:string;apiKey?:string;allowedOrigin?:string;baseUrl?:string}
 const object=(v:unknown):Record<string,unknown>=>{if(!v||typeof v!=='object'||Array.isArray(v))throw new DeliveryError('Supplier returned invalid order data.','uncertain');return v as Record<string,unknown>}
 const decimal=(v:unknown)=>{const s=String(v);if(!/^\d{1,12}(?:\.\d{1,8})?$/.test(s))throw new DeliveryError('Supplier price or exchange rate is invalid.');const[w,f='']=s.split('.');return{n:BigInt(w+f),d:10n**BigInt(f.length)}}
@@ -103,7 +103,7 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
  }
  if(!input.recovering){
   if(!Number.isSafeInteger(Number(stock))||Number(stock)<input.quantity)throw new DeliveryError('Supplier stock is insufficient; delivery will retry later.','retry')
-  if(deliveryCostMinor(price,input.quantity,currency!,input.fxRate)>input.maxCostMinor)throw new DeliveryError('Supplier cost exceeds the locked customer payment; administrator review required.')
+  if(!input.adminOverride&&deliveryCostMinor(price,input.quantity,currency!,input.fxRate)>input.maxCostMinor)throw new DeliveryError('Supplier cost exceeds the locked customer payment; administrator review required.')
  }
  const parse=(payload:Record<string,unknown>):Delivery=>{
   const d=provider==='digitalcore'?payload:provider==='shopviaclone22'?(objectSafe(payload.order)??objectSafe(payload.data)??payload):object(payload.data)

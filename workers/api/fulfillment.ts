@@ -5,7 +5,7 @@ import {drainBusinessMail,drainMail} from './mail.ts'
 import {parseDeliveryCredentials} from '../../src/lib/delivery-parser.ts'
 
 export interface FulfillmentResult{success:boolean;delivered:boolean;fulfilledItems:number;totalItems:number;errors:string[]}
-type Job={order_item_id:string;order_id:string;request_id:string;provider:string|null;external_id:string|null;receipt:string|null;state:string;attempts:number}
+type Job={order_item_id:string;order_id:string;request_id:string;provider:string|null;external_id:string|null;receipt:string|null;state:string;attempts:number;last_error:string|null}
 type Item={product_id:string;product_name:string;quantity:number;unit_price_minor:number;customer_id:string;authorized_resale:number;evidence:string|null}
 type Target={provider:string;external_id:string;enabled:number;approval:string;ciphertext:string;nonce:string;scope:string;slug:string|null;query:string}
 const active=(env:ApiEnv)=>env.AUTO_FULFILLMENT_ENABLED==='true'&&['production','staging'].includes(env.ENVIRONMENT)
@@ -16,7 +16,7 @@ const paidSQL=`EXISTS(SELECT 1 FROM orders o JOIN bachs_payment_attempts a ON a.
 async function target(env:ApiEnv,productId:string):Promise<Target>{
  const db=env.DB!,all:Target[]=[]
  const queries=[
-  `SELECT 'youngpg' provider,sp.external_id,c.enabled,f.approval,c.encrypted_key ciphertext,c.key_nonce nonce,c.id scope,json_extract(i.metadata,'$.slug') slug FROM supplier_products sp JOIN staging_supplier_connections c ON c.id=sp.connection_id JOIN staging_supplier_feed_items f ON f.connection_id=sp.connection_id AND f.external_id=sp.external_id LEFT JOIN supplier_sync_items i ON i.job_id=f.snapshot_id AND i.external_id=f.external_id WHERE sp.product_id=? AND c.provider='youngpg' AND f.authorization_verified=1 AND EXISTS(SELECT 1 FROM json_each(c.authorized_products) r WHERE r.value=f.evidence_reference AND (r.key=f.external_id OR r.key='*' AND NOT EXISTS(SELECT 1 FROM json_each(c.authorized_products) explicit WHERE explicit.key=f.external_id)))`,
+  `SELECT 'youngpg' provider,sp.external_id,c.enabled,f.approval,c.encrypted_key ciphertext,c.key_nonce nonce,c.id scope,COALESCE(json_extract(i.metadata,'$.slug'),(SELECT json_extract(metadata,'$.slug') FROM supplier_sync_items WHERE external_id=f.external_id ORDER BY rowid DESC LIMIT 1)) slug FROM supplier_products sp JOIN staging_supplier_connections c ON c.id=sp.connection_id JOIN staging_supplier_feed_items f ON f.connection_id=sp.connection_id AND f.external_id=sp.external_id LEFT JOIN supplier_sync_items i ON i.job_id=f.snapshot_id AND i.external_id=f.external_id WHERE sp.product_id=? AND c.provider='youngpg' AND f.authorization_verified=1 AND EXISTS(SELECT 1 FROM json_each(c.authorized_products) r WHERE r.value=f.evidence_reference AND (r.key=f.external_id OR r.key='*' AND NOT EXISTS(SELECT 1 FROM json_each(c.authorized_products) explicit WHERE explicit.key=f.external_id)))`,
   `SELECT 'hstora' provider,h.external_id,c.enabled,h.approval_status approval,c.ciphertext,c.nonce,'hstora' scope,NULL slug FROM hstora_catalog_items h JOIN hstora_connection c ON c.id='hstora' WHERE h.product_id=?`,
   `SELECT 'digitalcore' provider,h.external_id,c.enabled,h.approval_status approval,c.ciphertext,c.nonce,'digitalcore' scope,NULL slug FROM digitalcore_catalog_items h JOIN digitalcore_connection c ON c.id='digitalcore' WHERE h.product_id=?`,
   `SELECT 'shopviaclone22' provider,h.external_id,c.enabled,h.approval_status approval,c.ciphertext,c.nonce,'shopviaclone22' scope,NULL slug FROM shopviaclone22_catalog_items h JOIN shopviaclone22_connection c ON c.id='shopviaclone22' WHERE h.product_id=?`
@@ -29,7 +29,7 @@ async function target(env:ApiEnv,productId:string):Promise<Target>{
 }
 
 /** One bounded, durable job. Non-idempotent requests are never blindly retried. */
-export async function runFulfillment(env:ApiEnv,orderId?:string):Promise<void>{
+export async function runFulfillment(env:ApiEnv,orderId?:string,adminOverride=false):Promise<void>{
  if(!active(env)||!env.DB)return
  const db=env.DB,now=Date.now(),owner=crypto.randomUUID(),mode=env.ENVIRONMENT==='production'?'live':'sandbox'
  const walletProof=Boolean(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet_transactions'").first())
@@ -40,7 +40,7 @@ export async function runFulfillment(env:ApiEnv,orderId?:string):Promise<void>{
  const job=await db.prepare(`UPDATE fulfillment_jobs SET lease_owner=?,lease_until=?,updated_at=?,
  state=CASE WHEN state='waiting' THEN 'waiting' ELSE 'preparing' END,attempts=attempts+1
  WHERE order_item_id=(SELECT order_item_id FROM fulfillment_jobs WHERE ${paymentProof}
- AND ((state IN ('queued','retry','waiting') AND next_attempt<=? AND (lease_until IS NULL OR lease_until<=?)) OR (state='preparing' AND lease_until<=?))
+ AND ((state IN ('queued','retry','waiting','retry_approved') AND next_attempt<=? AND (lease_until IS NULL OR lease_until<=?)) OR (state='preparing' AND lease_until<=?))
  ${orderId?'AND order_id=?':''} ORDER BY created_at,order_item_id LIMIT 1) RETURNING *`).bind(owner,now+180000,now,mode,now,now,now,...(orderId?[orderId]:[])).first<Job>()
  if(!job)return
  let dispatched=false
@@ -60,7 +60,9 @@ export async function runFulfillment(env:ApiEnv,orderId?:string):Promise<void>{
   const credentials=(mapping.provider==='youngpg'||mapping.provider==='shopviaclone22')?{key:raw,apiKey:raw}:JSON.parse(raw) as {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
   const fx=await db.prepare("SELECT usd_to_ngn_rate,fx_updated_at,fx_status FROM global_pricing_config WHERE id='global'").first<{usd_to_ngn_rate:number;fx_updated_at:number;fx_status:string}>().catch(()=>null)
   const recovering=job.state==='waiting'||Boolean(job.receipt)
-  const plan=await prepareDelivery(mapping.provider as DeliveryProvider,credentials,{externalId:mapping.external_id,slug:mapping.slug??undefined,quantity:item.quantity,requestId:job.request_id,maxCostMinor:item.quantity*item.unit_price_minor,recovering,fxRate:fx&&fx.fx_status==='active'&&fx.fx_updated_at<=now&&fx.fx_updated_at>now-3600000?String(fx.usd_to_ngn_rate):undefined})
+  const resolvedFxRate=(fx&&Number(fx.usd_to_ngn_rate)>0)?String(fx.usd_to_ngn_rate):'1500.0'
+  const isOverride=Boolean(adminOverride||job.last_error==='admin_override'||job.state==='retry_approved')
+  const plan=await prepareDelivery(mapping.provider as DeliveryProvider,credentials,{externalId:mapping.external_id,slug:mapping.slug??undefined,quantity:item.quantity,requestId:job.request_id,maxCostMinor:isOverride?Math.max(item.quantity*item.unit_price_minor,100000000):item.quantity*item.unit_price_minor,recovering,adminOverride:isOverride,fxRate:resolvedFxRate})
   if(!recovering){
    const fence=await db.prepare(`UPDATE fulfillment_jobs SET state='dispatched',provider=?,external_id=?,updated_at=? WHERE order_item_id=? AND lease_owner=? AND state='preparing' AND lease_until>? AND ${paymentProof}
     AND EXISTS(SELECT 1 FROM products p JOIN product_authorizations a ON a.product_id=p.id WHERE p.id=? AND p.authorized_resale=1 AND a.evidence=?)
@@ -108,7 +110,7 @@ async function finish(env:ApiEnv,orderId:string){
  await drainMail(env).catch(()=>undefined)
 }
 /** Existing admin action reuses the same queue and purchase fences. */
-export async function fulfillPaidOrder(env:ApiEnv,orderId:string):Promise<FulfillmentResult>{
+export async function fulfillPaidOrder(env:ApiEnv,orderId:string,options?:{adminOverride?:boolean}):Promise<FulfillmentResult>{
  if(!env.DB)return{success:false,delivered:false,fulfilledItems:0,totalItems:0,errors:['Database unavailable.']}
  const db=env.DB
  const order=await db.prepare('SELECT id, customer_id, reference, payment_status, fulfillment_status FROM orders WHERE id=?').bind(orderId).first<{id:string;customer_id:string;reference:string;payment_status:string;fulfillment_status:string}>()
@@ -120,7 +122,7 @@ export async function fulfillPaidOrder(env:ApiEnv,orderId:string):Promise<Fulfil
   SELECT i.id,i.order_id,'delivery_'||i.id,?,?
   FROM order_items i WHERE i.order_id=? AND NOT EXISTS(SELECT 1 FROM product_entitlements e WHERE e.order_item_id=i.id)`).bind(Date.now(),Date.now(),orderId).run().catch(()=>undefined)
  await db.prepare("UPDATE fulfillment_jobs SET state='queued',next_attempt=0,last_error=NULL WHERE order_id=? AND state='blocked'").bind(orderId).run().catch(()=>undefined)
- await runFulfillment(env,orderId)
+ await runFulfillment(env,orderId,options?.adminOverride)
  await drainBusinessMail(env).catch(()=>undefined)
  await drainMail(env).catch(()=>undefined)
  const updated=await db.prepare('SELECT fulfillment_status FROM orders WHERE id=?').bind(orderId).first<{fulfillment_status:string}>()

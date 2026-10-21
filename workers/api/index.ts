@@ -38,9 +38,10 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
         await adminActor(request,env)
       }
       const orderId=url.searchParams.get('order_id')??undefined
+      const adminOverride=url.searchParams.get('admin_override')==='true'
       if(orderId){
         const {fulfillPaidOrder}=await import('./fulfillment.ts')
-        const res=await fulfillPaidOrder(env,orderId)
+        const res=await fulfillPaidOrder(env,orderId,{adminOverride})
         return json(res)
       }
       await runFulfillment(env)

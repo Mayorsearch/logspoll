@@ -90,7 +90,16 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
       }
     }
     const isPurchases = url.searchParams.get('purchases') === 'true'
-    const rows = await db.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,created_at FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 50').bind(user.id).all<{ id: string; reference: string; payment_status: string; fulfillment_status: string; total_minor: number; currency: string; created_at: string }>()
+    const hasJobsTable = Boolean(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fulfillment_jobs'").first().catch(() => null))
+    const deliveryCols = hasJobsTable
+      ? `, (SELECT j.state FROM fulfillment_jobs j WHERE j.order_id=o.id AND j.state<>'delivered' ORDER BY j.updated_at DESC LIMIT 1) AS delivery_status,
+           (SELECT j.last_error FROM fulfillment_jobs j WHERE j.order_id=o.id AND j.last_error IS NOT NULL ORDER BY j.updated_at DESC LIMIT 1) AS delivery_error`
+      : ', NULL AS delivery_status, NULL AS delivery_error'
+
+    const rows = await db.prepare(
+      `SELECT o.id, o.reference, o.payment_status, o.fulfillment_status, o.total_minor, o.currency, o.created_at ${deliveryCols}
+       FROM orders o WHERE o.customer_id=? ORDER BY o.created_at DESC LIMIT 50`
+    ).bind(user.id).all<{ id: string; reference: string; payment_status: string; fulfillment_status: string; total_minor: number; currency: string; created_at: string; delivery_status?: string | null; delivery_error?: string | null }>()
 
     const hasServer = Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('products') WHERE name='server_number'").first().catch(() => null))
     const serverCol = hasServer ? 'p.server_number' : 'NULL AS server_number'
