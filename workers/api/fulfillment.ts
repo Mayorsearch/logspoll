@@ -60,8 +60,11 @@ export async function runFulfillment(env:ApiEnv,orderId?:string,adminOverride=fa
   const credentials=(mapping.provider==='youngpg'||mapping.provider==='shopviaclone22')?{key:raw,apiKey:raw}:JSON.parse(raw) as {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
   const fx=await db.prepare("SELECT usd_to_ngn_rate,fx_updated_at,fx_status FROM global_pricing_config WHERE id='global'").first<{usd_to_ngn_rate:number;fx_updated_at:number;fx_status:string}>().catch(()=>null)
   const recovering=job.state==='waiting'||Boolean(job.receipt)
-  const resolvedFxRate=(fx&&Number(fx.usd_to_ngn_rate)>0)?String(fx.usd_to_ngn_rate):'1500.0'
+  const fxActive=fx&&Number(fx.usd_to_ngn_rate)>0&&fx.fx_status==='active'
+  const resolvedFxRate=fxActive?String(fx!.usd_to_ngn_rate):String(fx?.usd_to_ngn_rate??1400)
   const isOverride=Boolean(adminOverride||job.last_error==='admin_override'||job.state==='retry_approved')
+  const usdProviders=['hstora','digitalcore','shopviaclone22']
+  if(!isOverride&&!recovering&&!fxActive&&usdProviders.includes(mapping.provider))throw new DeliveryError(`PRICE_REVIEW:live_cost=0:USD exchange rate is stale or missing (status: ${fx?.fx_status??'missing'}); update the FX rate before fulfillment can proceed.`)
   const plan=await prepareDelivery(mapping.provider as DeliveryProvider,credentials,{externalId:mapping.external_id,slug:mapping.slug??undefined,quantity:item.quantity,requestId:job.request_id,maxCostMinor:isOverride?Math.max(item.quantity*item.unit_price_minor,100000000):item.quantity*item.unit_price_minor,recovering,adminOverride:isOverride,fxRate:resolvedFxRate})
   if(!recovering){
    const fence=await db.prepare(`UPDATE fulfillment_jobs SET state='dispatched',provider=?,external_id=?,updated_at=? WHERE order_item_id=? AND lease_owner=? AND state='preparing' AND lease_until>? AND ${paymentProof}
@@ -97,6 +100,17 @@ export async function runFulfillment(env:ApiEnv,orderId?:string,adminOverride=fa
   if(job.state==='waiting'||job.receipt)state='waiting'
   if(dispatched&&job.provider==='hstora'&&state==='uncertain')state='waiting'
   const message=error instanceof DeliveryError?error.message:'Credential/configuration or storage failure; no blind purchase retry.'
+  const isPriceReview=state==='blocked'&&message.startsWith('PRICE_REVIEW:')
+  if(isPriceReview){
+   const orderMeta=await db.prepare('SELECT customer_id FROM orders WHERE id=?').bind(job.order_id).first<{customer_id:string}>().catch(()=>null)
+   if(orderMeta){
+    const evC=crypto.randomUUID(),evA=crypto.randomUUID()
+    await db.batch([
+     db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) VALUES(?,'purchase_failed',?,?) ON CONFLICT(id) DO NOTHING").bind(evC,orderMeta.customer_id,Date.now()),
+     db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) SELECT ?,'security_alert',r.user_id,? FROM user_roles r WHERE r.role='admin' LIMIT 1 ON CONFLICT(id) DO NOTHING").bind(evA,Date.now())
+    ]).catch(()=>undefined)
+   }
+  }
   await db.prepare('UPDATE fulfillment_jobs SET state=?,last_error=?,next_attempt=?,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE order_item_id=? AND lease_owner=?').bind(state,message,Date.now()+Math.min(1800000,60000*2**Math.min(job.attempts,5)),Date.now(),job.order_item_id,owner).run()
  }
 }

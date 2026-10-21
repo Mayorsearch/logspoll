@@ -50,6 +50,7 @@ const d1Nav = [
   { slug: 'products', label: 'Products', Icon: Package },
   { slug: 'categories', label: 'Categories', Icon: Tags },
   { slug: 'orders', label: 'Orders', Icon: ShoppingBag },
+  { slug: 'price_review', label: 'Price Review', Icon: ShoppingBag },
   { slug: 'purchases', label: 'Purchases', Icon: ShoppingBag },
   { slug: 'reviews', label: 'Reviews', Icon: MessageSquare },
   { slug: 'api-manager', label: 'API Manager', Icon: RefreshCw },
@@ -108,7 +109,7 @@ export default function CloudflareAdmin() {
   useEffect(() => {
     setServerTab(tab === 'review' ? 'review' : 'api')
   }, [section, tab])
-  const recordSections=['products','categories','customers','orders','purchases','support','reviews','settings','audit','email']
+  const recordSections=['products','categories','customers','orders','price_review','purchases','support','reviews','settings','audit','email']
   const viewing =
     section === 'wallets' ? 'wallets' :
     section === 'server1' ? 'server1' :

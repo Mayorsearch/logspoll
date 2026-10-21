@@ -103,7 +103,7 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
  }
  if(!input.recovering){
   if(!Number.isSafeInteger(Number(stock))||Number(stock)<input.quantity)throw new DeliveryError('Supplier stock is insufficient; delivery will retry later.','retry')
-  if(!input.adminOverride&&deliveryCostMinor(price,input.quantity,currency!,input.fxRate)>input.maxCostMinor)throw new DeliveryError('Supplier cost exceeds the locked customer payment; administrator review required.')
+  if(!input.adminOverride){const liveCost=deliveryCostMinor(price,input.quantity,currency!,input.fxRate);if(liveCost>input.maxCostMinor)throw new DeliveryError(`PRICE_REVIEW:live_cost=${liveCost}:Supplier cost (${liveCost}) exceeds locked payment (${input.maxCostMinor}); administrator review required.`)}
  }
  const parse=(payload:Record<string,unknown>):Delivery=>{
   const d=provider==='digitalcore'?payload:provider==='shopviaclone22'?(objectSafe(payload.order)??objectSafe(payload.data)??payload):object(payload.data)
