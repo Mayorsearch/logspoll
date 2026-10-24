@@ -51,7 +51,10 @@ export async function recalculateAllUsdProducts(db: Database, usdRate: number, m
         selling_price_minor = CAST(ROUND(
           CAST(ROUND(CAST(json_extract(raw_metadata, '$.price') AS REAL) * ? * 100.0) AS INTEGER) * (1.0 + ? / 10000.0)
         ) AS INTEGER)
-      WHERE json_valid(raw_metadata) AND CAST(json_extract(raw_metadata, '$.price') AS REAL) > 0`).bind(usdRate, usdRate, markupBps),
+      WHERE json_valid(raw_metadata) AND CAST(json_extract(raw_metadata, '$.price') AS REAL) > 0
+        AND (cost_minor IS NOT (CAST(ROUND(CAST(json_extract(raw_metadata, '$.price') AS REAL) * ? * 100.0) AS INTEGER)) OR selling_price_minor IS NOT (CAST(ROUND(
+          CAST(ROUND(CAST(json_extract(raw_metadata, '$.price') AS REAL) * ? * 100.0) AS INTEGER) * (1.0 + ? / 10000.0)
+        ) AS INTEGER)))`).bind(usdRate, usdRate, markupBps, usdRate, usdRate, markupBps),
     db.prepare(`UPDATE products
       SET price_minor = (SELECT s3.selling_price_minor FROM shopviaclone22_catalog_items s3 WHERE s3.product_id=products.id)
       WHERE server_number = 3 AND pricing_mode = 'auto'
@@ -65,7 +68,10 @@ export async function recalculateAllUsdProducts(db: Database, usdRate: number, m
         CAST(json_extract(metadata, '$.price') AS REAL) * ? * 100.0 * (1.0 + ? / 10000.0)
       ) AS INTEGER)
       WHERE json_valid(metadata) AND json_extract(metadata, '$.currency') = 'USD'
-        AND CAST(json_extract(metadata, '$.price') AS REAL) > 0`).bind(usdRate, markupBps),
+        AND CAST(json_extract(metadata, '$.price') AS REAL) > 0
+        AND (selling_price_minor IS NOT (CAST(ROUND(
+        CAST(json_extract(metadata, '$.price') AS REAL) * ? * 100.0 * (1.0 + ? / 10000.0)
+      ) AS INTEGER)))`).bind(usdRate, markupBps, usdRate, markupBps),
     db.prepare(`UPDATE products
       SET price_minor = (SELECT h.selling_price_minor FROM hstora_catalog_items h WHERE h.product_id=products.id)
       WHERE server_number = 1 AND pricing_mode = 'auto'
@@ -82,7 +88,10 @@ export async function recalculateAllUsdProducts(db: Database, usdRate: number, m
           selling_price_minor = CAST(ROUND(
             CAST(ROUND(CAST(json_extract(raw_metadata, '$.price') AS REAL) * ? * 100.0) AS INTEGER) * (1.0 + ? / 10000.0)
           ) AS INTEGER)
-        WHERE json_valid(raw_metadata) AND CAST(json_extract(raw_metadata, '$.price') AS REAL) > 0`).bind(usdRate, usdRate, markupBps),
+        WHERE json_valid(raw_metadata) AND CAST(json_extract(raw_metadata, '$.price') AS REAL) > 0
+        AND (cost_minor IS NOT (CAST(ROUND(CAST(json_extract(raw_metadata, '$.price') AS REAL) * ? * 100.0) AS INTEGER)) OR selling_price_minor IS NOT (CAST(ROUND(
+            CAST(ROUND(CAST(json_extract(raw_metadata, '$.price') AS REAL) * ? * 100.0) AS INTEGER) * (1.0 + ? / 10000.0)
+          ) AS INTEGER)))`).bind(usdRate, usdRate, markupBps, usdRate, usdRate, markupBps),
       db.prepare(`UPDATE products
         SET price_minor = (SELECT s4.selling_price_minor FROM digitalcore_catalog_items s4 WHERE s4.product_id=products.id)
         WHERE server_number = 4 AND pricing_mode = 'auto'
@@ -99,7 +108,10 @@ export async function recalculateAllUsdProducts(db: Database, usdRate: number, m
           selling_price_minor = CAST(ROUND(
             CAST(ROUND(CAST(json_extract(raw_metadata, '$.price_usd') AS REAL) * ? * 100.0) AS INTEGER) * (1.0 + ? / 10000.0)
           ) AS INTEGER)
-        WHERE json_valid(raw_metadata) AND CAST(json_extract(raw_metadata, '$.price_usd') AS REAL) > 0`).bind(usdRate, usdRate, markupBps),
+        WHERE json_valid(raw_metadata) AND CAST(json_extract(raw_metadata, '$.price_usd') AS REAL) > 0
+        AND (cost_minor IS NOT (CAST(ROUND(CAST(json_extract(raw_metadata, '$.price_usd') AS REAL) * ? * 100.0) AS INTEGER)) OR selling_price_minor IS NOT (CAST(ROUND(
+            CAST(ROUND(CAST(json_extract(raw_metadata, '$.price_usd') AS REAL) * ? * 100.0) AS INTEGER) * (1.0 + ? / 10000.0)
+          ) AS INTEGER)))`).bind(usdRate, usdRate, markupBps, usdRate, usdRate, markupBps),
       db.prepare(`UPDATE products
         SET price_minor = (SELECT s4.selling_price_minor FROM digitaltop_catalog_items s4 WHERE s4.product_id=products.id)
         WHERE server_number = 4 AND pricing_mode = 'auto'
@@ -557,7 +569,9 @@ export async function refreshExchangeRateCron(env: ApiEnv): Promise<void> {
            WHERE id='global'`
         ).bind(resolvedRate, rateSource, now).run()
 
-        await recalculateAllUsdProducts(db, resolvedRate, config.markup_bps || 5000)
+        if (env.AUTOMATION_ENABLED !== 'false' && resolvedRate !== config.usd_to_ngn_rate) {
+          await recalculateAllUsdProducts(db, resolvedRate, config.markup_bps || 5000)
+        }
       } else {
         // Override is active; keep override rate as effective, but refresh active timestamp
         await db.prepare(
@@ -581,6 +595,6 @@ export async function refreshExchangeRateCron(env: ApiEnv): Promise<void> {
     ).bind(now).run()
   } else if (now - (config.fx_updated_at || 0) > 86400000) {
     // Only mark stale if older than 24 hours without any refresh
-    await db.prepare("UPDATE global_pricing_config SET fx_status='stale' WHERE id='global'").run().catch(() => {})
+    await db.prepare("UPDATE global_pricing_config SET fx_status='stale' WHERE id='global' AND fx_status<>'stale'").run().catch(() => {})
   }
 }
