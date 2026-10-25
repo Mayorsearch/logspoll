@@ -1,10 +1,12 @@
 import { renderEmail } from '../../src/lib/email-templates.ts'
 import type { EmailKind, EmailData } from '../../src/lib/email-templates.ts'
+import { getAuthSecret } from './auth.ts'
 import type { ApiEnv } from './types.ts'
 
 export const digest = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), b => b.toString(16).padStart(2, '0')).join('')
 async function key(env: ApiEnv) {
-  return crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new TextEncoder().encode(env.AUTH_SECRET)), 'AES-GCM', false, ['encrypt', 'decrypt'])
+  const secret = getAuthSecret(env)
+  return crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)), 'AES-GCM', false, ['encrypt', 'decrypt'])
 }
 export async function enqueueMail(env: ApiEnv, event: string, kind: EmailKind, user: { email: string; name: string }, otp?: string, otpSubject?: string, extraData?: Partial<EmailData>) {
   const message = renderEmail(kind, { firstName:user.name, appOrigin:env.APP_ORIGIN??env.AUTH_ORIGIN, ...(otp?{verificationCode:otp}:{}), ...(extraData??{}) })
@@ -33,7 +35,7 @@ export async function enqueueMail(env: ApiEnv, event: string, kind: EmailKind, u
 // D1 claims prevent overlapping deliveries. Resend deduplicates retries after an uncertain response.
 // Never retry beyond its 24h idempotency retention, or send an expired authentication code.
 export async function drainMail(env: ApiEnv) {
-  if (!env.DB || !env.AUTH_SECRET || !env.RESEND_API_KEY) return
+  if (!env.DB || !getAuthSecret(env) || !env.RESEND_API_KEY) return
   // Two bounded deliveries stay below the background execution window, including retries.
   for (let batch = 0; batch < 2; batch++) {
     const now = Date.now(); const owner = crypto.randomUUID()
@@ -84,7 +86,7 @@ export async function drainMail(env: ApiEnv) {
 
 // Events are committed with their business mutation. Queue IDs make retries deduplicate.
 export async function drainBusinessMail(env:ApiEnv) {
- if(!env.DB||!env.AUTH_SECRET)return
+ if(!env.DB||!getAuthSecret(env))return
  let rows:{results:{id:string;kind:EmailKind;email:string;name:string}[]}
  try{rows=await env.DB.prepare("SELECT e.id,e.kind,a.email,a.name FROM business_mail_events e JOIN auth_user a ON a.id=e.user_id WHERE e.queued_at IS NULL AND a.emailVerified=1 ORDER BY e.created_at LIMIT 2").all()}catch{return}
  for(const row of rows.results){

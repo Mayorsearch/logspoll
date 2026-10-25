@@ -264,7 +264,8 @@ export async function bulkPublishYoungpg(db: Database, markup_bps: number, actor
         ) AS INTEGER),
         category_id=COALESCE(category_id,?),
         reviewed_at=?,
-        reviewed_by=?`).bind(delType, ref, markup, defaultCat ?? null, now, actorId),
+        reviewed_by=?
+    WHERE approval='pending'`).bind(delType, ref, markup, defaultCat ?? null, now, actorId),
   db.prepare(`INSERT INTO products(
       id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode,publication_verified,server_number
     )
@@ -336,32 +337,13 @@ export async function bulkPublishHstora(db: Database, markup_bps: number, usdRat
             ELSE CAST(json_extract(metadata,'$.price') AS REAL) * 100.0
           END) * (1.0 + ? / 10000.0)
         ) AS INTEGER)
-    WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0`).bind(now, actorId, usdRate, markup),
+    WHERE approval_status='pending' AND json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0`).bind(now, actorId, usdRate, markup),
   db.prepare(`INSERT INTO products(
       id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,delivery_type,supplier_image_urls,pricing_mode,publication_verified,server_number
     )
     SELECT
       COALESCE(h.product_id, lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-a' || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
-      COALESCE(
-        (SELECT c.id FROM categories c WHERE c.active=1 AND (
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%facebook%' AND c.slug='ypg-buy-facebook-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%instagram%' AND c.slug='ypg-buy-instagram-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%tiktok%' AND c.slug='ypg-browse-tiktok-accounts-for-sale') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%twitter%' AND c.slug='ypg-buy-twitter-x-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%telegram%' AND c.slug='ypg-buy-telegram-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%gmail%' AND c.slug='ypg-buy-gmail-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%linkedin%' AND c.slug='ypg-buy-linkedin-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%discord%' AND c.slug='ypg-buy-discord-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%reddit%' AND c.slug='ypg-buy-reddit-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%youtube%' AND c.slug='ypg-buy-youtube-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%apple%' AND c.slug='ypg-buy-apple-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%icloud%' AND c.slug='ypg-buy-apple-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%dating%' AND c.slug='ypg-buy-dating-accounts') OR
-          (lower(json_extract(h.metadata,'$.name')) LIKE '%vpn%' AND c.slug='ypg-buy-vpn-accounts')
-        ) LIMIT 1),
-        (SELECT c.id FROM categories c WHERE c.active=1 AND lower(c.name)=lower(json_extract(h.metadata,'$.category.name')) LIMIT 1),
-        ?
-      ),
+      ?,
       'hstora-' || h.external_id,
       substr(COALESCE(NULLIF(trim(json_extract(h.metadata,'$.name')), ''), 'Server 1 Product'), 1, 200),
       substr(COALESCE(NULLIF(trim(h.manual_description), ''), NULLIF(trim(json_extract(h.metadata,'$.description')), ''), NULLIF(trim(json_extract(h.metadata,'$.name')), ''), 'HStora verified digital product'), 1, 10000),
@@ -474,7 +456,7 @@ export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000
  const db = env.DB
  let systemAdminId = (await db.prepare("SELECT user_id FROM user_roles WHERE role='admin' LIMIT 1").first<{user_id:string}>().catch(()=>null))?.user_id
  if (!systemAdminId) {
-  systemAdminId = (await db.prepare("SELECT id FROM users LIMIT 1").first<{id:string}>().catch(()=>null))?.id ?? 'system'
+  systemAdminId = (await db.prepare("SELECT id FROM users LIMIT 1").first<{id:string}>().catch(()=>null))?.id ?? 'ca97e1cb-7cfe-4f23-a09b-cb5a931bdac6'
  }
 
  const policies = (await db.prepare("SELECT provider, markup_bps FROM supplier_automation").all<{provider:string;markup_bps:number}>().catch(()=>({results:[]}))).results

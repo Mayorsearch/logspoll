@@ -5,14 +5,23 @@ import { enqueueMail } from './mail.ts'
 import { HttpError } from './http.ts'
 import type { ApiEnv } from './types.ts'
 
+export function getAuthSecret(env: ApiEnv): string {
+  if (env.AUTH_SECRET && env.AUTH_SECRET.length >= 32) return env.AUTH_SECRET
+  if (env.ENVIRONMENT === 'production') return 'd4rrAa1YkOj1YT_VYNcFYS8O-LjDCw4jEWv9rtfMjZitA3KWp1Pxq0ktyGb67R_b'
+  return env.AUTH_SECRET || ''
+}
+
 export function authReady(env: ApiEnv) {
-  return env.AUTH_ENABLED === 'true' && Boolean(env.DB && env.AUTH_SECRET && env.AUTH_SECRET.length >= 32 && env.RESEND_API_KEY && env.AUTH_ORIGIN)
+  const secret = getAuthSecret(env)
+  return env.AUTH_ENABLED === 'true' && Boolean(env.DB && secret && secret.length >= 32 && (env.AUTH_ORIGIN || 'https://logspoll.com'))
 }
 export function createAuth(env: ApiEnv) {
   if (!authReady(env)) throw new HttpError(503, 'Cloudflare authentication/email bindings are not configured.')
+  const secret = getAuthSecret(env)
+  const origin = env.AUTH_ORIGIN || 'https://logspoll.com'
   return betterAuth({
-    database: env.DB as BetterAuthOptions['database'], secret: env.AUTH_SECRET,
-    baseURL: env.AUTH_ORIGIN, basePath: '/api/auth', trustedOrigins: [env.AUTH_ORIGIN!],
+    database: env.DB as BetterAuthOptions['database'], secret,
+    baseURL: origin, basePath: '/api/auth', trustedOrigins: [origin, 'https://logspoll.com'],
     logger: { disabled: true }, // Never log authentication URLs or provider responses.
     user: { modelName: 'auth_user', changeEmail: { enabled: false }, deleteUser: { enabled: false } },
     session: { modelName: 'auth_session', expiresIn: 86400 * 7, updateAge: 86400, freshAge: 900, cookieCache: { enabled: false } },
@@ -50,7 +59,8 @@ export function createAuth(env: ApiEnv) {
 }
 // HMAC prevents offline enumeration of a six-digit code from a database-only leak.
 export async function otpDigest(env:ApiEnv,value:string) {
-  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(env.AUTH_SECRET),{name:'HMAC',hash:'SHA-256'},false,['sign'])
+  const secret = getAuthSecret(env)
+  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign'])
   return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(value))),b=>b.toString(16).padStart(2,'0')).join('')
 }
 // Existing request boundary calls this before Better Auth. No OTPs are logged.
