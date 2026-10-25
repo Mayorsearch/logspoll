@@ -6,6 +6,7 @@ import type { ApiEnv } from './types.ts'
 export const digest = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), b => b.toString(16).padStart(2, '0')).join('')
 async function key(env: ApiEnv) {
   const secret = getAuthSecret(env)
+  if (!secret) throw new Error('AUTH_SECRET is required for mail encryption.')
   return crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)), 'AES-GCM', false, ['encrypt', 'decrypt'])
 }
 export async function enqueueMail(env: ApiEnv, event: string, kind: EmailKind, user: { email: string; name: string }, otp?: string, otpSubject?: string, extraData?: Partial<EmailData>) {

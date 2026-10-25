@@ -60,6 +60,7 @@ export function createAuth(env: ApiEnv) {
 // HMAC prevents offline enumeration of a six-digit code from a database-only leak.
 export async function otpDigest(env:ApiEnv,value:string) {
   const secret = getAuthSecret(env)
+  if (!secret) throw new HttpError(503, 'Authentication secret is not configured.')
   const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign'])
   return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(value))),b=>b.toString(16).padStart(2,'0')).join('')
 }
