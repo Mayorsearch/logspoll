@@ -7,8 +7,7 @@ import type { ApiEnv } from './types.ts'
 
 export function getAuthSecret(env: ApiEnv): string {
   if (env.AUTH_SECRET && env.AUTH_SECRET.length >= 32) return env.AUTH_SECRET
-  if (env.ENVIRONMENT === 'production') return 'd4rrAa1YkOj1YT_VYNcFYS8O-LjDCw4jEWv9rtfMjZitA3KWp1Pxq0ktyGb67R_b'
-  return env.AUTH_SECRET || ''
+  return ''
 }
 
 export function authReady(env: ApiEnv) {
@@ -36,6 +35,7 @@ export function createAuth(env: ApiEnv) {
     plugins: [emailOTP({ otpLength:6, expiresIn:600, allowedAttempts:5, storeOTP:{hash:code=>otpDigest(env,code)},
       resendStrategy:'rotate', overrideDefaultEmailVerification:true, sendVerificationOnSignUp:true, disableSignUp:true, rateLimit:{window:60,max:10},
       sendVerificationOTP:async({email,otp,type})=>{
+        if(!env.RESEND_API_KEY)throw new HttpError(503,'Email service is not configured. Verification code cannot be sent.')
         if(type!=='email-verification'&&type!=='forget-password')throw new HttpError(400,'Unsupported verification purpose.')
         const user=await env.DB!.prepare('SELECT email,name FROM auth_user WHERE email=?').bind(email).first<{email:string;name:string}>()
         if(user)await enqueueMail(env,`otp:${type}:${crypto.randomUUID()}`,type==='email-verification'?'verification':'password_reset',user,otp,await otpDigest(env,`${type}:${email}`))

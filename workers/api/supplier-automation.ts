@@ -456,8 +456,9 @@ export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000
  const db = env.DB
  let systemAdminId = (await db.prepare("SELECT user_id FROM user_roles WHERE role='admin' LIMIT 1").first<{user_id:string}>().catch(()=>null))?.user_id
  if (!systemAdminId) {
-  systemAdminId = (await db.prepare("SELECT id FROM users LIMIT 1").first<{id:string}>().catch(()=>null))?.id ?? 'ca97e1cb-7cfe-4f23-a09b-cb5a931bdac6'
+  systemAdminId = (await db.prepare("SELECT id FROM users LIMIT 1").first<{id:string}>().catch(()=>null))?.id
  }
+ if (!systemAdminId) return 0
 
  const policies = (await db.prepare("SELECT provider, markup_bps FROM supplier_automation").all<{provider:string;markup_bps:number}>().catch(()=>({results:[]}))).results
  const polMap = new Map(policies.map(p => [p.provider, p.markup_bps]))
@@ -514,7 +515,13 @@ export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000
         ?
       ) / 10000.0)
     ) AS INTEGER)
-    WHERE supplier_cost_minor>0 AND approval='approved'`).bind(ypgMarkup),
+    WHERE supplier_cost_minor>0 AND approval='approved'
+      AND (selling_price_minor IS NULL OR selling_price_minor <> CAST(ROUND(
+        supplier_cost_minor * (1.0 + COALESCE(
+          (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='youngpg' AND r.category_id=staging_supplier_feed_items.category_id AND r.markup_bps>0),
+          ?
+        ) / 10000.0)
+      ) AS INTEGER))`).bind(ypgMarkup, ypgMarkup),
   db.prepare(`UPDATE products
     SET price_minor=(
       SELECT f.selling_price_minor FROM staging_supplier_feed_items f
@@ -531,7 +538,14 @@ export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000
         ELSE CAST(json_extract(metadata,'$.price') AS REAL) * 100.0
       END) * (1.0 + ? / 10000.0)
     ) AS INTEGER)
-    WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0 AND approval_status='approved'`).bind(usdRate, hstoraMarkup),
+    WHERE json_valid(metadata) AND CAST(json_extract(metadata,'$.price') AS REAL)>0 AND approval_status='approved'
+      AND (selling_price_minor IS NULL OR selling_price_minor <> CAST(ROUND(
+        (CASE
+          WHEN json_extract(metadata,'$.currency') = 'USD'
+            THEN CAST(json_extract(metadata,'$.price') AS REAL) * ? * 100.0
+          ELSE CAST(json_extract(metadata,'$.price') AS REAL) * 100.0
+        END) * (1.0 + ? / 10000.0)
+      ) AS INTEGER))`).bind(usdRate, hstoraMarkup, usdRate, hstoraMarkup),
   db.prepare(`UPDATE products
     SET price_minor=(SELECT h.selling_price_minor FROM hstora_catalog_items h WHERE h.product_id=products.id)
     WHERE server_number=1 AND pricing_mode='auto'
@@ -543,7 +557,13 @@ export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000
         ?
       ) / 10000.0)
     ) AS INTEGER)
-    WHERE cost_minor>0 AND approval_status='approved'`).bind(s3Markup),
+    WHERE cost_minor>0 AND approval_status='approved'
+      AND (selling_price_minor IS NULL OR selling_price_minor <> CAST(ROUND(
+        cost_minor * (1.0 + COALESCE(
+          (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='shopviaclone22' AND r.category_id=shopviaclone22_catalog_items.category_id AND r.markup_bps>0),
+          ?
+        ) / 10000.0)
+      ) AS INTEGER))`).bind(s3Markup, s3Markup),
   db.prepare(`UPDATE products
     SET price_minor=(SELECT s3.selling_price_minor FROM shopviaclone22_catalog_items s3 WHERE s3.product_id=products.id)
     WHERE server_number=3 AND pricing_mode='auto'
@@ -555,7 +575,13 @@ export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000
         ?
       ) / 10000.0)
     ) AS INTEGER)
-    WHERE cost_minor>0 AND approval_status='approved'`).bind(dcoreMarkup),
+    WHERE cost_minor>0 AND approval_status='approved'
+      AND (selling_price_minor IS NULL OR selling_price_minor <> CAST(ROUND(
+        cost_minor * (1.0 + COALESCE(
+          (SELECT r.markup_bps FROM supplier_category_rules r WHERE r.provider='digitalcore' AND r.category_id=digitalcore_catalog_items.category_id AND r.markup_bps>0),
+          ?
+        ) / 10000.0)
+      ) AS INTEGER))`).bind(dcoreMarkup, dcoreMarkup),
   db.prepare(`UPDATE products
     SET price_minor=(SELECT dc.selling_price_minor FROM digitalcore_catalog_items dc WHERE dc.product_id=products.id)
     WHERE server_number=4 AND pricing_mode='auto'
