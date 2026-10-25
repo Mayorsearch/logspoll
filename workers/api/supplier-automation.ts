@@ -455,9 +455,6 @@ export async function autoPublishNewSupplierItems(env: ApiEnv, markup_bps = 5000
  if (!env.DB) return 0
  const db = env.DB
  let systemAdminId = (await db.prepare("SELECT user_id FROM user_roles WHERE role='admin' LIMIT 1").first<{user_id:string}>().catch(()=>null))?.user_id
- if (!systemAdminId) {
-  systemAdminId = (await db.prepare("SELECT id FROM users LIMIT 1").first<{id:string}>().catch(()=>null))?.id
- }
  if (!systemAdminId) return 0
 
  const policies = (await db.prepare("SELECT provider, markup_bps FROM supplier_automation").all<{provider:string;markup_bps:number}>().catch(()=>({results:[]}))).results
