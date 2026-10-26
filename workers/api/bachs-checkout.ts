@@ -7,7 +7,7 @@ import type {ApiEnv} from './types.ts'
 
 type Item={id:string;quantity:number}
 type Buyer={id:string;email:string}
-type Attempt={id:string;order_id:string;provider_mode:'live'|'sandbox';amount_minor:number;idempotency_key:string;checkout_id:string|null;status:string}
+type Attempt={id:string;order_id:string;provider_mode:'live'|'sandbox';amount_minor:number;idempotency_key:string;checkout_id:string|null;status:string;payment_status?:string|null}
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export function paymentMode(env:ApiEnv){
  const mode=env.ENVIRONMENT==='staging'?'sandbox':'live'
@@ -21,8 +21,8 @@ export function paymentMode(env:ApiEnv){
 export async function initiateCheckout(env:ApiEnv,buyer:Buyer,requestId:string,items:Item[],origin:string){
  const mode=paymentMode(env),db=env.DB!
  if(!uuid.test(requestId)||!items.length||items.length>20||items.some(i=>!i||!uuid.test(i.id)||!Number.isInteger(i.quantity)||i.quantity<1||i.quantity>1000)||new Set(items.map(i=>i.id)).size!==items.length)throw new HttpError(400,'Invalid checkout selection or request ID.')
- let attempt=await db.prepare('SELECT * FROM bachs_payment_attempts WHERE customer_id=? AND client_request_id=?').bind(buyer.id,requestId).first<Attempt>()
- if(attempt){
+ let attempt: Attempt | null = await db.prepare('SELECT a.*, o.payment_status FROM bachs_payment_attempts a LEFT JOIN orders o ON o.id=a.order_id WHERE a.customer_id=? AND a.client_request_id=?').bind(buyer.id,requestId).first<Attempt>()
+ if(attempt && attempt.payment_status !== 'refunded' && attempt.payment_status !== 'cancelled'){
   const previous=await db.prepare('SELECT product_id AS id,quantity FROM order_items WHERE order_id=? ORDER BY product_id').bind(attempt.order_id).all<Item>()
   const sort=(list:Item[])=>JSON.stringify([...list].sort((a,b)=>a.id.localeCompare(b.id)).map(i=>[i.id,i.quantity]))
   if(sort(items)!==sort(previous.results)||attempt.provider_mode!==mode)throw new HttpError(409,'Idempotency request does not match the original checkout.')
@@ -48,8 +48,9 @@ export async function initiateCheckout(env:ApiEnv,buyer:Buyer,requestId:string,i
    if(concurrent)return initiateCheckout(env,buyer,requestId,items,origin)
    throw new HttpError(409,'Stock or prices changed. No order or reservation was created.')
   }
-  attempt={id,order_id:order,provider_mode:mode,amount_minor:total,idempotency_key:key,checkout_id:null,status:'initiating'}
+  attempt={id,order_id:order,provider_mode:mode,amount_minor:total,idempotency_key:key,checkout_id:null,status:'initiating',payment_status:'pending'}
  }
+ if(!attempt)throw new HttpError(500,'Failed to establish payment attempt.')
  if(!['initiating','open'].includes(attempt.status))return {orderId:attempt.order_id,status:attempt.status}
  if(attempt.amount_minor<BACHS_MINIMUM_NGN_MINOR)throw new HttpError(400,BACHS_MINIMUM_MESSAGE)
  // Every retry uses the same provider key. Ambiguous timeouts retain the hold.

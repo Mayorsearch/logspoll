@@ -413,7 +413,7 @@ export async function payOrderWithWallet(
     throw new HttpError(400, 'Duplicate product IDs in checkout.')
   }
 
-  const txRef = 'TX-ORD-' + user.id + '-' + requestId
+  let txRef = 'TX-ORD-' + user.id + '-' + requestId
   const priorOrder = async () => {
     const prior = await db.prepare("SELECT o.id,o.reference,o.total_minor,t.balance_after_minor FROM wallet_transactions t JOIN orders o ON o.id=t.order_id WHERE t.reference=? AND t.customer_id=? AND t.type='purchase' AND t.status='completed' AND o.payment_status='paid'").bind(txRef,user.id).first<{id:string;reference:string;total_minor:number;balance_after_minor:number}>()
     if (!prior) return null
@@ -424,6 +424,11 @@ export async function payOrderWithWallet(
   }
   const previous = await priorOrder()
   if (previous) return previous
+
+  const existingTx = await db.prepare("SELECT 1 FROM wallet_transactions WHERE reference=?").bind(txRef).first()
+  if (existingTx) {
+    txRef = 'TX-ORD-' + user.id + '-' + requestId + '-' + Date.now()
+  }
 
   // Check if wallet is active and available
   const wallet = await getOrCreateWallet(db, user.id)

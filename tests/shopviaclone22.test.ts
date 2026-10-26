@@ -12,6 +12,7 @@ import {
   ShopViaError,
 } from '../server/shopviaclone22.ts'
 import { calculateSellingPrice } from '../server/pricing.ts'
+import { prepareDelivery } from '../server/supplier-delivery.ts'
 
 test('ShopViaClone22 decimal prices parse exactly to integer minor kobo', () => {
   assert.equal(parseDecimalToMinor('25.50'), 2550)
@@ -293,5 +294,107 @@ test('normalizeShopViaCatalog converts USD prices to NGN at configured rate', ()
   assert.equal(item.costMinor, 405000) // ₦4,050.00
   assert.equal(item.currency, 'NGN')
   assert.equal(item.stock, 351)
+})
+
+test('purchaseShopViaProduct sends action=buyProduct, id, product, amount and X-API-Key', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (url: unknown, options: RequestInit) => {
+    assert.equal(String(url), 'https://shopviaclone22.com/api/buy_product')
+    assert.equal(options.method, 'POST')
+    const headers = new Headers(options.headers)
+    assert.equal(headers.get('X-API-Key'), 'valid-key')
+    assert.equal(headers.get('Content-Type'), 'application/x-www-form-urlencoded')
+    const body = new URLSearchParams(String(options.body))
+    assert.equal(body.get('action'), 'buyProduct')
+    assert.equal(body.get('id'), '342')
+    assert.equal(body.get('product'), '342')
+    assert.equal(body.get('amount'), '1')
+    assert.equal(body.get('client_order_id'), 'ORD-123')
+    return new Response(JSON.stringify({ status: 'success', id: 'tx-999', data: 'mail|pass|token' }), {
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+
+  const res = (await purchaseShopViaProduct('valid-key', {
+    productId: '342',
+    amount: 1,
+    customOrderId: 'ORD-123',
+  })) as any
+  assert.equal(res.status, 'success')
+  assert.equal(res.id, 'tx-999')
+})
+
+test('prepareDelivery correctly parses stock for ShopViaClone22 when product.php returns nested data array', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (url: unknown, options?: RequestInit) => {
+    const u = new URL(String(url))
+    if (u.pathname === '/api/product.php') {
+      return new Response(JSON.stringify({
+        status: 'success',
+        data: [{ id: '342', price: '0.02', amount: 90731, name: 'Hotmail Trusted' }],
+      }), { headers: { 'content-type': 'application/json' } })
+    }
+    if (options?.method === 'POST') {
+      return new Response(JSON.stringify({
+        status: 'success',
+        order_id: 'ord-342',
+        data: 'mail|pass|token',
+      }), { headers: { 'content-type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({ status: 'error' }), { status: 404 })
+  })
+
+  const plan = await prepareDelivery('shopviaclone22', { apiKey: 'valid-key', baseUrl: 'https://shopviaclone22.com/api' }, {
+    externalId: '342',
+    quantity: 1,
+    requestId: 'req-342',
+    maxCostMinor: 100000,
+    fxRate: '1500',
+  })
+  const delivery = await plan.buy()
+  assert.equal(delivery.receipt, 'ord-342')
+  assert.equal(delivery.delivered, true)
+  assert.deepEqual(delivery.items, ['mail|pass|token'])
+})
+
+test('prepareDelivery falls back to products.php when product.php returns error or missing stock', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (url: unknown, options?: RequestInit) => {
+    const u = new URL(String(url))
+    if (u.pathname === '/api/product.php') {
+      return new Response(JSON.stringify({
+        status: 'error',
+        msg: 'The Request Not Found',
+      }), { headers: { 'content-type': 'application/json' } })
+    }
+    if (u.pathname === '/api/products.php') {
+      return new Response(JSON.stringify({
+        categories: [
+          {
+            id: '227',
+            name: 'Hotmail',
+            products: [{ id: '342', price: '0.02', amount: 90731, name: 'Hotmail Trusted' }],
+          },
+        ],
+      }), { headers: { 'content-type': 'application/json' } })
+    }
+    if (options?.method === 'POST') {
+      return new Response(JSON.stringify({
+        status: 'success',
+        trans_id: 'trans-342',
+        items: ['token-item-1'],
+      }), { headers: { 'content-type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({ status: 'error' }), { status: 404 })
+  })
+
+  const plan = await prepareDelivery('shopviaclone22', { apiKey: 'valid-key', baseUrl: 'https://shopviaclone22.com/api' }, {
+    externalId: '342',
+    quantity: 1,
+    requestId: 'req-fallback',
+    maxCostMinor: 100000,
+    fxRate: '1500',
+  })
+  const delivery = await plan.buy()
+  assert.equal(delivery.receipt, 'trans-342')
+  assert.equal(delivery.delivered, true)
+  assert.deepEqual(delivery.items, ['token-item-1'])
 })
 

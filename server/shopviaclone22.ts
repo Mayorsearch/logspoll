@@ -539,10 +539,12 @@ export async function purchaseShopViaProduct(
   const cleanBase = baseUrl.trim().replace(/\/+$/, '')
   const endpoint = `${cleanBase}/buy_product`
   const body = new URLSearchParams({
+    action: 'buyProduct',
     api_key: key,
+    id: prodId,
     product: prodId,
     amount: String(params.amount),
-    ...(params.customOrderId ? { custom_order_id: params.customOrderId } : {}),
+    ...(params.customOrderId ? { custom_order_id: params.customOrderId, client_order_id: params.customOrderId } : {}),
   })
 
   let response: Response
@@ -552,6 +554,7 @@ export async function purchaseShopViaProduct(
       redirect: 'follow',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
+        'X-API-Key': key,
         ...DEFAULT_HEADERS,
       },
       body: body.toString(),
@@ -562,8 +565,8 @@ export async function purchaseShopViaProduct(
   }
 
   const result = await response.json().catch(() => null)
-  if (!response.ok || (result && typeof result === 'object' && (result as any).status === 'error')) {
-    const msg = (result && typeof result === 'object' && ((result as any).msg || (result as any).error)) || `HTTP ${response.status}`
+  if (!response.ok || (result && typeof result === 'object' && ((result as any).status === 'error' || (result as any).success === false))) {
+    const msg = (result && typeof result === 'object' && ((result as any).msg || (result as any).message || (result as any).error)) || `HTTP ${response.status}`
     throw new ShopViaError(`ShopViaClone22 purchase rejected: ${msg}`, response.status || 400)
   }
 

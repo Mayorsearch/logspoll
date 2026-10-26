@@ -60,7 +60,7 @@ export function Checkout() {
 
   // Track order ID from query params or customer- and cart-scoped storage.
   // Stale or completed previous orders NEVER override the current cart.
-  const paramOrderId = searchParams.get('order_id') || searchParams.get('id')
+  const paramOrderId = searchParams.get('order_id')
   const [activeOrderId, setActiveOrderId] = useState<string | null>(() => {
     if (paramOrderId) return paramOrderId
     if (session?.user.id && items.length > 0) {
@@ -130,6 +130,13 @@ export function Checkout() {
           clear()
           clearCheckoutRequest(sessionStorage, session.user.id, items)
           clearCartActiveOrderId(sessionStorage, session.user.id, items)
+        } else if ((res.order.payment_status === 'refunded' || res.order.payment_status === 'cancelled') && isCurrentCart) {
+          clearCheckoutRequest(sessionStorage, session.user.id, items)
+          clearCartActiveOrderId(sessionStorage, session.user.id, items)
+          if (items.length > 0 && !paramOrderId) {
+            setActiveOrderId(null)
+            setOrderStatus(null)
+          }
         }
       } else {
         setStatusError('Order details could not be retrieved.')
@@ -518,7 +525,7 @@ export function Checkout() {
             </div>
 
             <div className="order-success-actions">
-              {isPending && (
+              {isPending ? (
                 <button
                   type="button"
                   className="cart-primary-btn"
@@ -527,6 +534,21 @@ export function Checkout() {
                 >
                   <RefreshCw size={16} className={checkingStatus ? 'animate-spin' : ''} />
                   Check Status Again
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="cart-primary-btn"
+                  onClick={() => {
+                    if (session) {
+                      clearCartActiveOrderId(sessionStorage, session.user.id, items)
+                      clearCheckoutRequest(sessionStorage, session.user.id, items)
+                    }
+                    setActiveOrderId(null)
+                    setOrderStatus(null)
+                  }}
+                >
+                  Start New Checkout
                 </button>
               )}
               <Link to="/cart" className="cart-secondary-btn">

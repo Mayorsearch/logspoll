@@ -33,13 +33,15 @@ async function request(url:string,headers:Headers,method='GET',body?:string){
  const reader=r.body?.getReader();let raw='',size=0;const decoder=new TextDecoder()
  try{if(reader)while(true){const next=await reader.read();if(next.done)break;size+=next.value.byteLength;if(size>256000)throw Error();raw+=decoder.decode(next.value,{stream:true})}raw+=decoder.decode()}catch{throw new DeliveryError('Supplier response was interrupted.',method==='POST'?'uncertain':'retry')}finally{await reader?.cancel().catch(()=>undefined)}
  let data:Record<string,unknown>|null=null;try{data=object(JSON.parse(raw))}catch{/* Never expose provider bodies or credentials. */}
- if(!r.ok||data?.success===false){
+ if(!r.ok||data?.success===false||data?.status==='error'){
   if(r.status===403)throw new DeliveryError('Supplier denied API permissions or access. YoungPG requires orders:write, orders:read and wallet:read scopes.')
   if(r.status===401)throw new DeliveryError('Supplier authentication failed. Update the stored API credentials.')
   if(r.status===429)throw new DeliveryError('Supplier rate limit; delivery will retry later.','retry')
   const knownFailure=String(data?.message??data?.msg??objectSafe(data?.error)?.code??'').toLowerCase()
-  if(data&&[400,402,409].includes(r.status)&&/insufficient|out.of.stock|balance/.test(knownFailure))throw new DeliveryError('Supplier balance or stock is insufficient; delivery will retry later.','retry')
+  if(/invalid api key|please log in|authentication/.test(knownFailure))throw new DeliveryError('Supplier authentication failed. Update the stored API credentials.')
+  if(/insufficient|out.of.stock|balance|empty stock/.test(knownFailure))throw new DeliveryError('Supplier balance or stock is insufficient; delivery will retry later.','retry')
   if(method==='POST'&&(!data||r.status>=500||r.status<400))throw new DeliveryError('Supplier purchase result is uncertain; reconcile supplier order history.','uncertain')
+  if(data?.msg||data?.message)throw new DeliveryError(`Supplier rejected: ${String(data.msg||data.message)}`,'retry')
   throw new DeliveryError(`Supplier HTTP ${r.status}; verify configuration.`,method==='GET'&&r.status>=500?'retry':'blocked')
  }
  if(!data)throw new DeliveryError('Supplier response was invalid.',method==='POST'?'uncertain':'retry')
@@ -88,10 +90,67 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
   if(parsedBase.protocol!=='https:'||parsedBase.hostname!=='shopviaclone22.com')throw new DeliveryError('ShopViaClone22 purchase host is not verified.')
   if(!input.recovering){
    const prodPath=`${baseUrl.replace(/\/+$/,'')}/product.php?api_key=${encodeURIComponent(key)}&product=${encodeURIComponent(input.externalId)}&id=${encodeURIComponent(input.externalId)}`
-   const detail=await request(prodPath,new Headers({Accept:'application/json'}))
-   const prod=objectSafe(detail.product)??objectSafe(detail.data)??detail
-   if(prod.id&&String(prod.id)!==input.externalId)throw new DeliveryError('ShopViaClone22 product identity changed.')
-   price=prod.price;currency=String(prod.currency??'USD').toUpperCase();stock=prod.amount??prod.stock
+   let prod: Record<string, unknown> | null = null
+   try {
+    const detail = await request(prodPath, new Headers({Accept:'application/json'}))
+    if (objectSafe(detail.product)) {
+      prod = objectSafe(detail.product)
+    } else if (objectSafe(detail.data)) {
+      prod = objectSafe(detail.data)
+    } else if (Array.isArray(detail.data) && detail.data.length > 0) {
+      const match = detail.data.find((item: any) => item && typeof item === 'object' && String(item.id) === String(input.externalId))
+      prod = objectSafe(match) ?? objectSafe(detail.data[0])
+    } else if (Array.isArray(detail.products) && detail.products.length > 0) {
+      const match = detail.products.find((item: any) => item && typeof item === 'object' && String(item.id) === String(input.externalId))
+      prod = objectSafe(match) ?? objectSafe(detail.products[0])
+    } else {
+      prod = objectSafe(detail)
+    }
+   } catch {
+    prod = null
+   }
+   if (prod && prod.id && String(prod.id) !== input.externalId) throw new DeliveryError('ShopViaClone22 product identity changed.')
+   const rawStock = prod?.amount ?? prod?.stock ?? prod?.quantity ?? prod?.count
+   if (prod && (prod.price !== undefined || rawStock !== undefined)) {
+     price = prod.price
+     currency = String(prod.currency ?? 'USD').toUpperCase()
+     stock = rawStock !== undefined && rawStock !== null ? Number(rawStock) : undefined
+   }
+   if (!Number.isSafeInteger(Number(stock))) {
+     try {
+       const catalogPath = `${baseUrl.replace(/\/+$/,'')}/products.php?api_key=${encodeURIComponent(key)}`
+       const catalogRes = await request(catalogPath, new Headers({Accept:'application/json'}))
+       let itemsList: any[] = []
+       if (Array.isArray(catalogRes)) {
+         itemsList = catalogRes
+       } else if (Array.isArray(catalogRes.products)) {
+         itemsList = catalogRes.products
+       } else if (Array.isArray(catalogRes.data)) {
+         itemsList = catalogRes.data
+       } else if (Array.isArray(catalogRes.categories)) {
+         for (const c of catalogRes.categories) {
+           if (Array.isArray((c as any)?.products)) itemsList.push(...(c as any).products)
+         }
+       } else if (catalogRes.data && typeof catalogRes.data === 'object') {
+         const dataObj = catalogRes.data as any
+         if (Array.isArray(dataObj.categories)) {
+           for (const c of dataObj.categories) {
+             if (Array.isArray(c?.products)) itemsList.push(...c.products)
+           }
+         } else if (Array.isArray(dataObj.products)) {
+           itemsList = dataObj.products
+         }
+       }
+       const match = itemsList.find(i => i && typeof i === 'object' && String(i.id) === String(input.externalId))
+       if (match) {
+         price = match.price ?? price
+         currency = String(match.currency ?? 'USD').toUpperCase()
+         stock = match.amount ?? match.stock ?? match.quantity
+       }
+     } catch {
+       // Proceed to stock check below
+     }
+   }
   }
  }else{
   const key=credentials.apiKey?.trim();if(!key)throw new DeliveryError('DigitalCore API key is missing.')
@@ -107,11 +166,11 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
  }
  const parse=(payload:Record<string,unknown>):Delivery=>{
   const d=provider==='digitalcore'?payload:provider==='shopviaclone22'?(objectSafe(payload.order)??objectSafe(payload.data)??payload):object(payload.data)
-  const rawId=provider==='hstora'?d.id:provider==='shopviaclone22'?(d.order_id??d.id??payload.order_id??payload.id):d.order_id
+  const rawId=provider==='hstora'?d.id:provider==='shopviaclone22'?(d.order_id??d.id??payload.order_id??payload.id??d.trans_id??payload.trans_id??d.transaction_id):d.order_id
   const id=receipt(rawId)
   if(provider==='hstora'&&d.external_order_id!==input.requestId)throw new DeliveryError('HStora order reference mismatch.','uncertain')
   const delivery=objectSafe(d.delivery)
-  const rawItems=provider==='youngpg'?d.accounts:provider==='hstora'?delivery?.items:provider==='shopviaclone22'?(d.items??d.accounts??d.code??d.data??d.text??payload.items??payload.accounts??payload.code):d.items
+  const rawItems=provider==='youngpg'?d.accounts:provider==='hstora'?delivery?.items:provider==='shopviaclone22'?(d.items??d.accounts??d.code??d.data??d.text??payload.items??payload.accounts??payload.code??payload.data??payload.text):d.items
   const deliveredItems=items(rawItems,input.quantity)
   const ready=provider==='hstora'?d.status==='delivered'&&delivery?.available===true:provider==='digitalcore'?Number(d.quantity)===input.quantity:provider==='shopviaclone22'?(d.status==='completed'||d.status==='delivered'||d.status==='success'||payload.status==='success'||deliveredItems.length===input.quantity):true
   return{receipt:id,items:deliveredItems,delivered:ready&&deliveredItems.length===input.quantity}
@@ -124,8 +183,8 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
     const baseUrl=credentials.baseUrl?.trim()||'https://shopviaclone22.com/api'
     const key=credentials.apiKey?.trim()||credentials.key?.trim()||''
     const url=`${baseUrl.replace(/\/+$/,'')}/buy_product`
-    const body=new URLSearchParams({api_key:key,product:input.externalId,amount:String(input.quantity),custom_order_id:input.requestId}).toString()
-    const shopHeaders=new Headers({Accept:'application/json','Content-Type':'application/x-www-form-urlencoded'})
+    const body=new URLSearchParams({action:'buyProduct',api_key:key,id:input.externalId,product:input.externalId,amount:String(input.quantity),custom_order_id:input.requestId,client_order_id:input.requestId}).toString()
+    const shopHeaders=new Headers({Accept:'application/json','Content-Type':'application/x-www-form-urlencoded','X-API-Key':key})
     return parse(await request(url,shopHeaders,'POST',body))
    }
    const url=provider==='youngpg'?YOUNGPG_ORIGIN+'/api/v1/purchase':'https://digitalcore.top/api/user/buy'

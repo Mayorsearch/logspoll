@@ -523,3 +523,35 @@ test('cart refresh refuses cross-origin requests and does not reprice hidden pro
   assert.deepEqual(body.blockedItems,[])
   assert.equal(sql.prepare('SELECT price_minor FROM products WHERE id=?').get(id)!.price_minor,100000)
 })
+
+test('Re-purchasing an item after refund creates a distinct transaction reference and succeeds', async t => {
+  const {sql, env} = fixture(); t.after(() => sql.close())
+  const {id} = hstoraProduct(sql, { mode: 'override' })
+  const reqId = crypto.randomUUID()
+  const user = { id: customer, email: 'c@test.com' }
+  const req = (rId: string) => new Request('https://test/api/wallet/pay-order', {
+    method: 'POST',
+    body: JSON.stringify({
+      requestId: rId,
+      items: [{ id, quantity: 1 }],
+    }),
+  })
+
+  // 1. First purchase
+  const res1 = await payOrderWithWallet(req(reqId), env, user)
+  assert.equal(res1.status, 201)
+  const body1 = await res1.json() as { ok: boolean; orderId: string }
+  assert.equal(body1.ok, true)
+
+  // 2. Simulate order refund in database
+  sql.prepare("UPDATE orders SET payment_status='refunded' WHERE id=?").run(body1.orderId)
+  sql.prepare("INSERT INTO wallet_transactions(id, wallet_id, customer_id, order_id, type, direction, amount_minor, balance_before_minor, balance_after_minor, reference, status, created_at) SELECT ?, wallet_id, customer_id, order_id, 'refund', 'credit', amount_minor, balance_after_minor, balance_before_minor, ?, 'completed', 2 FROM wallet_transactions WHERE order_id=?").run(crypto.randomUUID(), 'TX-REF-' + body1.orderId, body1.orderId)
+  sql.prepare("UPDATE wallets SET balance_minor=300000 WHERE customer_id=?").run(customer)
+
+  // 3. Re-purchase with same requestId must not crash on UNIQUE(reference)
+  const res2 = await payOrderWithWallet(req(reqId), env, user)
+  assert.equal(res2.status, 201)
+  const body2 = await res2.json() as { ok: boolean; orderId: string }
+  assert.equal(body2.ok, true)
+  assert.notEqual(body2.orderId, body1.orderId)
+})
