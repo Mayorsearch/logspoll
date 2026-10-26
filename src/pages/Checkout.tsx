@@ -286,7 +286,6 @@ export function Checkout() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           requestId: checkoutRequestId(sessionStorage, session.user.id, items),

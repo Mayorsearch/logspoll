@@ -1,7 +1,6 @@
 import { betterAuth } from 'better-auth'
 import type { BetterAuthOptions } from 'better-auth'
 import { emailOTP } from 'better-auth/plugins/email-otp'
-import { bearer } from 'better-auth/plugins/bearer'
 import { enqueueMail } from './mail.ts'
 import { HttpError } from './http.ts'
 import type { ApiEnv } from './types.ts'
@@ -33,7 +32,7 @@ export function createAuth(env: ApiEnv) {
     rateLimit: { enabled: true, storage: 'database', modelName: 'auth_rate_limit', window: 60, max: 30,
       customRules: { '/sign-in/email': { window: 60, max: 5 }, '/sign-up/email': { window: 60, max: 3 },
         '/request-password-reset': { window: 60, max: 3 }, '/send-verification-email': { window: 60, max: 3 } } },
-    plugins: [bearer(), emailOTP({ otpLength:6, expiresIn:600, allowedAttempts:5, storeOTP:{hash:code=>otpDigest(env,code)},
+    plugins: [emailOTP({ otpLength:6, expiresIn:600, allowedAttempts:5, storeOTP:{hash:code=>otpDigest(env,code)},
       resendStrategy:'rotate', overrideDefaultEmailVerification:true, sendVerificationOnSignUp:true, disableSignUp:true, rateLimit:{window:60,max:10},
       sendVerificationOTP:async({email,otp,type})=>{
         if(!env.RESEND_API_KEY)throw new HttpError(503,'Email service is not configured. Verification code cannot be sent.')
