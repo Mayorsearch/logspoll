@@ -5,6 +5,7 @@ import {
   convertUsdToNgnMinor,
   normalizeShopViaCatalog,
   fetchShopViaProfile,
+  parseShopViaProfile,
   fetchShopViaCatalog,
   fetchShopViaProduct,
   fetchShopViaOrder,
@@ -396,5 +397,119 @@ test('prepareDelivery falls back to products.php when product.php returns error 
   assert.equal(delivery.receipt, 'trans-342')
   assert.equal(delivery.delivered, true)
   assert.deepEqual(delivery.items, ['token-item-1'])
+})
+
+test('parseShopViaProfile handles direct root balance and currency', () => {
+  const parsed = parseShopViaProfile({
+    status: 'success',
+    username: 'direct_user',
+    balance: '25.50',
+    currency: 'USD',
+  })
+  assert.equal(parsed.status, 'success')
+  assert.equal(parsed.username, 'direct_user')
+  assert.equal(parsed.raw_balance, '25.50')
+  assert.equal(parsed.spendable_balance, 25.5)
+  assert.equal(parsed.currency, 'USD')
+  assert.equal(parsed.balance_status, 'funded')
+})
+
+test('parseShopViaProfile parses nested ShopViaClone22 production data.money structure', () => {
+  const prodResponse = {
+    status: 'success',
+    msg: 'Lấy dữ liệu thành công!',
+    data: {
+      username: 'Logspoll',
+      money: '7.20',
+    },
+  }
+  const parsed = parseShopViaProfile(prodResponse, 'USD')
+  assert.equal(parsed.status, 'success')
+  assert.equal(parsed.username, 'Logspoll')
+  assert.equal(parsed.raw_balance, '7.20')
+  assert.equal(parsed.spendable_balance, 7.2)
+  assert.equal(parsed.currency, 'USD')
+  assert.equal(parsed.balance_status, 'funded')
+})
+
+test('parseShopViaProfile supports nested user, account, and profile containers', () => {
+  const userContainer = parseShopViaProfile({
+    status: 'success',
+    user: { username: 'user_admin', balance: 50.0, currency: 'USD' },
+  })
+  assert.equal(userContainer.username, 'user_admin')
+  assert.equal(userContainer.spendable_balance, 50.0)
+  assert.equal(userContainer.balance_status, 'funded')
+
+  const accountContainer = parseShopViaProfile({
+    status: 'success',
+    account: { name: 'acct_holder', funds: '100.25', currency_code: 'EUR' },
+  })
+  assert.equal(accountContainer.username, 'acct_holder')
+  assert.equal(accountContainer.spendable_balance, 100.25)
+  assert.equal(accountContainer.currency, 'EUR')
+  assert.equal(accountContainer.balance_status, 'funded')
+})
+
+test('parseShopViaProfile accurately distinguishes zero balance from missing balance', () => {
+  // Explicit zero balance
+  const zeroResult = parseShopViaProfile({
+    status: 'success',
+    data: { username: 'broke_user', money: '0.00' },
+  }, 'USD')
+  assert.equal(zeroResult.balance_status, 'zero')
+  assert.equal(zeroResult.spendable_balance, 0)
+  assert.equal(zeroResult.raw_balance, '0.00')
+
+  // Missing balance field: MUST NOT fabricate zero
+  const missingResult = parseShopViaProfile({
+    status: 'success',
+    data: { username: 'unknown_balance_user' },
+  }, 'USD')
+  assert.equal(missingResult.balance_status, 'unknown')
+  assert.equal(missingResult.spendable_balance, undefined)
+  assert.equal(missingResult.raw_balance, undefined)
+})
+
+test('parseShopViaProfile returns balance_status unknown for malformed or uninterpretable balance', () => {
+  const malformed = parseShopViaProfile({
+    status: 'success',
+    data: { username: 'test', money: 'not-a-number' },
+  }, 'USD')
+  assert.equal(malformed.balance_status, 'unknown')
+  assert.equal(malformed.spendable_balance, undefined)
+
+  // Non-object or error response
+  assert.equal(parseShopViaProfile(null).balance_status, 'unknown')
+  assert.equal(parseShopViaProfile([]).balance_status, 'unknown')
+  assert.equal(parseShopViaProfile('bad response').balance_status, 'unknown')
+  assert.equal(parseShopViaProfile({ status: 'error', msg: 'Auth failed' }).balance_status, 'unknown')
+})
+
+test('parseShopViaProfile detects multi-currency from symbols and codes without defaulting', () => {
+  // Dollar symbol
+  const usdSymbol = parseShopViaProfile({ data: { money: '$15.00' } })
+  assert.equal(usdSymbol.currency, 'USD')
+  assert.equal(usdSymbol.spendable_balance, 15)
+
+  // Naira symbol
+  const ngnSymbol = parseShopViaProfile({ data: { money: '₦50,000.00' } })
+  assert.equal(ngnSymbol.currency, 'NGN')
+  assert.equal(ngnSymbol.spendable_balance, 50000)
+
+  // Dong symbol
+  const vndSymbol = parseShopViaProfile({ data: { money: '250000₫' } })
+  assert.equal(vndSymbol.currency, 'VND')
+  assert.equal(vndSymbol.spendable_balance, 250000)
+
+  // Euro symbol
+  const eurSymbol = parseShopViaProfile({ data: { balance: '€42.50' } })
+  assert.equal(eurSymbol.currency, 'EUR')
+  assert.equal(eurSymbol.spendable_balance, 42.5)
+
+  // Context-free unknown currency remains unknown
+  const noCurrency = parseShopViaProfile({ data: { money: '100.00' } })
+  assert.equal(noCurrency.currency, undefined)
+  assert.equal(noCurrency.balance_status, 'unknown')
 })
 

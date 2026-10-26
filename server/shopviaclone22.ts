@@ -33,9 +33,168 @@ export type ShopViaProfile = {
   msg?: string
   username?: string
   balance?: string | number
+  money?: string | number
+  spendable_balance?: number
   currency?: string
-  email?: string
+  balance_status?: 'funded' | 'zero' | 'unknown'
+  data?: {
+    username?: string
+    money?: string | number
+    balance?: string | number
+    currency?: string
+    [key: string]: unknown
+  }
   [key: string]: unknown
+}
+
+export type ParsedShopViaProfile = {
+  status: 'success' | 'error'
+  username?: string
+  raw_balance?: string | number
+  spendable_balance?: number
+  currency?: string
+  balance_status: 'funded' | 'zero' | 'unknown'
+  error?: string
+}
+
+export function parseShopViaProfile(
+  payload: unknown,
+  contextCurrency?: string
+): ParsedShopViaProfile {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return {
+      status: 'error',
+      balance_status: 'unknown',
+      error: 'Malformed supplier response: object expected.',
+    }
+  }
+
+  const obj = payload as Record<string, unknown>
+  if (obj.status === 'error' || obj.error) {
+    return {
+      status: 'error',
+      balance_status: 'unknown',
+      error: String(obj.msg || obj.error || 'Supplier returned error.'),
+    }
+  }
+
+  // Find nested container if present: data, user, profile, account
+  const container = (
+    typeof obj.data === 'object' && obj.data !== null && !Array.isArray(obj.data)
+      ? (obj.data as Record<string, unknown>)
+      : typeof obj.user === 'object' && obj.user !== null && !Array.isArray(obj.user)
+      ? (obj.user as Record<string, unknown>)
+      : typeof obj.profile === 'object' && obj.profile !== null && !Array.isArray(obj.profile)
+      ? (obj.profile as Record<string, unknown>)
+      : typeof obj.account === 'object' && obj.account !== null && !Array.isArray(obj.account)
+      ? (obj.account as Record<string, unknown>)
+      : null
+  )
+
+  // 1. Username
+  const usernameRaw =
+    container?.username ??
+    container?.name ??
+    obj.username ??
+    obj.name ??
+    (typeof obj.user === 'string' ? obj.user : undefined)
+  const username = typeof usernameRaw === 'string' && usernameRaw.trim() ? usernameRaw.trim() : undefined
+
+  // 2. Balance / Money candidate value
+  const balanceRaw =
+    container?.money ??
+    container?.balance ??
+    container?.funds ??
+    container?.wallet ??
+    container?.credits ??
+    container?.spendable_balance ??
+    obj.money ??
+    obj.balance ??
+    obj.funds ??
+    obj.wallet ??
+    obj.credits ??
+    obj.spendable_balance ??
+    container?.balance_usd ??
+    obj.balance_usd
+
+  // 3. Currency detection
+  let detectedCurrency: string | undefined
+  const explicitCurrency =
+    container?.currency ??
+    container?.currency_code ??
+    container?.curr ??
+    obj.currency ??
+    obj.currency_code ??
+    obj.curr
+  if (typeof explicitCurrency === 'string' && /^[A-Z]{3}$/i.test(explicitCurrency.trim())) {
+    detectedCurrency = explicitCurrency.trim().toUpperCase()
+  } else if (container?.balance_usd !== undefined || obj.balance_usd !== undefined) {
+    detectedCurrency = 'USD'
+  } else if (container?.balance_vnd !== undefined || obj.balance_vnd !== undefined) {
+    detectedCurrency = 'VND'
+  } else if (container?.balance_ngn !== undefined || obj.balance_ngn !== undefined) {
+    detectedCurrency = 'NGN'
+  }
+
+  if (balanceRaw === undefined || balanceRaw === null || balanceRaw === '') {
+    return {
+      status: 'success',
+      username,
+      balance_status: 'unknown',
+      currency: detectedCurrency,
+    }
+  }
+
+  // Parse numeric amount and any symbol in string
+  let numVal: number | undefined
+  let rawStr = String(balanceRaw).trim().replace(/,/g, '')
+
+  if (!detectedCurrency) {
+    if (rawStr.startsWith('$') || rawStr.endsWith('$') || /\bUSD\b/i.test(rawStr)) {
+      detectedCurrency = 'USD'
+      rawStr = rawStr.replace(/[$\s]|USD/gi, '')
+    } else if (rawStr.startsWith('₦') || /\bNGN\b/i.test(rawStr)) {
+      detectedCurrency = 'NGN'
+      rawStr = rawStr.replace(/[₦\s]|NGN/gi, '')
+    } else if (rawStr.startsWith('₫') || rawStr.endsWith('₫') || /\bVND\b/i.test(rawStr)) {
+      detectedCurrency = 'VND'
+      rawStr = rawStr.replace(/[₫\s]|VND/gi, '')
+    } else if (rawStr.startsWith('€') || /\bEUR\b/i.test(rawStr)) {
+      detectedCurrency = 'EUR'
+      rawStr = rawStr.replace(/[€\s]|EUR/gi, '')
+    } else if (contextCurrency && /^[A-Z]{3}$/i.test(contextCurrency.trim())) {
+      detectedCurrency = contextCurrency.trim().toUpperCase()
+    }
+  } else {
+    rawStr = rawStr.replace(/[^0-9.-]/g, '')
+  }
+
+  const parsedNum = Number(rawStr)
+  if (Number.isFinite(parsedNum)) {
+    numVal = parsedNum
+  }
+
+  if (numVal === undefined || !detectedCurrency) {
+    return {
+      status: 'success',
+      username,
+      raw_balance: typeof balanceRaw === 'number' || typeof balanceRaw === 'string' ? balanceRaw : undefined,
+      spendable_balance: numVal,
+      currency: detectedCurrency,
+      balance_status: 'unknown',
+    }
+  }
+
+  const balance_status = numVal > 0 ? 'funded' : numVal === 0 ? 'zero' : 'unknown'
+
+  return {
+    status: 'success',
+    username,
+    raw_balance: typeof balanceRaw === 'number' || typeof balanceRaw === 'string' ? balanceRaw : undefined,
+    spendable_balance: numVal,
+    currency: detectedCurrency,
+    balance_status,
+  }
 }
 
 export type PurchaseOrderParams = {
@@ -325,7 +484,16 @@ export async function fetchShopViaProfile(
     }
   }
 
-  return data as ShopViaProfile
+  const parsed = parseShopViaProfile(data, 'USD')
+  return {
+    ...data,
+    username: parsed.username ?? (typeof data.username === 'string' ? data.username : undefined),
+    balance: parsed.raw_balance !== undefined ? String(parsed.raw_balance) : (parsed.spendable_balance !== undefined ? String(parsed.spendable_balance) : undefined),
+    money: parsed.raw_balance,
+    spendable_balance: parsed.spendable_balance,
+    currency: parsed.currency,
+    balance_status: parsed.balance_status,
+  } as ShopViaProfile
 }
 
 /**
