@@ -79,18 +79,27 @@ function fixture() {
     }
   }
 
+  let batchLock = Promise.resolve()
   const db: Database = {
     prepare,
     async batch(statements: Statement[]) {
-      sql.exec('BEGIN')
+      const wait = batchLock
+      let release: () => void = () => {}
+      batchLock = new Promise<void>(r => { release = r })
+      await wait
       try {
-        const results = []
-        for (const s of statements) results.push(await s.run())
-        sql.exec('COMMIT')
-        return results
-      } catch (err) {
-        sql.exec('ROLLBACK')
-        throw err
+        sql.exec('BEGIN')
+        try {
+          const results = []
+          for (const s of statements) results.push(await s.run())
+          sql.exec('COMMIT')
+          return results
+        } catch (err) {
+          sql.exec('ROLLBACK')
+          throw err
+        }
+      } finally {
+        release()
       }
     },
   }
@@ -230,6 +239,52 @@ test('Supplier 3 (ShopViaClone22): price ₦1,400 with ₦3,000 wallet balance l
   // Cost: 100,000 kobo (₦1,000). 40% markup -> 140,000 kobo (₦1,400)
   sql.prepare(`INSERT INTO shopviaclone22_catalog_items(external_id, name, description, cost_minor, stock, checked_at, approval_status, selling_price_minor, product_id, snapshot_id, raw_metadata)
     VALUES(?, 'ShopViaClone Account', 'High quality Server 3 account description.', 100000, 15, ?, 'approved', 140000, ?, 'snap-3', '{}')`).run(extId, now, prodId)
+
+  // Verify assertAutomationQuotes passes
+  await assert.doesNotReject(assertAutomationQuotes(env, [prodId]))
+
+  const user = { id: customer, email: 'c@test.com' }
+  const req = new Request('https://test/api/wallet/pay-order', {
+    method: 'POST',
+    body: JSON.stringify({
+      requestId: crypto.randomUUID(),
+      items: [{ id: prodId, quantity: 1 }],
+    }),
+  })
+
+  const res = await payOrderWithWallet(req, env, user)
+  assert.equal(res.status, 201)
+  const data = await res.json() as {ok:boolean;totalMinor:number;balanceAfterMinor:number;orderId:string}
+
+  assert.equal(data.totalMinor, 140000)
+  assert.equal(data.balanceAfterMinor, 160000)
+
+  const wallet = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(walletId) as {balance_minor:number}
+  assert.equal(wallet.balance_minor, 160000)
+})
+
+test('Supplier 4 (DigitalCore): price ₦1,400 with ₦3,000 wallet balance leaves ₦1,600', async t => {
+  const { sql, env, walletId } = fixture()
+  t.after(() => sql.close())
+
+  // Configure DigitalCore automation policy & connection
+  sql.prepare(`INSERT INTO supplier_automation(provider, markup_bps, automatic_pricing, auto_publish, auto_approve, updated_by)
+    VALUES('digitalcore', 4000, 1, 1, 1, ?) ON CONFLICT(provider) DO UPDATE SET automatic_pricing=1, markup_bps=4000`).run(admin)
+  sql.prepare("INSERT INTO digitalcore_connection(id, enabled, ciphertext, nonce, next_attempt, base_url) VALUES('digitalcore', 1, 'mock', 'mock', 0, 'https://digitalcore.top') ON CONFLICT(id) DO UPDATE SET enabled=1").run()
+
+  const catId = String(sql.prepare("SELECT id FROM categories WHERE slug='server3'").get()!.id)
+  const prodId = crypto.randomUUID()
+  const extId = '4001'
+  const now = Date.now()
+
+  sql.prepare(`INSERT INTO products(id, category_id, slug, name, description, price_minor, currency, supplier_name, authorized_resale, status, publication_verified, pricing_mode, server_number, delivery_type)
+    VALUES(?, ?, 'dc-4001', 'DigitalCore Premium Account', 'High quality Server 4 account description.', 140000, 'NGN', 'DigitalCore', 1, 'active', 1, 'auto', 4, 'Manual fulfillment')`).run(prodId, catId)
+
+  sql.prepare('INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at) VALUES(?, ?, ?, ?)').run(prodId, JSON.stringify({ delivery: true, privacy: true, provider: true }), admin, now)
+
+  // Cost: 100,000 kobo (₦1,000). 40% markup -> 140,000 kobo (₦1,400)
+  sql.prepare(`INSERT INTO digitalcore_catalog_items(external_id, name, description, cost_minor, stock, checked_at, approval_status, selling_price_minor, product_id, snapshot_id, raw_metadata)
+    VALUES(?, 'DigitalCore Premium Account', 'High quality Server 4 account description.', 100000, 25, ?, 'approved', 140000, ?, 'snap-4', '{}')`).run(extId, now, prodId)
 
   // Verify assertAutomationQuotes passes
   await assert.doesNotReject(assertAutomationQuotes(env, [prodId]))
@@ -524,12 +579,49 @@ test('cart refresh refuses cross-origin requests and does not reprice hidden pro
   assert.equal(sql.prepare('SELECT price_minor FROM products WHERE id=?').get(id)!.price_minor,100000)
 })
 
-test('Re-purchasing an item after refund creates a distinct transaction reference and succeeds', async t => {
-  const {sql, env} = fixture(); t.after(() => sql.close())
+test('Wallet checkout idempotency: browser refreshes and network retries return identical order without double debit', async t => {
+  const {sql, env, walletId} = fixture(); t.after(() => sql.close())
   const {id} = hstoraProduct(sql, { mode: 'override' })
   const reqId = crypto.randomUUID()
   const user = { id: customer, email: 'c@test.com' }
-  const req = (rId: string) => new Request('https://test/api/wallet/pay-order', {
+  const makeReq = () => new Request('https://test/api/wallet/pay-order', {
+    method: 'POST',
+    body: JSON.stringify({
+      requestId: reqId,
+      items: [{ id, quantity: 1 }],
+    }),
+  })
+
+  // 1. Initial purchase
+  const res1 = await payOrderWithWallet(makeReq(), env, user)
+  assert.equal(res1.status, 201)
+  const body1 = await res1.json() as { ok: boolean; orderId: string; reference: string; totalMinor: number; balanceAfterMinor: number }
+  assert.equal(body1.ok, true)
+  assert.equal(body1.balanceAfterMinor, 200000)
+
+  const walletAfterFirst = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(walletId) as {balance_minor:number}
+  assert.equal(walletAfterFirst.balance_minor, 200000)
+
+  // 2. Browser refresh / network retry with same requestId returns identical order idempotently
+  const res2 = await payOrderWithWallet(makeReq(), env, user)
+  assert.equal(res2.status, 200)
+  const body2 = await res2.json() as { ok: boolean; orderId: string; reference: string; totalMinor: number; balanceAfterMinor: number }
+  assert.equal(body2.ok, true)
+  assert.equal(body2.orderId, body1.orderId)
+  assert.equal(body2.reference, body1.reference)
+  assert.equal(body2.balanceAfterMinor, 200000)
+
+  // Balance remains exactly 200000 (no duplicate debit!)
+  const walletAfterRetry = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(walletId) as {balance_minor:number}
+  assert.equal(walletAfterRetry.balance_minor, 200000)
+})
+
+test('Wallet checkout idempotency: duplicate request with same requestId on refunded order is rejected and never debits again', async t => {
+  const {sql, env, walletId} = fixture(); t.after(() => sql.close())
+  const {id} = hstoraProduct(sql, { mode: 'override' })
+  const reqId = crypto.randomUUID()
+  const user = { id: customer, email: 'c@test.com' }
+  const makeReq = (rId: string) => new Request('https://test/api/wallet/pay-order', {
     method: 'POST',
     body: JSON.stringify({
       requestId: rId,
@@ -537,21 +629,75 @@ test('Re-purchasing an item after refund creates a distinct transaction referenc
     }),
   })
 
-  // 1. First purchase
-  const res1 = await payOrderWithWallet(req(reqId), env, user)
+  // 1. Initial purchase
+  const res1 = await payOrderWithWallet(makeReq(reqId), env, user)
   assert.equal(res1.status, 201)
   const body1 = await res1.json() as { ok: boolean; orderId: string }
-  assert.equal(body1.ok, true)
 
   // 2. Simulate order refund in database
   sql.prepare("UPDATE orders SET payment_status='refunded' WHERE id=?").run(body1.orderId)
   sql.prepare("INSERT INTO wallet_transactions(id, wallet_id, customer_id, order_id, type, direction, amount_minor, balance_before_minor, balance_after_minor, reference, status, created_at) SELECT ?, wallet_id, customer_id, order_id, 'refund', 'credit', amount_minor, balance_after_minor, balance_before_minor, ?, 'completed', 2 FROM wallet_transactions WHERE order_id=?").run(crypto.randomUUID(), 'TX-REF-' + body1.orderId, body1.orderId)
-  sql.prepare("UPDATE wallets SET balance_minor=300000 WHERE customer_id=?").run(customer)
+  sql.prepare("UPDATE wallets SET balance_minor=300000 WHERE id=?").run(walletId)
 
-  // 3. Re-purchase with same requestId must not crash on UNIQUE(reference)
-  const res2 = await payOrderWithWallet(req(reqId), env, user)
-  assert.equal(res2.status, 201)
-  const body2 = await res2.json() as { ok: boolean; orderId: string }
-  assert.equal(body2.ok, true)
-  assert.notEqual(body2.orderId, body1.orderId)
+  // 3. Duplicate request with the SAME requestId must be rejected with 409 and NOT debit wallet
+  await assert.rejects(
+    payOrderWithWallet(makeReq(reqId), env, user),
+    (err: any) => err.status === 409 && /This checkout attempt has already been processed and refunded/i.test(err.message)
+  )
+
+  // Verify wallet balance is completely unchanged (still 300000)
+  const walletStillRefunded = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(walletId) as {balance_minor:number}
+  assert.equal(walletStillRefunded.balance_minor, 300000)
+
+  // 4. A genuinely new purchase must use a distinct explicit checkout-attempt ID and succeeds
+  const freshReqId = crypto.randomUUID()
+  const resFresh = await payOrderWithWallet(makeReq(freshReqId), env, user)
+  assert.equal(resFresh.status, 201)
+  const bodyFresh = await resFresh.json() as { ok: boolean; orderId: string; balanceAfterMinor: number }
+  assert.equal(bodyFresh.ok, true)
+  assert.notEqual(bodyFresh.orderId, body1.orderId)
+  assert.equal(bodyFresh.balanceAfterMinor, 200000)
+
+  const walletAfterFresh = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(walletId) as {balance_minor:number}
+  assert.equal(walletAfterFresh.balance_minor, 200000)
+})
+
+test('Wallet checkout concurrency: concurrent duplicate requests debit exactly once and return the identical order', async t => {
+  const {sql, env, walletId} = fixture(); t.after(() => sql.close())
+  const {id} = hstoraProduct(sql, { mode: 'override' })
+  const reqId = crypto.randomUUID()
+  const user = { id: customer, email: 'c@test.com' }
+  const makeReq = () => new Request('https://test/api/wallet/pay-order', {
+    method: 'POST',
+    body: JSON.stringify({
+      requestId: reqId,
+      items: [{ id, quantity: 1 }],
+    }),
+  })
+
+  // Fire two concurrent requests with the identical requestId
+  const [resA, resB] = await Promise.all([
+    payOrderWithWallet(makeReq(), env, user),
+    payOrderWithWallet(makeReq(), env, user),
+  ])
+
+  // Both return success
+  assert.equal(resA.status === 201 || resA.status === 200, true)
+  assert.equal(resB.status === 201 || resB.status === 200, true)
+
+  const dataA = await resA.json() as { ok: boolean; orderId: string; balanceAfterMinor: number }
+  const dataB = await resB.json() as { ok: boolean; orderId: string; balanceAfterMinor: number }
+
+  // Both point to the exact same order
+  assert.equal(dataA.orderId, dataB.orderId)
+  assert.equal(dataA.balanceAfterMinor, 200000)
+  assert.equal(dataB.balanceAfterMinor, 200000)
+
+  // Exactly one debit transaction was created
+  const txCount = sql.prepare("SELECT count(*) as count FROM wallet_transactions WHERE reference=?").get('TX-ORD-' + user.id + '-' + reqId) as {count:number}
+  assert.equal(txCount.count, 1)
+
+  // Wallet debited exactly once: 300,000 -> 200,000
+  const wallet = sql.prepare('SELECT balance_minor FROM wallets WHERE id=?').get(walletId) as {balance_minor:number}
+  assert.equal(wallet.balance_minor, 200000)
 })

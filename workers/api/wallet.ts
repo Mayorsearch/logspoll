@@ -413,22 +413,44 @@ export async function payOrderWithWallet(
     throw new HttpError(400, 'Duplicate product IDs in checkout.')
   }
 
-  let txRef = 'TX-ORD-' + user.id + '-' + requestId
-  const priorOrder = async () => {
-    const prior = await db.prepare("SELECT o.id,o.reference,o.total_minor,t.balance_after_minor FROM wallet_transactions t JOIN orders o ON o.id=t.order_id WHERE t.reference=? AND t.customer_id=? AND t.type='purchase' AND t.status='completed' AND o.payment_status='paid'").bind(txRef,user.id).first<{id:string;reference:string;total_minor:number;balance_after_minor:number}>()
-    if (!prior) return null
-    const saved = await db.prepare('SELECT product_id AS id,quantity FROM order_items WHERE order_id=? ORDER BY product_id').bind(prior.id).all<{id:string;quantity:number}>()
-    const canonical = (list: Array<{id:string;quantity:number}>) => JSON.stringify([...list].sort((a,b)=>a.id.localeCompare(b.id)).map(i=>[i.id,i.quantity]))
-    if (canonical(items) !== canonical(saved.results)) throw new HttpError(409,'Idempotency request does not match the original wallet order.')
-    return json({ok:true,orderId:prior.id,reference:prior.reference,totalMinor:prior.total_minor,balanceAfterMinor:prior.balance_after_minor,paymentMethod:'wallet'})
-  }
-  const previous = await priorOrder()
-  if (previous) return previous
+  const txRef = 'TX-ORD-' + user.id + '-' + requestId
+  const checkExistingTx = async () => {
+    const existing = await db.prepare(
+      "SELECT t.id, t.order_id, t.status, o.payment_status, o.reference, o.total_minor, t.balance_after_minor FROM wallet_transactions t LEFT JOIN orders o ON o.id=t.order_id WHERE t.reference=? AND t.customer_id=?"
+    ).bind(txRef, user.id).first<{
+      id: string
+      order_id: string
+      status: string
+      payment_status: string | null
+      reference: string
+      total_minor: number
+      balance_after_minor: number
+    }>()
+    if (!existing) return null
 
-  const existingTx = await db.prepare("SELECT 1 FROM wallet_transactions WHERE reference=?").bind(txRef).first()
-  if (existingTx) {
-    txRef = 'TX-ORD-' + user.id + '-' + requestId + '-' + Date.now()
+    if (existing.status === 'completed' && existing.payment_status === 'paid') {
+      const saved = await db.prepare('SELECT product_id AS id,quantity FROM order_items WHERE order_id=? ORDER BY product_id').bind(existing.order_id).all<{id:string;quantity:number}>()
+      const canonical = (list: Array<{id:string;quantity:number}>) => JSON.stringify([...list].sort((a,b)=>a.id.localeCompare(b.id)).map(i=>[i.id,i.quantity]))
+      if (canonical(items) !== canonical(saved.results)) throw new HttpError(409, 'Idempotency request does not match the original wallet order.')
+      return json({
+        ok: true,
+        orderId: existing.order_id,
+        reference: existing.reference,
+        totalMinor: existing.total_minor,
+        balanceAfterMinor: existing.balance_after_minor,
+        paymentMethod: 'wallet',
+      })
+    }
+
+    if (existing.payment_status === 'refunded' || existing.payment_status === 'cancelled') {
+      throw new HttpError(409, `This checkout attempt has already been processed and ${existing.payment_status}. A new purchase must use a distinct checkout attempt ID.`)
+    }
+
+    throw new HttpError(409, 'This checkout attempt has already been submitted and is currently being processed.')
   }
+
+  const previous = await checkExistingTx()
+  if (previous) return previous
 
   // Check if wallet is active and available
   const wallet = await getOrCreateWallet(db, user.id)
@@ -521,7 +543,7 @@ export async function payOrderWithWallet(
   try {
     await db.batch(statements)
   } catch {
-    const concurrent = await priorOrder()
+    const concurrent = await checkExistingTx()
     if (concurrent) return concurrent
     throw new HttpError(409, 'Wallet checkout failed due to concurrent balance change or stock movement. No funds were debited.')
   }

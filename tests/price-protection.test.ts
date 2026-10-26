@@ -43,9 +43,9 @@ async function testFixture() {
     CREATE TABLE hstora_catalog_items(product_id TEXT,external_id TEXT,approval_status TEXT);
     CREATE TABLE hstora_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT);
     CREATE TABLE digitalcore_catalog_items(product_id TEXT,external_id TEXT,approval_status TEXT);
-    CREATE TABLE digitalcore_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT);
+    CREATE TABLE digitalcore_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT,base_url TEXT DEFAULT 'https://digitalcore.top');
     CREATE TABLE shopviaclone22_catalog_items(product_id TEXT,external_id TEXT,approval_status TEXT);
-    CREATE TABLE shopviaclone22_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT);
+    CREATE TABLE shopviaclone22_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT,base_url TEXT DEFAULT 'https://shopviaclone22.com/api');
     CREATE TABLE global_pricing_config(id TEXT PRIMARY KEY,usd_to_ngn_rate REAL,fx_updated_at INTEGER,fx_status TEXT);
     CREATE TABLE admin_write_fences(id TEXT PRIMARY KEY,valid INTEGER);
   `)
@@ -244,7 +244,7 @@ test('5. Stale USD FX rate blocks USD fulfillment with PRICE_REVIEW instead of s
   // Configure DigitalCore mapping
   const dcKey = 'dc_secret_api_key'
   const sealed = await sealCredential(JSON.stringify({ apiKey: dcKey }), 'digitalcore', env.SUPPLIER_ENCRYPTION_KEY)
-  sql.prepare("INSERT INTO digitalcore_connection VALUES('digitalcore',1,?,?)").run(sealed.ciphertext, sealed.nonce)
+  sql.prepare("INSERT INTO digitalcore_connection(id,enabled,ciphertext,nonce) VALUES('digitalcore',1,?,?)").run(sealed.ciphertext, sealed.nonce)
   sql.prepare("INSERT INTO digitalcore_catalog_items VALUES(?,'dc_item_1','approved')").run(product)
 
   // Switch product mapping to DigitalCore

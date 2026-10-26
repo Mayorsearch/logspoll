@@ -17,8 +17,8 @@ async function fixture(paid=true){
  CREATE TABLE staging_supplier_feed_items(connection_id TEXT,external_id TEXT,approval TEXT,authorization_verified INTEGER,evidence_reference TEXT,snapshot_id TEXT);
  CREATE TABLE supplier_sync_items(job_id TEXT,external_id TEXT,metadata TEXT);
  CREATE TABLE hstora_catalog_items(product_id TEXT,external_id TEXT,approval_status TEXT);CREATE TABLE hstora_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT);
- CREATE TABLE digitalcore_catalog_items(product_id TEXT,external_id TEXT,approval_status TEXT);CREATE TABLE digitalcore_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT);
- CREATE TABLE shopviaclone22_catalog_items(product_id TEXT,external_id TEXT,approval_status TEXT);CREATE TABLE shopviaclone22_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT);`)
+ CREATE TABLE digitalcore_catalog_items(product_id TEXT,external_id TEXT,approval_status TEXT);CREATE TABLE digitalcore_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT,base_url TEXT DEFAULT 'https://digitalcore.top');
+ CREATE TABLE shopviaclone22_catalog_items(product_id TEXT,external_id TEXT,approval_status TEXT);CREATE TABLE shopviaclone22_connection(id TEXT,enabled INTEGER,ciphertext TEXT,nonce TEXT,base_url TEXT DEFAULT 'https://shopviaclone22.com/api');`)
  sql.prepare('INSERT INTO users(id) VALUES(?)').run(user)
  sql.prepare("INSERT INTO categories(id,slug,name,short_name) VALUES(?,'test','Test','Test')").run(category)
  sql.prepare("INSERT INTO products(id,category_id,slug,name,description,price_minor,supplier_name,authorized_resale,status,publication_verified,delivery_type) VALUES(?,?,'test','Test','Verified subscription product',45000,'YoungPG',1,'active',1,'Subscription activation')").run(product,category)

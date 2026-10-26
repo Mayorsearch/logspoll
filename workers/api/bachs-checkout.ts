@@ -22,7 +22,10 @@ export async function initiateCheckout(env:ApiEnv,buyer:Buyer,requestId:string,i
  const mode=paymentMode(env),db=env.DB!
  if(!uuid.test(requestId)||!items.length||items.length>20||items.some(i=>!i||!uuid.test(i.id)||!Number.isInteger(i.quantity)||i.quantity<1||i.quantity>1000)||new Set(items.map(i=>i.id)).size!==items.length)throw new HttpError(400,'Invalid checkout selection or request ID.')
  let attempt: Attempt | null = await db.prepare('SELECT a.*, o.payment_status FROM bachs_payment_attempts a LEFT JOIN orders o ON o.id=a.order_id WHERE a.customer_id=? AND a.client_request_id=?').bind(buyer.id,requestId).first<Attempt>()
- if(attempt && attempt.payment_status !== 'refunded' && attempt.payment_status !== 'cancelled'){
+ if(attempt){
+  if(attempt.payment_status === 'refunded' || attempt.payment_status === 'cancelled'){
+   throw new HttpError(409, `This checkout attempt has already been processed and ${attempt.payment_status}. A new purchase must use a distinct checkout attempt ID.`)
+  }
   const previous=await db.prepare('SELECT product_id AS id,quantity FROM order_items WHERE order_id=? ORDER BY product_id').bind(attempt.order_id).all<Item>()
   const sort=(list:Item[])=>JSON.stringify([...list].sort((a,b)=>a.id.localeCompare(b.id)).map(i=>[i.id,i.quantity]))
   if(sort(items)!==sort(previous.results)||attempt.provider_mode!==mode)throw new HttpError(409,'Idempotency request does not match the original checkout.')

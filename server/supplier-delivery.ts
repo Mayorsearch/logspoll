@@ -156,7 +156,8 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
   const key=credentials.apiKey?.trim();if(!key)throw new DeliveryError('DigitalCore API key is missing.')
   if(credentials.baseUrl&&new URL(credentials.baseUrl).origin!=='https://digitalcore.top')throw new DeliveryError('DigitalCore purchase host is not verified.')
   headers.set('Api-Key',key)
-  if(!input.recovering){const detail=await request('https://digitalcore.top/api/user/product?id='+encodeURIComponent(input.externalId),headers)
+  const dcBase=credentials.baseUrl?.trim().replace(/\/+$/,'')||'https://digitalcore.top'
+  if(!input.recovering){const detail=await request(dcBase+'/api/user/product?id='+encodeURIComponent(input.externalId),headers)
    if(String(detail.id)!==input.externalId)throw new DeliveryError('DigitalCore product identity changed.')
    price=detail.price;currency='USD';stock=detail.stock}
  }
@@ -187,7 +188,8 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
     const shopHeaders=new Headers({Accept:'application/json','Content-Type':'application/x-www-form-urlencoded','X-API-Key':key})
     return parse(await request(url,shopHeaders,'POST',body))
    }
-   const url=provider==='youngpg'?YOUNGPG_ORIGIN+'/api/v1/purchase':'https://digitalcore.top/api/user/buy'
+   const dcBase=credentials.baseUrl?.trim().replace(/\/+$/,'')||'https://digitalcore.top'
+   const url=provider==='youngpg'?YOUNGPG_ORIGIN+'/api/v1/purchase':dcBase+'/api/user/buy'
    const body=provider==='youngpg'?{slug:input.slug,quantity:input.quantity}:{id:input.externalId,count:input.quantity}
    return parse(await request(url,headers,'POST',JSON.stringify(body)))
   },
