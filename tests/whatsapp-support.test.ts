@@ -89,10 +89,10 @@ test('sanitizeComplaint redacts tokens and password fields from message text', (
   assert.ok(sanitized.includes('[TOKEN_REDACTED]'))
 })
 
-test('public /api/config endpoint returns website_settings with WhatsApp support configuration', async () => {
+test('public /api/config endpoint returns website_settings with WhatsApp support configuration and strictly allowlists fields', async () => {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec("CREATE TABLE website_settings (key TEXT PRIMARY KEY NOT NULL CHECK(key='general'), value TEXT NOT NULL CHECK(json_valid(value) AND json_type(value)='object')) STRICT;")
-  sqlite.exec("INSERT INTO website_settings (key, value) VALUES ('general', '{\"whatsapp_number\":\"2348117472091\",\"support_email\":\"support@logspoll.com\"}')")
+  sqlite.exec("INSERT INTO website_settings (key, value) VALUES ('general', '{\"whatsapp_number\":\"+234 811 747 2091\",\"support_email\":\"support@logspoll.com\",\"admin_secret\":\"super_secret_key\",\"internal_ip\":\"10.0.0.1\"}')")
   const db = {
     prepare(sql: string) {
       let values: unknown[] = []
@@ -110,7 +110,11 @@ test('public /api/config endpoint returns website_settings with WhatsApp support
   const res = await apiFetch(req, env)
   assert.equal(res.status, 200)
   assert.equal(res.headers.get('Cache-Control'), 'public, max-age=60')
-  const body = (await res.json()) as { settings: { whatsapp_number: string; support_email: string } }
+  const body = (await res.json()) as { settings: Record<string, unknown> }
   assert.equal(body.settings.whatsapp_number, '2348117472091')
   assert.equal(body.settings.support_email, 'support@logspoll.com')
+  // Verify strict allowlist prevents leakage of private/internal keys
+  assert.equal(body.settings.admin_secret, undefined)
+  assert.equal(body.settings.internal_ip, undefined)
+  assert.deepEqual(Object.keys(body.settings).sort(), ['support_email', 'whatsapp_number'])
 })

@@ -22,7 +22,7 @@ export function FloatingChatWidget() {
                 <div>
                   <h3 id="chat-title">LogsPoll Support</h3>
                   <span className="chat-status-indicator">
-                    <span className="status-dot"></span> Online &amp; Ready to Help
+                    <span className="status-dot"></span> Official Support Desk
                   </span>
                 </div>
               </div>
@@ -105,7 +105,7 @@ export function FloatingChatWidget() {
             </div>
 
             <div className="floating-chat-footer">
-              <small>Built by SwiftNova Labs · 24/7 Monitored</small>
+              <small>Built by SwiftNova Labs · Production Monitored</small>
             </div>
           </div>
         )}

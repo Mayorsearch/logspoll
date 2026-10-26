@@ -105,7 +105,7 @@ export function Home() {
           <div className="auth-trust-box">
             <div className="auth-trust-icon-circle"><LifeBuoy size={18} /></div>
             <div className="auth-trust-texts">
-              <strong>24/7 Support</strong>
+              <strong>Dedicated Support</strong>
               <small>We're here to help</small>
             </div>
           </div>
@@ -146,7 +146,7 @@ export function Home() {
 
           <article>
             <span className="feature-icon"><Lock size={24} /></span>
-            <h3>24/7 Support</h3>
+            <h3>Dedicated Support</h3>
             <p>
               Dedicated technical assistance and prompt resolution for any order inquiries and account questions.
             </p>

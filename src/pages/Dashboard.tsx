@@ -518,7 +518,7 @@ export function CustomerRecords({
           </div>
           <h1>Support &amp; Help Center</h1>
           <p className="dashboard-intro">
-            Need help with an order, account credentials, or automated fulfillment? Our team is available 24/7.
+            Need help with an order, account credentials, or automated fulfillment? Reach out to our priority support desk on WhatsApp or submit a ticket below.
           </p>
         </div>
 
@@ -646,7 +646,7 @@ export function CustomerRecords({
 
                 <div className="sla-badge-box">
                   <Clock size={15} />
-                  <span>Average response time: <strong>under 15 minutes</strong></span>
+                  <span>Direct Priority Desk: <strong>Verified support team</strong></span>
                 </div>
               </div>
             </div>

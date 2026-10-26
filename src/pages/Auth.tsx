@@ -449,7 +449,7 @@ export function AuthPage({ mode }: { mode: Mode }) {
             <LifeBuoy size={18} />
           </span>
           <div className="auth-trust-texts">
-            <strong>24/7 Support</strong>
+            <strong>Dedicated Support</strong>
             <small>We're here to help</small>
           </div>
         </div>

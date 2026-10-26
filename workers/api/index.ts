@@ -206,17 +206,31 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     }
 
     if (request.method === 'GET' && (url.pathname === '/api/config' || url.pathname === '/api/storefront/settings')) {
-      let settings = { whatsapp_number: '2348117472091', support_email: 'support@logspoll.com' }
+      let whatsapp_number = '2348117472091'
+      let support_email = 'support@logspoll.com'
       try {
         const row = await env.DB.prepare("SELECT value FROM website_settings WHERE key='general'").first<{ value: string }>()
         if (row?.value) {
           const parsed = JSON.parse(row.value)
-          if (parsed && typeof parsed === 'object') {
-            settings = { ...settings, ...parsed }
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            if (typeof parsed.whatsapp_number === 'string') {
+              const digits = parsed.whatsapp_number.replace(/\D/g, '')
+              if (digits.length >= 8 && digits.length <= 16) {
+                whatsapp_number = digits
+              }
+            }
+            if (typeof parsed.support_email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parsed.support_email.trim())) {
+              support_email = parsed.support_email.trim()
+            }
           }
         }
       } catch {}
-      const res = json({ settings })
+      const res = json({
+        settings: {
+          whatsapp_number,
+          support_email
+        }
+      })
       res.headers.set('Cache-Control', 'public, max-age=60')
       return res
     }

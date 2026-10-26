@@ -793,7 +793,7 @@ export function ProductDetails() {
                     <h4>Warranty & Dedicated Support</h4>
                     <p>
                       All items include full warranty coverage for their specified duration. If you encounter any
-                      activation issues, our support team is available 24/7 to assist.
+                      activation issues, our support team is available to assist.
                     </p>
                   </div>
                 </div>
