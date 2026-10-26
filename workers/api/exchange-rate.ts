@@ -199,7 +199,8 @@ export async function exchangeRateAdmin(request: Request, env: ApiEnv): Promise<
 
   const config = await db.prepare(
     `SELECT usd_to_ngn_rate, markup_bps, fx_updated_at, fx_override_active, fx_override_rate,
-            remitano_access_key, remitano_secret_key, remitano_base_url, quidax_backup_enabled
+            remitano_access_key, remitano_secret_key, remitano_base_url, quidax_backup_enabled,
+            automatic_pricing
      FROM global_pricing_config WHERE id='global'`
   ).first<{
     usd_to_ngn_rate: number
@@ -211,6 +212,7 @@ export async function exchangeRateAdmin(request: Request, env: ApiEnv): Promise<
     remitano_secret_key: string | null
     remitano_base_url: string | null
     quidax_backup_enabled: number | null
+    automatic_pricing?: number | null
   }>().catch(() => null)
 
   const currentRate = config?.usd_to_ngn_rate ?? 1500.0
@@ -497,7 +499,8 @@ export async function refreshExchangeRateCron(env: ApiEnv): Promise<void> {
 
   const config = await db.prepare(
     `SELECT usd_to_ngn_rate, markup_bps, fx_updated_at, fx_override_active, fx_override_rate,
-            remitano_access_key, remitano_secret_key, remitano_base_url, quidax_backup_enabled
+            remitano_access_key, remitano_secret_key, remitano_base_url, quidax_backup_enabled,
+            automatic_pricing
      FROM global_pricing_config WHERE id='global'`
   ).first<{
     usd_to_ngn_rate: number
@@ -509,6 +512,7 @@ export async function refreshExchangeRateCron(env: ApiEnv): Promise<void> {
     remitano_secret_key: string | null
     remitano_base_url: string | null
     quidax_backup_enabled: number | null
+    automatic_pricing?: number | null
   }>().catch(() => null)
 
   if (!config) return
@@ -569,7 +573,7 @@ export async function refreshExchangeRateCron(env: ApiEnv): Promise<void> {
            WHERE id='global'`
         ).bind(resolvedRate, rateSource, now).run()
 
-        if (env.AUTOMATION_ENABLED !== 'false' && resolvedRate !== config.usd_to_ngn_rate) {
+        if (env.AUTOMATION_ENABLED !== 'false' && config.automatic_pricing === 1 && resolvedRate !== config.usd_to_ngn_rate) {
           await recalculateAllUsdProducts(db, resolvedRate, config.markup_bps || 5000)
         }
       } else {

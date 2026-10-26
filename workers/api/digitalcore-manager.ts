@@ -268,12 +268,13 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
           : 1500.0
 
     const dcorePolicy = await db
-      .prepare("SELECT markup_bps FROM supplier_automation WHERE provider='digitalcore'")
-      .first<{ markup_bps: number }>()
+      .prepare("SELECT markup_bps, updated_by FROM supplier_automation WHERE provider='digitalcore'")
+      .first<{ markup_bps: number; updated_by?: string }>()
       .catch(() => null)
     const defaultMarkup = dcorePolicy?.markup_bps && dcorePolicy.markup_bps > 0 ? dcorePolicy.markup_bps : 7000
     const autoPublish = globalCfg?.auto_publish === 1
     const autoApprove = globalCfg?.auto_approve === 1
+    const auditActor = dcorePolicy?.updated_by
 
     const defaultCat = (
       await db.prepare("SELECT id FROM categories WHERE slug='server4' OR slug='ai-tools' OR active=1 ORDER BY CASE WHEN slug='server4' THEN 0 ELSE 1 END LIMIT 1").first<{ id: string }>()
@@ -305,11 +306,13 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
       }).sellingPriceMinor
 
       const slug = `s4-${item.id}`
+      const isApproved = autoApprove && item.stock > 0
+
       writes.push(
         db
           .prepare(
-            `INSERT INTO digitalcore_catalog_items(external_id, category_id, name, description, plan_options, cost_minor, stock, raw_metadata, snapshot_id, checked_at, selling_price_minor)
-             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO digitalcore_catalog_items(external_id, category_id, name, description, plan_options, cost_minor, stock, raw_metadata, snapshot_id, checked_at, selling_price_minor, approval_status)
+             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(external_id) DO UPDATE SET
                name=excluded.name,
                description=excluded.description,
@@ -319,7 +322,15 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
                raw_metadata=excluded.raw_metadata,
                snapshot_id=excluded.snapshot_id,
                checked_at=excluded.checked_at,
-               selling_price_minor=excluded.selling_price_minor`
+               selling_price_minor=excluded.selling_price_minor,
+               approval_status=CASE WHEN excluded.approval_status='approved' THEN 'approved' ELSE digitalcore_catalog_items.approval_status END
+             WHERE digitalcore_catalog_items.cost_minor != excluded.cost_minor
+                OR digitalcore_catalog_items.stock != excluded.stock
+                OR digitalcore_catalog_items.name != excluded.name
+                OR digitalcore_catalog_items.description != excluded.description
+                OR digitalcore_catalog_items.selling_price_minor != excluded.selling_price_minor
+                OR (excluded.approval_status='approved' AND digitalcore_catalog_items.approval_status != 'approved')
+                OR digitalcore_catalog_items.checked_at <= (? - 86400000)`
           )
           .bind(
             item.id,
@@ -332,11 +343,13 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
             JSON.stringify(item.raw),
             jobId,
             now,
-            price
+            price,
+            isApproved ? 'approved' : 'pending',
+            now
           )
       )
 
-      if ((autoApprove || autoPublish) && item.stock > 0) {
+      if (autoPublish && item.stock > 0) {
         const logo = typeof item.raw?.logo === 'string' ? item.raw.logo : ''
         const logoArray = logo ? JSON.stringify([logo]) : '[]'
         const term = typeof item.raw?.warranty === 'string' ? item.raw.warranty : ''
@@ -367,7 +380,12 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
                  term=excluded.term,
                  features=excluded.features,
                  supplier_image_urls=excluded.supplier_image_urls,
-                 delivery_type=excluded.delivery_type`
+                 delivery_type=excluded.delivery_type
+               WHERE products.status != 'active'
+                  OR products.category_id IS NOT excluded.category_id
+                  OR (products.pricing_mode = 'auto' AND products.price_minor != excluded.price_minor)
+                  OR products.name != excluded.name
+                  OR products.description != excluded.description`
             )
             .bind(
               crypto.randomUUID(),
@@ -385,12 +403,33 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
             .prepare(
               `UPDATE digitalcore_catalog_items
                SET approval_status='approved', product_id=(SELECT id FROM products WHERE slug=?), reviewed_at=?
-               WHERE external_id=?`
+               WHERE external_id=? AND (approval_status != 'approved' OR product_id IS NULL)`
             )
             .bind(slug, now, item.id)
         )
+
+        if (auditActor) {
+          writes.push(
+            db
+              .prepare(
+                `INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
+                 SELECT id, ?, ?, ? FROM products WHERE slug=?
+                 ON CONFLICT(product_id) DO NOTHING`
+              )
+              .bind(JSON.stringify({ delivery: true, privacy: true, provider: true, reference: 'DigitalCore authorized supplier' }), auditActor, now, slug)
+          )
+        }
       }
     }
+
+    // Mark delisted items as out of stock
+    writes.push(
+      db.prepare(
+        `UPDATE digitalcore_catalog_items
+         SET stock=0, checked_at=?
+         WHERE snapshot_id != ? AND stock > 0`
+      ).bind(now, jobId)
+    )
 
     writes.push(
       db

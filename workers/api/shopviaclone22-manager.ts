@@ -238,8 +238,8 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
     const writes: Statement[] = []
 
     const pol = await db
-      .prepare("SELECT markup_bps, automatic_pricing, auto_publish, auto_approve FROM supplier_automation WHERE provider='shopviaclone22'")
-      .first<{ markup_bps: number; automatic_pricing: number; auto_publish: number; auto_approve: number }>()
+      .prepare("SELECT markup_bps, automatic_pricing, auto_publish, auto_approve, updated_by FROM supplier_automation WHERE provider='shopviaclone22'")
+      .first<{ markup_bps: number; automatic_pricing: number; auto_publish: number; auto_approve: number; updated_by?: string }>()
       .catch(() => null)
 
     const defaultMarkup = globalCfg?.markup_bps ?? pol?.markup_bps ?? 5000
@@ -247,12 +247,13 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
     const autoApprove = (globalCfg?.auto_approve === 1) || (pol?.auto_approve === 1)
 
     const catRules = (
-      await db.prepare('SELECT category_id, markup_bps, trusted, delivery_type, authorization_reference FROM supplier_category_rules WHERE provider=?').bind('shopviaclone22').all<{
+      await db.prepare('SELECT category_id, markup_bps, trusted, delivery_type, authorization_reference, updated_by FROM supplier_category_rules WHERE provider=?').bind('shopviaclone22').all<{
         category_id: string
         markup_bps: number
         trusted: number
         delivery_type: string
         authorization_reference: string
+        updated_by?: string
       }>()
     ).results
     const catRuleMap = new Map(catRules.map((r) => [r.category_id, r]))
@@ -278,12 +279,15 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
       const slug = `s3-${item.id}`
       const deliveryType = catRule?.delivery_type || 'Manual fulfillment'
       const authRef = catRule?.authorization_reference || 'ShopViaClone22 authorized supplier'
+      const auditActor = catRule?.updated_by || pol?.updated_by
+
+      const isApproved = (autoApprove || catRule?.trusted === 1) && item.stock > 0
 
       writes.push(
         db
           .prepare(
-            `INSERT INTO shopviaclone22_catalog_items(external_id, category_id, name, description, cost_minor, stock, raw_metadata, snapshot_id, checked_at, selling_price_minor)
-             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO shopviaclone22_catalog_items(external_id, category_id, name, description, cost_minor, stock, raw_metadata, snapshot_id, checked_at, selling_price_minor, approval_status)
+             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(external_id) DO UPDATE SET
                name=excluded.name,
                description=excluded.description,
@@ -292,7 +296,16 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
                raw_metadata=excluded.raw_metadata,
                snapshot_id=excluded.snapshot_id,
                checked_at=excluded.checked_at,
-               selling_price_minor=excluded.selling_price_minor`
+               selling_price_minor=excluded.selling_price_minor,
+               approval_status=CASE WHEN excluded.approval_status='approved' THEN 'approved' ELSE shopviaclone22_catalog_items.approval_status END
+             WHERE shopviaclone22_catalog_items.cost_minor != excluded.cost_minor
+                OR shopviaclone22_catalog_items.stock != excluded.stock
+                OR shopviaclone22_catalog_items.name != excluded.name
+                OR shopviaclone22_catalog_items.description != excluded.description
+                OR shopviaclone22_catalog_items.selling_price_minor != excluded.selling_price_minor
+                OR shopviaclone22_catalog_items.category_id IS NOT excluded.category_id
+                OR (excluded.approval_status='approved' AND shopviaclone22_catalog_items.approval_status != 'approved')
+                OR shopviaclone22_catalog_items.checked_at <= (? - 86400000)`
           )
           .bind(
             item.id,
@@ -304,12 +317,14 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
             JSON.stringify(item.raw),
             jobId,
             now,
-            price
+            price,
+            isApproved ? 'approved' : 'pending',
+            now
           )
       )
 
-      // If auto-approve or auto-publish is active and stock is positive:
-      if ((autoApprove || autoPublish || catRule?.trusted === 1) && item.stock > 0) {
+      // Only publish to the public storefront if autoPublish is explicitly enabled and stock > 0
+      if (autoPublish && item.stock > 0) {
         writes.push(
           db
             .prepare(
@@ -320,7 +335,12 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
                  publication_verified=1,
                  authorized_resale=1,
                  price_minor=CASE WHEN pricing_mode='override' THEN products.price_minor ELSE excluded.price_minor END,
-                 category_id=excluded.category_id`
+                 category_id=excluded.category_id
+               WHERE products.status != 'active'
+                  OR products.category_id IS NOT excluded.category_id
+                  OR (products.pricing_mode = 'auto' AND products.price_minor != excluded.price_minor)
+                  OR products.name != excluded.name
+                  OR products.description != excluded.description`
             )
             .bind(
               crypto.randomUUID(),
@@ -335,19 +355,33 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
             .prepare(
               `UPDATE shopviaclone22_catalog_items
                SET approval_status='approved', product_id=(SELECT id FROM products WHERE slug=?), reviewed_at=?
-               WHERE external_id=?`
+               WHERE external_id=? AND (approval_status != 'approved' OR product_id IS NULL)`
             )
-            .bind(slug, now, item.id),
-          db
-            .prepare(
-              `INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
-               SELECT id, ?, (SELECT user_id FROM user_roles WHERE role='admin' LIMIT 1), ? FROM products WHERE slug=?
-               ON CONFLICT(product_id) DO UPDATE SET verified_at=excluded.verified_at`
-            )
-            .bind(JSON.stringify({ delivery: true, privacy: true, provider: true, reference: authRef }), now, slug)
+            .bind(slug, now, item.id)
         )
+
+        if (auditActor) {
+          writes.push(
+            db
+              .prepare(
+                `INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
+                 SELECT id, ?, ?, ? FROM products WHERE slug=?
+                 ON CONFLICT(product_id) DO NOTHING`
+              )
+              .bind(JSON.stringify({ delivery: true, privacy: true, provider: true, reference: authRef }), auditActor, now, slug)
+          )
+        }
       }
     }
+
+    // Mark delisted items as out of stock
+    writes.push(
+      db.prepare(
+        `UPDATE shopviaclone22_catalog_items
+         SET stock=0, checked_at=?
+         WHERE snapshot_id != ? AND stock > 0`
+      ).bind(now, jobId)
+    )
 
     writes.push(
       db
