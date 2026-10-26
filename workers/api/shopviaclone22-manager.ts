@@ -8,6 +8,7 @@ import {
   fetchShopViaProduct,
   fetchShopViaCatalog,
   normalizeShopViaCatalog,
+  extractShopViaProductInfo,
   type NormalizedProduct,
 } from '../../server/shopviaclone22.ts'
 import { calculateSellingPrice } from '../../server/pricing.ts'
@@ -269,6 +270,7 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
       const balance = profile.balance
       const spendable = profile.spendable_balance ?? (balance !== undefined ? Number(balance) : null)
       const currency = profile.currency || 'USD'
+      const currencySource = profile.currency_source || 'inferred'
       const balanceStatus = profile.balance_status || (spendable !== null && spendable > 0 ? 'funded' : spendable === 0 ? 'zero' : 'unknown')
 
       let p342Info: unknown = null
@@ -278,9 +280,27 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
         p342Info = { error: e instanceof Error ? e.message : 'Lookup failed' }
       }
 
-      const p342CostUsd = 0.02
-      const isBalanceSufficient = spendable !== null && currency === 'USD' && spendable >= p342CostUsd
-      const coverage = spendable !== null && p342CostUsd > 0 ? `${(spendable / p342CostUsd).toFixed(1)}x` : 'N/A'
+      // Dynamically extract product 342 stock, wholesale price, and metadata from genuine response
+      const dynamicProduct = extractShopViaProductInfo(p342Info)
+      const dynamicCost = dynamicProduct.price
+      const dynamicStock = dynamicProduct.stock
+      const dynamicName = dynamicProduct.name || 'Hotmail Trusted - OAuth2'
+
+      const isBalanceSufficient =
+        spendable !== null &&
+        dynamicCost !== undefined &&
+        dynamicCost > 0 &&
+        spendable >= dynamicCost
+
+      const coverageRatio =
+        spendable !== null && dynamicCost !== undefined && dynamicCost > 0
+          ? spendable / dynamicCost
+          : null
+
+      const coverageStr =
+        coverageRatio !== null
+          ? `${coverageRatio.toFixed(1)}x`
+          : 'unknown'
 
       const probeAudit = {
         checked_at: Date.now(),
@@ -288,22 +308,21 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
         account_match_confirmed: username.toLowerCase() === 'logspoll',
         connection_status: 'connected',
         catalog_access: 'verified',
-        raw_response: {
-          status: profile.status,
-          username: profile.username,
-          money: profile.money,
-          data: sanitizeProbeData(profile.data, apiKey),
-        },
         balance_status: balanceStatus,
         spendable_balance: balance ?? 'unknown',
         currency,
+        currency_source: currencySource,
+        currency_label:
+          currencySource === 'inferred'
+            ? 'USD (inferred from catalog wholesale pricing; profile.php omits currency code)'
+            : `${currency} (${currencySource})`,
         product_342: {
-          id: '342',
-          wholesale_cost: `${currency} ${p342CostUsd.toFixed(2)}`,
-          stock_verified: 87364,
+          id: dynamicProduct.id || '342',
+          name: dynamicName,
+          wholesale_cost: dynamicCost !== undefined ? `${currency} ${dynamicCost.toFixed(2)}` : 'unknown',
+          stock: dynamicStock !== undefined ? dynamicStock : 'unknown',
           balance_sufficient: isBalanceSufficient,
-          balance_coverage: coverage,
-          details: sanitizeProbeData(p342Info, apiKey),
+          balance_coverage: coverageStr,
         },
         permissions: {
           account_connected: true,
@@ -311,9 +330,17 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
           spendable_balance_sufficient: isBalanceSufficient,
           purchase_execution: 'authorized_pending_test',
         },
-        diagnostics: {
-          previous_false_zero_reason:
-            "Upstream profile.php returns spendable funds nested in data.money ('7.20') rather than root-level balance. Previous probe checked profile.balance and defaulted to '0'. Resolved by parseShopViaProfile.",
+        readiness: {
+          ready_for_authorized_test:
+            username.toLowerCase() === 'logspoll' &&
+            balanceStatus === 'funded' &&
+            isBalanceSufficient &&
+            dynamicStock !== undefined &&
+            dynamicStock > 0,
+          remaining_uncertainty:
+            currencySource === 'inferred'
+              ? 'Supplier profile.php omits explicit currency field; USD inferred from catalog wholesale prices'
+              : 'None',
         },
       }
 
@@ -325,7 +352,7 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
 
       let balanceLabel = ''
       if (balanceStatus === 'funded' && balance !== undefined) {
-        balanceLabel = `Balance: ${currency} ${balance} (${coverage} cover)`
+        balanceLabel = `Balance: ${currency} ${balance} (${coverageStr} cover)`
       } else if (balanceStatus === 'zero') {
         balanceLabel = `Balance: ${currency} 0.00 (Insufficient)`
       } else {

@@ -6,6 +6,7 @@ import {
   normalizeShopViaCatalog,
   fetchShopViaProfile,
   parseShopViaProfile,
+  extractShopViaProductInfo,
   fetchShopViaCatalog,
   fetchShopViaProduct,
   fetchShopViaOrder,
@@ -511,5 +512,26 @@ test('parseShopViaProfile detects multi-currency from symbols and codes without 
   const noCurrency = parseShopViaProfile({ data: { money: '100.00' } })
   assert.equal(noCurrency.currency, undefined)
   assert.equal(noCurrency.balance_status, 'unknown')
+})
+
+test('extractShopViaProductInfo dynamically extracts id, name, price, and stock from supplier product response', () => {
+  const sampleResponse = {
+    status: 'success',
+    msg: 'Data retrieved successfully!',
+    product: [
+      {
+        id: 342,
+        name: 'Hotmail Trusted - OAuth2 [IMAP/POP3/GRAPH]',
+        price: 0.02,
+        amount: 87362,
+        description: 'FORMAT: Mail|Pass|Refresh_token',
+      },
+    ],
+  }
+  const extracted = extractShopViaProductInfo(sampleResponse)
+  assert.equal(extracted.id, '342')
+  assert.equal(extracted.name, 'Hotmail Trusted - OAuth2 [IMAP/POP3/GRAPH]')
+  assert.equal(extracted.price, 0.02)
+  assert.equal(extracted.stock, 87362)
 })
 

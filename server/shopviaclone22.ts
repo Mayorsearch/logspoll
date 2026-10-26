@@ -36,6 +36,7 @@ export type ShopViaProfile = {
   money?: string | number
   spendable_balance?: number
   currency?: string
+  currency_source?: 'explicit' | 'symbol' | 'inferred' | 'unknown'
   balance_status?: 'funded' | 'zero' | 'unknown'
   data?: {
     username?: string
@@ -53,8 +54,54 @@ export type ParsedShopViaProfile = {
   raw_balance?: string | number
   spendable_balance?: number
   currency?: string
+  currency_source?: 'explicit' | 'symbol' | 'inferred' | 'unknown'
   balance_status: 'funded' | 'zero' | 'unknown'
   error?: string
+}
+
+export function extractShopViaProductInfo(raw: unknown): {
+  id?: string
+  name?: string
+  price?: number
+  stock?: number
+} {
+  if (!raw || typeof raw !== 'object') return {}
+  const r = raw as Record<string, unknown>
+  let item: Record<string, unknown> | null = null
+
+  if (Array.isArray(r.product) && r.product.length > 0 && typeof r.product[0] === 'object') {
+    item = r.product[0] as Record<string, unknown>
+  } else if (r.product && typeof r.product === 'object' && !Array.isArray(r.product)) {
+    item = r.product as Record<string, unknown>
+  } else if (Array.isArray(r.data) && r.data.length > 0 && typeof r.data[0] === 'object') {
+    item = r.data[0] as Record<string, unknown>
+  } else if (r.data && typeof r.data === 'object' && !Array.isArray(r.data)) {
+    item = r.data as Record<string, unknown>
+  } else if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'object') {
+    item = raw[0] as Record<string, unknown>
+  } else if (r.price !== undefined || r.amount !== undefined || r.stock !== undefined) {
+    item = r
+  }
+
+  if (!item) return {}
+
+  const id = item.id !== undefined ? String(item.id) : undefined
+  const name = typeof item.name === 'string' ? item.name : undefined
+
+  let price: number | undefined
+  if (item.price !== undefined) {
+    const p = Number(String(item.price).replace(/[^0-9.]/g, ''))
+    if (Number.isFinite(p) && p >= 0) price = p
+  }
+
+  let stock: number | undefined
+  const rawStock = item.amount ?? item.stock ?? item.quantity
+  if (rawStock !== undefined) {
+    const s = Number(String(rawStock).replace(/[^0-9]/g, ''))
+    if (Number.isSafeInteger(s) && s >= 0) stock = s
+  }
+
+  return { id, name, price, stock }
 }
 
 export function parseShopViaProfile(
@@ -65,6 +112,7 @@ export function parseShopViaProfile(
     return {
       status: 'error',
       balance_status: 'unknown',
+      currency_source: 'unknown',
       error: 'Malformed supplier response: object expected.',
     }
   }
@@ -74,6 +122,7 @@ export function parseShopViaProfile(
     return {
       status: 'error',
       balance_status: 'unknown',
+      currency_source: 'unknown',
       error: String(obj.msg || obj.error || 'Supplier returned error.'),
     }
   }
@@ -119,6 +168,8 @@ export function parseShopViaProfile(
 
   // 3. Currency detection
   let detectedCurrency: string | undefined
+  let currencySource: 'explicit' | 'symbol' | 'inferred' | 'unknown' = 'unknown'
+
   const explicitCurrency =
     container?.currency ??
     container?.currency_code ??
@@ -128,12 +179,16 @@ export function parseShopViaProfile(
     obj.curr
   if (typeof explicitCurrency === 'string' && /^[A-Z]{3}$/i.test(explicitCurrency.trim())) {
     detectedCurrency = explicitCurrency.trim().toUpperCase()
+    currencySource = 'explicit'
   } else if (container?.balance_usd !== undefined || obj.balance_usd !== undefined) {
     detectedCurrency = 'USD'
+    currencySource = 'explicit'
   } else if (container?.balance_vnd !== undefined || obj.balance_vnd !== undefined) {
     detectedCurrency = 'VND'
+    currencySource = 'explicit'
   } else if (container?.balance_ngn !== undefined || obj.balance_ngn !== undefined) {
     detectedCurrency = 'NGN'
+    currencySource = 'explicit'
   }
 
   if (balanceRaw === undefined || balanceRaw === null || balanceRaw === '') {
@@ -142,6 +197,7 @@ export function parseShopViaProfile(
       username,
       balance_status: 'unknown',
       currency: detectedCurrency,
+      currency_source: currencySource,
     }
   }
 
@@ -152,18 +208,23 @@ export function parseShopViaProfile(
   if (!detectedCurrency) {
     if (rawStr.startsWith('$') || rawStr.endsWith('$') || /\bUSD\b/i.test(rawStr)) {
       detectedCurrency = 'USD'
+      currencySource = 'symbol'
       rawStr = rawStr.replace(/[$\s]|USD/gi, '')
     } else if (rawStr.startsWith('₦') || /\bNGN\b/i.test(rawStr)) {
       detectedCurrency = 'NGN'
+      currencySource = 'symbol'
       rawStr = rawStr.replace(/[₦\s]|NGN/gi, '')
     } else if (rawStr.startsWith('₫') || rawStr.endsWith('₫') || /\bVND\b/i.test(rawStr)) {
       detectedCurrency = 'VND'
+      currencySource = 'symbol'
       rawStr = rawStr.replace(/[₫\s]|VND/gi, '')
     } else if (rawStr.startsWith('€') || /\bEUR\b/i.test(rawStr)) {
       detectedCurrency = 'EUR'
+      currencySource = 'symbol'
       rawStr = rawStr.replace(/[€\s]|EUR/gi, '')
     } else if (contextCurrency && /^[A-Z]{3}$/i.test(contextCurrency.trim())) {
       detectedCurrency = contextCurrency.trim().toUpperCase()
+      currencySource = 'inferred'
     }
   } else {
     rawStr = rawStr.replace(/[^0-9.-]/g, '')
@@ -181,6 +242,7 @@ export function parseShopViaProfile(
       raw_balance: typeof balanceRaw === 'number' || typeof balanceRaw === 'string' ? balanceRaw : undefined,
       spendable_balance: numVal,
       currency: detectedCurrency,
+      currency_source: currencySource,
       balance_status: 'unknown',
     }
   }
@@ -193,6 +255,7 @@ export function parseShopViaProfile(
     raw_balance: typeof balanceRaw === 'number' || typeof balanceRaw === 'string' ? balanceRaw : undefined,
     spendable_balance: numVal,
     currency: detectedCurrency,
+    currency_source: currencySource,
     balance_status,
   }
 }
@@ -492,6 +555,7 @@ export async function fetchShopViaProfile(
     money: parsed.raw_balance,
     spendable_balance: parsed.spendable_balance,
     currency: parsed.currency,
+    currency_source: parsed.currency_source,
     balance_status: parsed.balance_status,
   } as ShopViaProfile
 }
