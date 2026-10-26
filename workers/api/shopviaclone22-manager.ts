@@ -384,9 +384,15 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
     const usdToNgnRate = Number(globalCfg?.usd_to_ngn_rate) > 0 ? Number(globalCfg?.usd_to_ngn_rate) : 1500.0
     const { categories, products } = normalizeShopViaCatalog(rawData, usdToNgnRate, 'NGN')
 
-    // If specific verified product (e.g. product 342) was queried via dynamic lookup and is absent from products.php, include it
-    if (dynamicProduct.id && dynamicStock !== undefined && !products.some((p) => p.id === dynamicProduct.id)) {
-      const pCost = dynamicCost ?? 0.02
+    // If specific verified product (e.g. product 342) was queried via dynamic lookup with verified cost & stock, and is absent from products.php, include it
+    if (
+      dynamicProduct.id &&
+      dynamicStock !== undefined &&
+      dynamicCost !== undefined &&
+      dynamicCost > 0 &&
+      !products.some((p) => p.id === dynamicProduct.id)
+    ) {
+      const pCost = dynamicCost
       const usdMinor = Math.round(pCost * 100)
       const ngnMinor = Math.round(usdMinor * usdToNgnRate)
       products.push({
