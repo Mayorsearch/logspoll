@@ -134,25 +134,37 @@ export interface BachsBankTransferDetails {
 export function extractBachsBankTransferDetails(data: unknown): BachsBankTransferDetails | null {
   if (!data || typeof data !== 'object') return null
   const d = data as Record<string, unknown>
+  const dataObj = d.data && typeof d.data === 'object' ? (d.data as Record<string, unknown>) : undefined
+  const sessionObj = d.checkout_session && typeof d.checkout_session === 'object' ? (d.checkout_session as Record<string, unknown>) : undefined
+  const instructionsObj = d.payment_instructions && typeof d.payment_instructions === 'object' ? (d.payment_instructions as Record<string, unknown>) : undefined
+
   const candidates = [
     d.bank_transfer,
     d.virtual_account,
     d.transfer_details,
     d.account_details,
     d.payment_details,
+    d.temporary_account,
+    d.bank_details,
+    dataObj?.bank_transfer,
+    dataObj?.virtual_account,
+    dataObj?.transfer_details,
+    sessionObj?.bank_transfer,
+    instructionsObj?.bank_transfer,
     (d.payment_method_details as Record<string, unknown> | undefined)?.bank_transfer,
     (d.payment_methods as Record<string, unknown> | undefined)?.bank_transfer,
     (d.metadata as Record<string, unknown> | undefined)?.bank_transfer,
+    dataObj,
     d,
   ]
 
   for (const c of candidates) {
     if (c && typeof c === 'object') {
       const obj = c as Record<string, unknown>
-      const accountNumber = String(obj.account_number || obj.accountNumber || obj.account_no || obj.nuban || '').trim()
-      const bankName = String(obj.bank_name || obj.bankName || obj.bank || '').trim()
-      const accountName = String(obj.account_name || obj.accountName || obj.account_holder_name || '').trim()
-      const expiresAt = obj.expires_at || obj.expiresAt || d.expires_at || d.expiresAt || null
+      const accountNumber = String(obj.account_number || obj.accountNumber || obj.account_no || obj.nuban || obj.account || '').trim()
+      const bankName = String(obj.bank_name || obj.bankName || obj.bank || obj.financial_institution || '').trim()
+      const accountName = String(obj.account_name || obj.accountName || obj.account_holder_name || obj.beneficiary_name || obj.recipient_name || '').trim()
+      const expiresAt = obj.expires_at || obj.expiresAt || obj.expiry || obj.valid_until || d.expires_at || d.expiresAt || null
 
       if (accountNumber && bankName) {
         const resolvedExpires = (typeof expiresAt === 'string' || typeof expiresAt === 'number') && String(expiresAt).trim() ? expiresAt : null

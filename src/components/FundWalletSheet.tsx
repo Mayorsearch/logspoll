@@ -39,6 +39,35 @@ interface FundWalletSheetProps {
 }
 
 const PRESET_AMOUNTS = [5000, 10000, 20000, 50000]
+const SESSION_STORAGE_KEY = 'logspoll_active_funding_session'
+const REQ_ID_STORAGE_KEY = 'logspoll_deposit_request_id'
+
+function getInitialActiveSession(): ActiveFundingSession | null {
+  try {
+    const saved = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(SESSION_STORAGE_KEY) : null
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (parsed && parsed.attemptId && parsed.status === 'awaiting_payment') {
+        return parsed as ActiveFundingSession
+      }
+    }
+  } catch {}
+  return null
+}
+
+function getInitialDepositRequestId(): string {
+  try {
+    const saved = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(REQ_ID_STORAGE_KEY) : null
+    if (saved && saved.length >= 16) return saved
+  } catch {}
+  const fresh = crypto.randomUUID()
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(REQ_ID_STORAGE_KEY, fresh)
+    }
+  } catch {}
+  return fresh
+}
 
 export function FundWalletSheet({
   isOpen,
@@ -52,11 +81,33 @@ export function FundWalletSheet({
   const [amountRaw, setAmountRaw] = useState(() => initialAmount.toLocaleString('en-NG'))
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [activeSession, setActiveSession] = useState<ActiveFundingSession | null>(null)
+  const [activeSession, setActiveSession] = useState<ActiveFundingSession | null>(getInitialActiveSession)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [reconciling, setReconciling] = useState(false)
-  const [depositRequestId, setDepositRequestId] = useState(() => crypto.randomUUID())
+  const [depositRequestId, setDepositRequestId] = useState<string>(getInitialDepositRequestId)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const updateRequestId = (newId: string) => {
+    setDepositRequestId(newId)
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(REQ_ID_STORAGE_KEY, newId)
+      }
+    } catch {}
+  }
+
+  const updateActiveSession = (session: ActiveFundingSession | null) => {
+    setActiveSession(session)
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        if (session && session.status === 'awaiting_payment') {
+          sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session))
+        } else {
+          sessionStorage.removeItem(SESSION_STORAGE_KEY)
+        }
+      }
+    } catch {}
+  }
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
@@ -111,14 +162,14 @@ export function FundWalletSheet({
 
       if (res.paid || res.status === 'paid') {
         stopPolling()
-        setActiveSession((prev) => (prev ? { ...prev, status: 'paid' } : null))
-        setDepositRequestId(crypto.randomUUID())
+        updateActiveSession(null)
+        updateRequestId(crypto.randomUUID())
         await refreshWallet()
         onSuccess?.()
       } else if (res.status === 'failed' || res.status === 'expired') {
         stopPolling()
-        setActiveSession((prev) => (prev ? { ...prev, status: 'failed' } : null))
-        setDepositRequestId(crypto.randomUUID())
+        updateActiveSession(null)
+        updateRequestId(crypto.randomUUID())
       }
     } catch {
       // transient network error, keep polling
@@ -141,26 +192,21 @@ export function FundWalletSheet({
     return () => stopPolling()
   }, [activeSession, checkStatus, stopPolling])
 
-  // Regenerate attempt UUID when opening for a fresh deposit session
-  useEffect(() => {
-    if (isOpen && !activeSession) {
-      setDepositRequestId(crypto.randomUUID())
-    }
-  }, [isOpen, activeSession])
-
   if (!isOpen) return null
 
   const handleAmountChange = (val: string) => {
     const raw = val.replace(/\D/g, '').slice(0, 10)
     setAmountRaw(raw ? Number(raw).toLocaleString('en-NG') : '')
     setError('')
-    setDepositRequestId(crypto.randomUUID())
+    updateActiveSession(null)
+    updateRequestId(crypto.randomUUID())
   }
 
   const handlePresetClick = (amt: number) => {
     setAmountRaw(amt.toLocaleString('en-NG'))
     setError('')
-    setDepositRequestId(crypto.randomUUID())
+    updateActiveSession(null)
+    updateRequestId(crypto.randomUUID())
   }
 
   const handleInitiate = async () => {
@@ -179,10 +225,10 @@ export function FundWalletSheet({
     setSubmitting(true)
     setError('')
 
-    // Stable unified deposit-attempt UUID: preserved across network retries until outcome confirmed
-    const currentRequestId = depositRequestId || crypto.randomUUID()
+    // Stable unified deposit-attempt UUID: preserved across modal close/reopen and retries until terminal state
+    const currentRequestId = depositRequestId || getInitialDepositRequestId()
     if (!depositRequestId) {
-      setDepositRequestId(currentRequestId)
+      updateRequestId(currentRequestId)
     }
 
     try {
@@ -236,7 +282,7 @@ export function FundWalletSheet({
         throw new Error(res.error || 'Failed to initiate deposit.')
       }
 
-      setActiveSession({
+      updateActiveSession({
         attemptId,
         reference,
         amountMinor,
@@ -515,7 +561,8 @@ export function FundWalletSheet({
                 className="fintech-btn fintech-btn-outline fintech-full"
                 onClick={() => {
                   stopPolling()
-                  setActiveSession(null)
+                  updateActiveSession(null)
+                  updateRequestId(crypto.randomUUID())
                 }}
               >
                 Cancel / Change Amount
@@ -563,7 +610,8 @@ export function FundWalletSheet({
               className="fintech-btn fintech-btn-orange fintech-full"
               onClick={() => {
                 onClose()
-                setActiveSession(null)
+                updateActiveSession(null)
+                updateRequestId(crypto.randomUUID())
               }}
             >
               Done
@@ -598,7 +646,10 @@ export function FundWalletSheet({
               <button
                 type="button"
                 className="fintech-btn fintech-btn-outline fintech-full"
-                onClick={() => setActiveSession(null)}
+                onClick={() => {
+                  updateActiveSession(null)
+                  updateRequestId(crypto.randomUUID())
+                }}
               >
                 Start New Deposit
               </button>

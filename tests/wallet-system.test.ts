@@ -1286,5 +1286,115 @@ test('Disabled live wallet funding safely returns explanatory status and rejects
   )
 })
 
+test('extractBachsBankTransferDetails parses all supported nested provider shapes and aliases', () => {
+  // Shape A: nested in data.bank_transfer with standard keys
+  const shapeA = {
+    data: {
+      bank_transfer: {
+        bank_name: 'Wema Bank',
+        account_number: '0123456789',
+        account_name: 'LogsPoll Checkout / Bachs',
+        expires_at: '2026-10-26T18:00:00Z',
+      },
+    },
+  }
+  const resA = extractBachsBankTransferDetails(shapeA)
+  assert.ok(resA)
+  assert.equal(resA.bankName, 'Wema Bank')
+  assert.equal(resA.accountNumber, '0123456789')
+  assert.equal(resA.accountName, 'LogsPoll Checkout / Bachs')
+
+  // Shape B: nested in checkout_session with nuban and financial_institution
+  const shapeB = {
+    checkout_session: {
+      bank_transfer: {
+        financial_institution: 'Sterling Bank',
+        nuban: '9876543210',
+        beneficiary_name: 'LogsPoll Customer Vault',
+      },
+    },
+  }
+  const resB = extractBachsBankTransferDetails(shapeB)
+  assert.ok(resB)
+  assert.equal(resB.bankName, 'Sterling Bank')
+  assert.equal(resB.accountNumber, '9876543210')
+  assert.equal(resB.accountName, 'LogsPoll Customer Vault')
+
+  // Shape C: nested in temporary_account
+  const shapeC = {
+    temporary_account: {
+      bank: 'Providus Bank',
+      account_no: '5544332211',
+      recipient_name: 'LogsPoll Deposit',
+    },
+  }
+  const resC = extractBachsBankTransferDetails(shapeC)
+  assert.ok(resC)
+  assert.equal(resC.bankName, 'Providus Bank')
+  assert.equal(resC.accountNumber, '5544332211')
+
+  // Shape D: malformed or missing numbers return null
+  assert.equal(extractBachsBankTransferDetails({}), null)
+  assert.equal(extractBachsBankTransferDetails({ bank_transfer: { bank_name: 'GTBank' } }), null)
+})
+
+test('Ambiguous deposit retry: retrying with the same deposit requestId after modal close/reopen reuses pending session', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    if (String(url).includes('/v1/checkout-sessions')) {
+      return new Response(JSON.stringify({
+        checkout_id: 'chk_ambiguous_session_1',
+        checkout_url: 'https://checkout.bachs.io/c/ambiguous_1',
+        bank_transfer: {
+          bank_name: 'Wema Bank',
+          account_number: '0123456789',
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(null, { status: 404 })
+  })
+
+  const stableModalRequestId = '44444444-dddd-4444-8444-444444444444'
+
+  // Attempt 1: in-flight or ambiguous request
+  const req1 = new Request('https://test.example/api/wallet/fund', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: '10000.00',
+      requestId: stableModalRequestId,
+      request_id: stableModalRequestId,
+    }),
+  })
+  const res1 = await initiateWalletFunding(req1, env, { id: customer, email: 'user@example.com' })
+  assert.equal(res1.status, 200)
+  const d1 = await res1.json() as any
+  assert.equal(d1.checkoutId, 'chk_ambiguous_session_1')
+
+  // Modal close and reopen: the frontend retains stableModalRequestId and re-submits
+  const req2 = new Request('https://test.example/api/wallet/fund', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: '10000.00',
+      requestId: stableModalRequestId,
+      request_id: stableModalRequestId,
+    }),
+  })
+  const res2 = await initiateWalletFunding(req2, env, { id: customer, email: 'user@example.com' })
+  assert.equal(res2.status, 200)
+  const d2 = await res2.json() as any
+  assert.equal(d2.attemptId, d1.attemptId)
+  assert.equal(d2.checkoutId, 'chk_ambiguous_session_1')
+
+  // Verify only 1 funding attempt was recorded in D1
+  const count = sql.prepare("SELECT count(*) as count FROM wallet_funding_attempts WHERE customer_id=?").get(customer) as { count: number }
+  assert.equal(count.count, 1)
+})
+
+
 
 
