@@ -8,7 +8,7 @@ export interface FulfillmentResult{success:boolean;delivered:boolean;fulfilledIt
 type Job={order_item_id:string;order_id:string;request_id:string;provider:string|null;external_id:string|null;receipt:string|null;state:string;attempts:number;last_error:string|null}
 type Item={product_id:string;product_name:string;quantity:number;unit_price_minor:number;customer_id:string;authorized_resale:number;evidence:string|null}
 type Target={provider:string;external_id:string;enabled:number;approval:string;ciphertext:string;nonce:string;scope:string;slug:string|null;query:string}
-const active=(env:ApiEnv)=>env.AUTO_FULFILLMENT_ENABLED==='true'&&['production','staging'].includes(env.ENVIRONMENT)
+const active=(env:ApiEnv)=>env.AUTO_FULFILLMENT_ENABLED==='true'&&['production','staging'].includes(env.ENVIRONMENT)&&Boolean(env.SUPPLIER_ENCRYPTION_KEY)
 const paidSQL=`EXISTS(SELECT 1 FROM orders o JOIN bachs_payment_attempts a ON a.order_id=o.id
  WHERE o.id=fulfillment_jobs.order_id AND o.payment_status='paid' AND a.status='paid'
  AND a.amount_minor=o.total_minor AND a.currency=o.currency AND a.provider_mode=?)`
@@ -40,7 +40,9 @@ export async function runFulfillment(env:ApiEnv,orderId?:string,adminOverride=fa
  const job=await db.prepare(`UPDATE fulfillment_jobs SET lease_owner=?,lease_until=?,updated_at=?,
  state=CASE WHEN state='waiting' THEN 'waiting' ELSE 'preparing' END,attempts=attempts+1
  WHERE order_item_id=(SELECT order_item_id FROM fulfillment_jobs WHERE ${paymentProof}
- AND ((state IN ('queued','retry','waiting','retry_approved') AND next_attempt<=? AND (lease_until IS NULL OR lease_until<=?)) OR (state='preparing' AND lease_until<=?))
+ AND ((state IN ('queued','retry','waiting','retry_approved') AND next_attempt<=? AND (lease_until IS NULL OR lease_until<=?))
+      OR (state='blocked' AND last_error='Worker SUPPLIER_ENCRYPTION_KEY binding is missing.' AND lease_until IS NULL)
+      OR (state='preparing' AND lease_until<=?))
  ${orderId?'AND order_id=?':''} ORDER BY created_at,order_item_id LIMIT 1) RETURNING *`).bind(owner,now+180000,now,mode,now,now,now,...(orderId?[orderId]:[])).first<Job>()
  if(!job)return
  let dispatched=false

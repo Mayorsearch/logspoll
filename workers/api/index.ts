@@ -158,11 +158,24 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
       let order = await env.DB!.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,payment_method,created_at FROM orders WHERE id=? AND customer_id=?').bind(id, user.id).first<{id:string;reference:string;payment_status:string;fulfillment_status:string;total_minor:number;currency:string;payment_method:string;created_at:string}>()
       if (!order && !attempt) throw new HttpError(404, 'Order not found.')
       if (attempt?.checkout_id && ['initiating', 'open'].includes(attempt.status)) await reconcileBachsAttempt(env, attempt)
-      if (order && order.payment_status === 'paid' && order.fulfillment_status !== 'delivered' && env.AUTO_FULFILLMENT_ENABLED === 'true') {
+      if (order && order.payment_status === 'paid' && order.fulfillment_status !== 'delivered' && env.AUTO_FULFILLMENT_ENABLED === 'true' && Boolean(env.SUPPLIER_ENCRYPTION_KEY)) {
         await runFulfillment(env, id).catch(() => undefined)
         await drainBusinessMail(env).catch(() => undefined)
         await drainMail(env).catch(() => undefined)
         order = await env.DB!.prepare('SELECT id,reference,payment_status,fulfillment_status,total_minor,currency,payment_method,created_at FROM orders WHERE id=? AND customer_id=?').bind(id, user.id).first<NonNullable<typeof order>>()
+      }
+      if (order) {
+        const hasJobs = Boolean(await env.DB!.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fulfillment_jobs'").first().catch(() => null))
+        const job = hasJobs
+          ? await env.DB!.prepare('SELECT state, last_error FROM fulfillment_jobs WHERE order_id=? ORDER BY updated_at DESC LIMIT 1').bind(id).first<{state: string; last_error: string | null}>().catch(() => null)
+          : null
+        const ent = await env.DB!.prepare('SELECT 1 FROM product_entitlements pe JOIN order_items oi ON oi.id=pe.order_item_id WHERE oi.order_id=? LIMIT 1').bind(id).first().catch(() => null)
+        order = {
+          ...order,
+          delivery_status: job?.state ?? null,
+          delivery_error: job?.last_error ?? null,
+          has_entitlement: Boolean(ent),
+        } as NonNullable<typeof order>
       }
       return json({ order })
     }

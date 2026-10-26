@@ -81,7 +81,7 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
   if (url.pathname === '/api/orders' || url.pathname === '/api/v1/orders') {
     if (!user) throw new HttpError(401, 'Verified sign-in required.')
     await reconcileCustomerPayment(env, user.id)
-    if (env.AUTO_FULFILLMENT_ENABLED === 'true') {
+    if (env.AUTO_FULFILLMENT_ENABLED === 'true' && Boolean(env.SUPPLIER_ENCRYPTION_KEY)) {
       const pendingFulfillment = await db.prepare("SELECT id FROM orders WHERE customer_id=? AND payment_status='paid' AND fulfillment_status<>'delivered' LIMIT 1").bind(user.id).first<{id:string}>().catch(() => null)
       if (pendingFulfillment) {
         await runFulfillment(env, pendingFulfillment.id).catch(() => undefined)
@@ -97,9 +97,11 @@ export async function customerRead(request: Request, env: ApiEnv, user: Customer
       : ', NULL AS delivery_status, NULL AS delivery_error'
 
     const rows = await db.prepare(
-      `SELECT o.id, o.reference, o.payment_status, o.fulfillment_status, o.total_minor, o.currency, o.created_at ${deliveryCols}
+      `SELECT o.id, o.reference, o.payment_status, o.fulfillment_status, o.total_minor, o.currency, o.created_at,
+              EXISTS(SELECT 1 FROM product_entitlements pe JOIN order_items oi ON oi.id=pe.order_item_id WHERE oi.order_id=o.id) AS has_entitlement
+              ${deliveryCols}
        FROM orders o WHERE o.customer_id=? ORDER BY o.created_at DESC LIMIT 50`
-    ).bind(user.id).all<{ id: string; reference: string; payment_status: string; fulfillment_status: string; total_minor: number; currency: string; created_at: string; delivery_status?: string | null; delivery_error?: string | null }>()
+    ).bind(user.id).all<{ id: string; reference: string; payment_status: string; fulfillment_status: string; total_minor: number; currency: string; created_at: string; delivery_status?: string | null; delivery_error?: string | null; has_entitlement?: number | boolean }>()
 
     const hasServer = Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('products') WHERE name='server_number'").first().catch(() => null))
     const serverCol = hasServer ? 'p.server_number' : 'NULL AS server_number'

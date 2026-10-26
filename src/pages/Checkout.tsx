@@ -4,7 +4,8 @@ import { useCart } from '../lib/cart'
 import { useAuth } from '../auth/AuthProvider'
 import { useCurrency } from '../lib/currency'
 import { cloudflareRequest } from '../lib/cloudflare-auth'
-import { checkoutRequestId, clearCheckoutRequest } from '../lib/checkout-request'
+import { checkoutRequestId, clearCheckoutRequest, getCartActiveOrderId, setCartActiveOrderId, clearCartActiveOrderId } from '../lib/checkout-request'
+import { getOrderDeliveryStatus } from '../lib/order-status'
 import {
   ShieldCheck,
   Lock,
@@ -41,7 +42,10 @@ interface OrderStatusRecord {
   id: string
   reference: string
   payment_status: 'pending' | 'paid' | 'failed' | 'cancelled' | 'refunded'
-  fulfillment_status: 'unfulfilled' | 'processing' | 'delivered' | 'failed'
+  fulfillment_status: 'unfulfilled' | 'pending' | 'processing' | 'delivered' | 'failed'
+  delivery_status?: string | null
+  delivery_error?: string | null
+  has_entitlement?: boolean | number | null
   total_minor: number
   currency: string
   created_at: string
@@ -54,10 +58,16 @@ export function Checkout() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
-  // Track order ID from query params or session storage
+  // Track order ID from query params or customer- and cart-scoped storage.
+  // Stale or completed previous orders NEVER override the current cart.
   const paramOrderId = searchParams.get('order_id') || searchParams.get('id')
   const [activeOrderId, setActiveOrderId] = useState<string | null>(() => {
-    return paramOrderId || sessionStorage.getItem('logspoll-active-order-id')
+    if (paramOrderId) return paramOrderId
+    if (session?.user.id && items.length > 0) {
+      return getCartActiveOrderId(sessionStorage, session.user.id, items)
+    }
+    clearCartActiveOrderId(sessionStorage)
+    return null
   })
 
   // Order recovery state
@@ -94,9 +104,13 @@ export function Checkout() {
     return () => { active = false }
   }, [session])
 
+  // Track the in-flight status request ID to prevent async responses for older orders from overwriting newer carts
+  const orderReqRef = useRef<string | null>(activeOrderId)
+
   // 1. Check order status if active order ID exists
   const checkOrderStatus = async (orderId: string) => {
     if (!session) return
+    orderReqRef.current = orderId
     setCheckingStatus(true)
     setStatusError('')
 
@@ -104,20 +118,30 @@ export function Checkout() {
       const res = await cloudflareRequest<{ order?: OrderStatusRecord }>(
         `/api/orders/${encodeURIComponent(orderId)}/status`
       )
+      // Guard against race conditions if active order changed in the meantime
+      if (orderReqRef.current !== orderId) return
+
       if (res.order) {
         setOrderStatus(res.order)
-        if (res.order.payment_status === 'paid') {
-          // Clear cart on confirmed verified payment
+        // Clear cart ONLY if this confirmed order was the one placed for the current cart items.
+        // Viewing order history or an older order must NEVER erase a newly added cart item.
+        const isCurrentCart = Boolean(session && getCartActiveOrderId(sessionStorage, session.user.id, items) === orderId)
+        if (res.order.payment_status === 'paid' && isCurrentCart) {
           clear()
           clearCheckoutRequest(sessionStorage, session.user.id, items)
+          clearCartActiveOrderId(sessionStorage, session.user.id, items)
         }
       } else {
         setStatusError('Order details could not be retrieved.')
       }
     } catch (err) {
-      setStatusError(err instanceof Error ? err.message : 'Unable to check order status.')
+      if (orderReqRef.current === orderId) {
+        setStatusError(err instanceof Error ? err.message : 'Unable to check order status.')
+      }
     } finally {
-      setCheckingStatus(false)
+      if (orderReqRef.current === orderId) {
+        setCheckingStatus(false)
+      }
     }
   }
 
@@ -132,6 +156,18 @@ export function Checkout() {
   // 2. Fetch live product data for items currently in cart
   const priceRequest = useRef(0)
   const ids = items.map(i => i.id).sort().join(',')
+
+  // Synchronize active order state when cart items change and no explicit paramOrderId is in URL
+  useEffect(() => {
+    if (!paramOrderId) {
+      const cartOrder = getCartActiveOrderId(sessionStorage, session?.user.id, items)
+      setActiveOrderId(cartOrder)
+      if (!cartOrder) {
+        setOrderStatus(null)
+        setStatusError('')
+      }
+    }
+  }, [ids, session?.user.id, paramOrderId])
 
   const refreshProducts = useCallback(async () => {
     const requestId = ++priceRequest.current
@@ -210,9 +246,9 @@ export function Checkout() {
 
         clear()
         clearCheckoutRequest(sessionStorage, session.user.id, items)
+        clearCartActiveOrderId(sessionStorage, session.user.id, items)
         if (res.orderId) {
           setActiveOrderId(res.orderId)
-          sessionStorage.setItem('logspoll-active-order-id', res.orderId)
           await checkOrderStatus(res.orderId)
         }
       } catch (err) {
@@ -275,7 +311,7 @@ export function Checkout() {
 
       if (orderId) {
         setActiveOrderId(orderId)
-        sessionStorage.setItem('logspoll-active-order-id', orderId)
+        setCartActiveOrderId(sessionStorage, session.user.id, items, orderId)
       }
 
       if (checkoutUrl) {
@@ -300,6 +336,14 @@ export function Checkout() {
   // A. ORDER CONFIRMED & PAID SUCCESS STATE
   // ------------------------------------------------------------------------
   if (orderStatus && orderStatus.payment_status === 'paid') {
+    const delivery = getOrderDeliveryStatus(orderStatus)
+    const isDelivered = delivery.status === 'delivered'
+    const isFailed = delivery.status === 'delivery_failed'
+    const isAwaitingSupplier = delivery.status === 'awaiting_supplier'
+
+    const stepTitle = isDelivered ? 'Delivered' : isFailed ? 'Support Review' : isAwaitingSupplier ? 'Awaiting Supplier' : 'Delivery Processing'
+    const stepColor = isDelivered ? '#10b981' : isFailed ? '#ef4444' : '#ff6500'
+
     return (
       <div className="cart-checkout-page">
         <div className="cart-checkout-container">
@@ -313,21 +357,46 @@ export function Checkout() {
               <span className="cart-step-badge">✓</span>
               <span className="cart-step-title">Payment</span>
             </div>
-            <div className="cart-step-separator" style={{ background: '#10b981' }} />
-            <div className="cart-step-item active">
-              <span className="cart-step-badge">3</span>
-              <span className="cart-step-title">Fulfillment Ready</span>
+            <div className="cart-step-separator" style={{ background: stepColor }} />
+            <div className={`cart-step-item ${isDelivered ? 'completed' : 'active'}`}>
+              <span className="cart-step-badge" style={isFailed ? { background: '#ef4444', borderColor: '#ef4444', color: '#fff' } : undefined}>
+                {isDelivered ? '✓' : isFailed ? '!' : '3'}
+              </span>
+              <span className="cart-step-title">{stepTitle}</span>
             </div>
           </div>
 
-          <div className="order-success-card">
-            <div className="order-success-icon-wrap">
-              <CheckCircle2 size={44} />
+          <div className="order-success-card" style={isFailed ? { borderColor: '#ef4444' } : undefined}>
+            <div
+              className="order-success-icon-wrap"
+              style={
+                isFailed
+                  ? { background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', boxShadow: '0 0 0 10px rgba(239, 68, 68, 0.05)' }
+                  : isDelivered
+                    ? undefined
+                    : { background: 'rgba(255, 101, 0, 0.1)', color: 'var(--lp-orange)', boxShadow: '0 0 0 10px rgba(255, 101, 0, 0.05)' }
+              }
+            >
+              {isDelivered ? <CheckCircle2 size={44} /> : isFailed ? <AlertCircle size={44} /> : isAwaitingSupplier ? <Clock size={44} /> : <Zap size={44} />}
             </div>
 
-            <h1 className="order-success-title">Payment Confirmed & Verified</h1>
+            <h1 className="order-success-title">
+              {isDelivered
+                ? 'Payment Confirmed & Delivered'
+                : isFailed
+                  ? 'Delivery Assistance Required'
+                  : isAwaitingSupplier
+                    ? 'Delivery Awaiting Supplier'
+                    : 'Payment Confirmed — Delivery Processing'}
+            </h1>
             <p style={{ margin: 0, color: 'var(--lp-text-muted)', fontSize: '0.95rem' }}>
-              Your order has been verified through Bachs payment gateway and registered in production D1.
+              {isDelivered
+                ? 'Your order has been verified and digital credentials have been delivered to your secure vault.'
+                : isFailed
+                  ? 'Your payment was confirmed and recorded, but automated fulfillment could not be completed. Your funds remain secure, and our support team is available to assist or issue a prompt refund.'
+                  : isAwaitingSupplier
+                    ? 'Your payment is confirmed. The order was dispatched to the supplier and is awaiting credential generation. Delivery typically completes in 1–2 minutes.'
+                    : 'Your payment is confirmed. Our automated fulfillment engine is initializing and preparing your digital credentials.'}
             </p>
 
             <div className="order-success-ref-box">
@@ -353,8 +422,11 @@ export function Checkout() {
               </div>
               <div className="order-success-row">
                 <span>Fulfillment Status</span>
-                <span style={{ color: '#ff6500', fontWeight: 700 }}>
-                  {orderStatus.fulfillment_status === 'delivered' ? 'Delivered' : 'Ready in Dashboard'}
+                <span style={{
+                  color: isDelivered ? '#10b981' : isFailed ? '#ef4444' : '#ff6500',
+                  fontWeight: 700
+                }}>
+                  {delivery.label}
                 </span>
               </div>
               <div className="order-success-row">
@@ -363,10 +435,37 @@ export function Checkout() {
               </div>
             </div>
 
+            {isFailed && orderStatus.delivery_error && (
+              <div className="checkout-verification-notice" style={{ background: 'rgba(239, 68, 68, 0.08)', borderColor: '#ef4444', color: '#dc2626' }}>
+                <AlertCircle size={18} style={{ flexShrink: 0 }} />
+                <span>Diagnostic Note: {orderStatus.delivery_error}</span>
+              </div>
+            )}
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', marginTop: 8 }}>
-              <Link to="/dashboard/purchases" className="cart-primary-btn">
-                Access Purchased Downloads <ArrowRight size={16} />
-              </Link>
+              {isDelivered ? (
+                <Link to="/dashboard/purchases" className="cart-primary-btn">
+                  Access Purchased Downloads <ArrowRight size={16} />
+                </Link>
+              ) : isFailed ? (
+                <Link
+                  to={`/dashboard/support?ref=${encodeURIComponent(orderStatus.reference)}`}
+                  className="cart-primary-btn"
+                  style={{ background: '#ef4444', borderColor: '#ef4444' }}
+                >
+                  <PhoneCall size={16} /> Contact Support for Order Resolution
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  className="cart-primary-btn"
+                  onClick={() => checkOrderStatus(orderStatus.id)}
+                  disabled={checkingStatus}
+                >
+                  <RefreshCw size={16} className={checkingStatus ? 'animate-spin' : ''} />
+                  Check Delivery Status
+                </button>
+              )}
               <Link to="/dashboard/orders" className="cart-secondary-btn">
                 View My Orders
               </Link>
@@ -398,12 +497,12 @@ export function Checkout() {
             </div>
 
             <h1 className="order-success-title">
-              {isPending ? 'Payment Awaiting Confirmation' : 'Payment Status: ' + orderStatus.payment_status.toUpperCase()}
+              {isPending ? 'Payment Pending' : 'Payment Status: ' + orderStatus.payment_status.toUpperCase()}
             </h1>
 
             <p style={{ margin: 0, color: 'var(--lp-text-muted)', fontSize: '0.9rem' }}>
               {isPending
-                ? 'Your transaction is being confirmed by the Bachs payment gateway. Once settlement is received, fulfillment will complete automatically.'
+                ? 'Your transaction is awaiting payment confirmation. Once settlement is received, automated delivery will begin immediately.'
                 : 'The payment for this order was not completed. No supplier product was dispatched.'}
             </p>
 

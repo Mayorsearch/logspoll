@@ -522,7 +522,7 @@ export async function payOrderWithWallet(
   }
 
   // Trigger automated fulfillment immediately
-  if (env.AUTO_FULFILLMENT_ENABLED === 'true') {
+  if (env.AUTO_FULFILLMENT_ENABLED === 'true' && Boolean(env.SUPPLIER_ENCRYPTION_KEY)) {
     await runFulfillment(env, orderId).catch(() => undefined)
     if (hasMail) {
       await drainBusinessMail(env).catch(() => undefined)

@@ -23,6 +23,7 @@ import { TransactionDetailsSheet } from '../components/TransactionDetailsSheet'
 import type { WalletTransactionItem } from '../components/TransactionDetailsSheet'
 import type { StructuredProductDelivery } from '../lib/delivery-parser'
 import type { Order } from '../lib/customer-data'
+import { getOrderDeliveryStatus } from '../lib/order-status'
 
 interface ProductItem {
   id: string
@@ -379,9 +380,7 @@ export function CustomerRecords({
             setRecords(
               isPurchasesMode
                 ? records.filter(
-                    (order) =>
-                      order.payment_status === 'paid' &&
-                      order.fulfillment_status === 'delivered'
+                    (order) => getOrderDeliveryStatus(order).status === 'delivered'
                   )
                 : records
             )
@@ -433,25 +432,29 @@ export function CustomerRecords({
 
   // Counts for metric cards and tabs
   const completedPurchases = records.filter(
-    (r) => r.payment_status === 'paid' && r.fulfillment_status === 'delivered'
+    (r) => getOrderDeliveryStatus(r).status === 'delivered'
   ).length
 
   const pendingOrders = records.filter(
-    (r) => r.payment_status === 'pending' || r.fulfillment_status === 'pending' || r.fulfillment_status === 'processing'
+    (r) => {
+      const s = getOrderDeliveryStatus(r).status
+      return s === 'delivery_processing' || s === 'awaiting_supplier' || s === 'payment_pending'
+    }
   ).length
 
   const failedOrders = records.filter(
-    (r) => r.payment_status === 'failed' || r.fulfillment_status === 'failed' || r.payment_status === 'cancelled'
+    (r) => getOrderDeliveryStatus(r).status === 'delivery_failed'
   ).length
 
   // Filtered orders based on selected tab and search query
   const filteredOrders = records.filter((order) => {
+    const s = getOrderDeliveryStatus(order).status
     if (orderFilter === 'completed') {
-      if (order.fulfillment_status !== 'delivered' && order.payment_status !== 'paid') return false
+      if (s !== 'delivered') return false
     } else if (orderFilter === 'pending') {
-      if (order.fulfillment_status === 'delivered' || order.payment_status === 'failed') return false
+      if (s !== 'delivery_processing' && s !== 'awaiting_supplier' && s !== 'payment_pending') return false
     } else if (orderFilter === 'failed') {
-      if (order.payment_status !== 'failed' && order.fulfillment_status !== 'failed' && order.payment_status !== 'cancelled') return false
+      if (s !== 'delivery_failed') return false
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim()
@@ -981,8 +984,10 @@ export function CustomerRecords({
           <div className="order-cards-list">
             {filteredOrders.map((order) => {
               const primaryItem = order.order_items?.[0]
-              const isDelivered = order.fulfillment_status === 'delivered' && order.payment_status === 'paid'
-              const isPending = order.fulfillment_status === 'pending' || order.payment_status === 'pending' || order.fulfillment_status === 'processing'
+              const statusDetails = getOrderDeliveryStatus(order)
+              const isDelivered = statusDetails.canDownload
+              const isAwaitingSupplier = statusDetails.status === 'awaiting_supplier'
+              const isProcessing = statusDetails.status === 'delivery_processing' || statusDetails.status === 'payment_pending'
               const isExpanded = !!expandedOrders[order.id]
               const itemsSummary = order.order_items?.map((i) => i.product_name).join(', ') || `Order ${order.reference}`
               const categoryLabel = primaryItem?.category_name || (primaryItem?.product_name ? primaryItem.product_name.split(' ')[0].toUpperCase() : 'DIGITAL')
@@ -1027,12 +1032,13 @@ export function CustomerRecords({
                           <span className="capitalize">{order.payment_status}</span>
                         </span>
 
-                        <span className={`status-pill delivery-${order.fulfillment_status}`}>
-                          {order.fulfillment_status === 'delivered' && <CheckCircle2 size={12} />}
-                          {order.fulfillment_status === 'processing' && <RefreshCw size={12} className="spin-slow" />}
-                          {order.fulfillment_status === 'pending' && <Clock size={12} />}
-                          {order.fulfillment_status === 'failed' && <AlertCircle size={12} />}
-                          <span className="capitalize">{order.fulfillment_status}</span>
+                        <span className={`status-pill ${statusDetails.badgeClass}`}>
+                          {statusDetails.status === 'delivered' && <CheckCircle2 size={12} />}
+                          {statusDetails.status === 'delivery_processing' && <RefreshCw size={12} className="spin-slow" />}
+                          {statusDetails.status === 'awaiting_supplier' && <Clock size={12} />}
+                          {statusDetails.status === 'delivery_failed' && <AlertCircle size={12} />}
+                          {statusDetails.status === 'payment_pending' && <Clock size={12} />}
+                          <span>{statusDetails.label}</span>
                         </span>
                       </div>
                     </div>
@@ -1113,20 +1119,28 @@ export function CustomerRecords({
                             })
                           )}
                         </div>
-                      ) : isPending ? (
+                      ) : isAwaitingSupplier ? (
                         <div className="expanded-status-notice pending">
                           <Clock size={16} className="spin-slow" />
                           <div>
-                            <strong>Fulfillment In Progress</strong>
-                            <p>Your payment is verified and our automated system is provisioning your digital products from verified servers. Delivery typically takes seconds to a few minutes.</p>
+                            <strong>Delivery Awaiting Supplier</strong>
+                            <p>{statusDetails.description}</p>
+                          </div>
+                        </div>
+                      ) : isProcessing ? (
+                        <div className="expanded-status-notice pending">
+                          <Clock size={16} className="spin-slow" />
+                          <div>
+                            <strong>{statusDetails.label}</strong>
+                            <p>{statusDetails.description}</p>
                           </div>
                         </div>
                       ) : (
                         <div className="expanded-status-notice failed">
                           <AlertCircle size={16} />
                           <div>
-                            <strong>Order Status: {order.payment_status} / {order.fulfillment_status}</strong>
-                            <p>If you made a payment that hasn't reflected, or need manual delivery assistance, our support team is available 24/7.</p>
+                            <strong>{statusDetails.label}</strong>
+                            <p>{statusDetails.description}</p>
                           </div>
                         </div>
                       )}
@@ -1378,9 +1392,9 @@ export function CustomerRecords({
                   const dateStr = !isNaN(dateObj.getTime())
                     ? dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
                     : String(order.created_at)
-                  const isDelivered = order.fulfillment_status === 'delivered'
-                  const isProcessing =
-                    order.fulfillment_status === 'processing' || order.payment_status === 'pending'
+                  const statusDetails = getOrderDeliveryStatus(order)
+                  const isDelivered = statusDetails.canDownload
+                  const isProcessing = statusDetails.status === 'delivery_processing' || statusDetails.status === 'awaiting_supplier' || statusDetails.status === 'payment_pending'
 
                   return (
                     <div className="fintech-order-item" key={order.id}>
@@ -1393,8 +1407,8 @@ export function CustomerRecords({
                       </span>
                       <span className="fintech-order-side">
                         <strong>{formatPrice(order.total_minor)}</strong>
-                        <span className={`fintech-small-pill ${isProcessing ? 'pending' : ''}`}>
-                          {isDelivered ? 'Delivered' : isProcessing ? 'Processing' : order.payment_status}
+                        <span className={`fintech-small-pill ${isProcessing ? 'pending' : isDelivered ? 'completed' : 'failed'}`}>
+                          {statusDetails.label}
                         </span>
                       </span>
                     </div>

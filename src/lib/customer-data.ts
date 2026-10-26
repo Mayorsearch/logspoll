@@ -17,6 +17,9 @@ export interface Order {
   reference: string
   payment_status: string
   fulfillment_status: string
+  delivery_status?: string | null
+  delivery_error?: string | null
+  has_entitlement?: boolean | number | null
   total_minor: number
   currency: string
   created_at: string
