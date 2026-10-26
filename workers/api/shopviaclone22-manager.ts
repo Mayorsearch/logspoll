@@ -424,7 +424,7 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
       .first<{ markup_bps: number; automatic_pricing: number; auto_publish: number; auto_approve: number; delivery_type?: string; updated_by?: string }>()
       .catch(() => null)
 
-    const defaultMarkup = globalCfg?.markup_bps ?? pol?.markup_bps ?? 5000
+    const defaultMarkup = pol?.markup_bps && pol.markup_bps > 0 ? pol.markup_bps : (globalCfg?.markup_bps ?? 5000)
     const autoPublish = (globalCfg?.auto_publish === 1) || (pol?.auto_publish === 1)
     const autoApprove = (globalCfg?.auto_approve === 1) || (pol?.auto_approve === 1)
 
