@@ -24,6 +24,8 @@ import type { WalletTransactionItem } from '../components/TransactionDetailsShee
 import type { StructuredProductDelivery } from '../lib/delivery-parser'
 import type { Order } from '../lib/customer-data'
 import { getOrderDeliveryStatus } from '../lib/order-status'
+import { WhatsAppSupportButton } from '../components/WhatsAppSupportButton'
+import { WhatsAppSupportModal } from '../components/WhatsAppSupportModal'
 
 interface ProductItem {
   id: string
@@ -338,6 +340,8 @@ export function CustomerRecords({
   const [supportBusy, setSupportBusy] = useState(false)
   const [supportSuccess, setSupportSuccess] = useState('')
   const [supportError, setSupportError] = useState('')
+  const [whatsAppModalOpen, setWhatsAppModalOpen] = useState(false)
+  const [whatsAppOrderRef, setWhatsAppOrderRef] = useState<string | undefined>(undefined)
 
   // Dashboard & Wallet state
   const { hideBalance, toggleHideBalance, walletBalanceMinor: sharedBalanceMinor } = useDashboard()
@@ -612,7 +616,15 @@ export function CustomerRecords({
                   <ArrowRight size={14} className="channel-arrow" />
                 </a>
 
-                <a href="https://wa.me/2348000000000" target="_blank" rel="noopener noreferrer" className="channel-item">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWhatsAppOrderRef(supportOrderRef || undefined)
+                    setWhatsAppModalOpen(true)
+                  }}
+                  className="channel-item"
+                  style={{ width: '100%', textAlign: 'left', background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit' }}
+                >
                   <div className="channel-icon whatsapp">
                     <MessageSquare size={16} />
                   </div>
@@ -621,7 +633,16 @@ export function CustomerRecords({
                     <span>Instant chat with support agent</span>
                   </div>
                   <ArrowRight size={14} className="channel-arrow" />
-                </a>
+                </button>
+
+                <div style={{ marginTop: 8 }}>
+                  <WhatsAppSupportButton
+                    orderReference={supportOrderRef || undefined}
+                    variant="primary"
+                    buttonText="Contact Support on WhatsApp"
+                    style={{ width: '100%' }}
+                  />
+                </div>
 
                 <div className="sla-badge-box">
                   <Clock size={15} />
@@ -1154,6 +1175,11 @@ export function CustomerRecords({
                           <HelpCircle size={13} />
                           <span>Need Help With This Order?</span>
                         </Link>
+                        <WhatsAppSupportButton
+                          orderReference={order.reference}
+                          variant="compact"
+                          buttonText="Chat on WhatsApp"
+                        />
                         {isDelivered && (
                           <Link to="/dashboard/purchases" className="button button-outline button-small">
                             <Download size={13} />
@@ -1435,6 +1461,12 @@ export function CustomerRecords({
       <TransactionDetailsSheet
         transaction={selectedTx}
         onClose={() => setSelectedTx(null)}
+      />
+
+      <WhatsAppSupportModal
+        isOpen={whatsAppModalOpen}
+        onClose={() => setWhatsAppModalOpen(false)}
+        orderReference={whatsAppOrderRef}
       />
     </div>
   )

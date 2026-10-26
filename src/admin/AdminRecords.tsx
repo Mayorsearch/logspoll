@@ -8,7 +8,18 @@ export default function AdminRecords({section}:{section:string}){
  const [selected,setSelected]=useState<string[]>([]),[mode,setMode]=useState('fixed_markup'),[amount,setAmount]=useState(''),[serverFilter,setServerFilter]=useState('')
  async function refresh(){try{const [r,c]=await Promise.all([cloudflareRequest<{records:Row[]}>(`/api/admin/operations?section=${section}`),cloudflareRequest<{records:Row[]}>('/api/admin/operations?section=categories')]);setRows(r.records);setCategories(c.records);setError('')}catch(e){setError(e instanceof Error?e.message:'Records unavailable.')}}
  useEffect(()=>{let active=true;void cloudflareRequest<{records:Row[]}>(`/api/admin/operations?section=${section}`).then(r=>{if(active)setRows(r.records)}).catch(e=>{if(active)setError(e.message)});void cloudflareRequest<{records:Row[]}>('/api/admin/operations?section=categories').then(r=>{if(active)setCategories(r.records)}).catch(()=>{});return()=>{active=false}},[section])
- function choose(row:Row={}){setEdit(Object.fromEntries(Object.entries(row).map(([k,v])=>[k,String(v??'')])));setError('')}
+ function choose(row:Row={}){
+  const base=Object.fromEntries(Object.entries(row).map(([k,v])=>[k,String(v??'')]))
+  if(section==='settings'){
+    try{
+      const parsed=JSON.parse(String(row.value??'{}'))
+      base.whatsapp_number=String(parsed.whatsapp_number??'2348117472091')
+      base.support_email=String(parsed.support_email??'support@logspoll.com')
+    }catch{}
+  }
+  setEdit(base)
+  setError('')
+ }
  async function action(body:Record<string,unknown>){setBusy(true);setError('');try{await cloudflareRequest('/api/admin/operations',body);setEdit(null);setSelected([]);await refresh()}catch(e){setError(e instanceof Error?e.message:'Save failed.')}finally{setBusy(false)}}
  function bulkPrice(){if(!/^\d+(?:\.\d{1,2})?$/.test(amount)){setError('Enter a nonnegative amount with at most two decimal places.');return}const [whole,fraction='']=amount.split('.');const value=Number(whole)*100+Number(fraction.padEnd(2,'0'));if(!Number.isSafeInteger(value)){setError('Amount too large.');return}if(window.confirm('Save explicit selling-price overrides for the selected products? Future supplier sync will preserve them.'))void action({action:'bulk_price',ids:selected,mode,amount:value})}
  const columns=section==='orders'?['reference','payment_status','fulfillment_status','delivery_status','delivery_error','total_minor','currency']:section==='price_review'?['reference','payment_status','delivery_status','total_minor','currency','attempts','last_error']:Object.keys(rows[0]??{}).filter(k=>!['description','message','reply'].includes(k)).slice(0,8)
@@ -18,11 +29,18 @@ export default function AdminRecords({section}:{section:string}){
   const body:Record<string,unknown>={...edit,id,action:actions[section]}
   if(section==='products'){body.price_minor=Number(edit.price_minor);body.category_id=edit.category_id||categories[0]?.id;body.delivery_type=edit.delivery_type||methods[0];delete body.available_quantity;if(edit.evidence?.trim())body.available_quantity=Number(edit.available_quantity??0)}
   if(section==='categories')body.active=edit.active!=='0'&&edit.active!=='false'
-  if(section==='settings'){try{body.value=JSON.parse(edit.value||'{}')}catch{setError('Valid settings JSON required.');return}}
+  if(section==='settings'){
+    try{
+      const parsed=JSON.parse(edit.value||'{}')
+      if(edit.whatsapp_number)parsed.whatsapp_number=edit.whatsapp_number.trim()
+      if(edit.support_email)parsed.support_email=edit.support_email.trim()
+      body.value=parsed
+    }catch{setError('Valid settings JSON required.');return}
+  }
   void action(body)
  }
- const fields=section==='products'?['name','slug','description','category_id','price_minor','delivery_type','image_path','term',...(edit?.connection_id?[]:['available_quantity','evidence'])]:section==='categories'?['name','short_name','slug','description','active']:section==='support'?['reply','status']:section==='settings'?['value']:section==='orders'?['instructions']:[]
- const labels:Record<string,string>={price_minor:'Selling price (NGN kobo)',available_quantity:'Actual manual stock (used only with evidence)',evidence:'Verified resale/stock evidence reference',instructions:'Permitted delivery instructions'}
+ const fields=section==='products'?['name','slug','description','category_id','price_minor','delivery_type','image_path','term',...(edit?.connection_id?[]:['available_quantity','evidence'])]:section==='categories'?['name','short_name','slug','description','active']:section==='support'?['reply','status']:section==='settings'?['whatsapp_number','support_email','value']:section==='orders'?['instructions']:[]
+ const labels:Record<string,string>={price_minor:'Selling price (NGN kobo)',available_quantity:'Actual manual stock (used only with evidence)',evidence:'Verified resale/stock evidence reference',instructions:'Permitted delivery instructions',whatsapp_number:'Official WhatsApp Support Number (e.g. 2348117472091)',support_email:'Support Email Address',value:'Raw Settings JSON (Advanced)'}
  const visibleRows = section === 'products' && serverFilter ? rows.filter(r => String(r.server_number ?? 2) === serverFilter) : rows
  return <section className="cf-panel"><div className="cf-actions"><h2>{section}</h2><button className="cf-btn secondary" onClick={()=>void refresh()} disabled={busy}>Refresh</button>{['products','categories','settings'].includes(section)&&<button className="cf-btn" onClick={()=>choose()} disabled={busy}>{section==='settings'?'Edit settings':'Add record'}</button>}</div>
  {error&&<p className="cf-error" role="alert">{error}</p>}
@@ -47,6 +65,12 @@ export default function AdminRecords({section}:{section:string}){
   {section==='price_review'&&row.payment_status==='paid'&&row.fulfillment_status!=='delivered'&&<button className="cf-btn secondary" disabled={busy} onClick={()=>void action({action:'fulfill_automated',id:row.id})}>Retry with override</button>}
   {section==='price_review'&&row.payment_status==='paid'&&row.fulfillment_status!=='delivered'&&<button className="cf-btn danger" disabled={busy} onClick={()=>{if(window.confirm(`Refund price-blocked order ${row.reference} (₦${Number(row.total_minor)/100})?`))void action({action:'refund_order',id:row.id})}}>Refund order</button>}
  </div></td></tr>)}</tbody></table>{!visibleRows.length&&<p>{section==='products'&&serverFilter==='3'?'No Server 3 products found. Use API Manager to configure credentials and sync catalog.':'No records.'}</p>}</div>
- {edit&&<form className="cf-editor" onSubmit={save}><fieldset disabled={busy}>{fields.map(field=><label key={field}>{labels[field]??field.replaceAll('_',' ')}{field==='category_id'?<select value={edit[field]??''} onChange={e=>setEdit({...edit,[field]:e.target.value})}><option value="">Choose category</option>{categories.map(c=><option key={String(c.id)} value={String(c.id)}>{c.name}</option>)}</select>:field==='delivery_type'?<select value={edit[field]||methods[0]} onChange={e=>setEdit({...edit,[field]:e.target.value})}>{methods.map(m=><option key={m}>{m}</option>)}</select>:['description','reply','value','instructions'].includes(field)?<textarea rows={5} value={edit[field]??''} onChange={e=>setEdit({...edit,[field]:e.target.value})}/>:<input value={edit[field]??''} onChange={e=>setEdit({...edit,[field]:e.target.value})}/>}</label>)}<button className="cf-btn">Save</button><button type="button" className="cf-btn secondary" onClick={()=>setEdit(null)}>Cancel</button></fieldset></form>}
+ {edit&&<form className="cf-editor" onSubmit={save}><fieldset disabled={busy}>{fields.map(field=><label key={field}>{labels[field]??field.replaceAll('_',' ')}{field==='category_id'?<select value={edit[field]??''} onChange={e=>setEdit({...edit,[field]:e.target.value})}><option value="">Choose category</option>{categories.map(c=><option key={String(c.id)} value={String(c.id)}>{c.name}</option>)}</select>:field==='delivery_type'?<select value={edit[field]||methods[0]} onChange={e=>setEdit({...edit,[field]:e.target.value})}>{methods.map(m=><option key={m}>{m}</option>)}</select>:['description','reply','value','instructions'].includes(field)?<textarea rows={5} value={edit[field]??''} onChange={e=>setEdit({...edit,[field]:e.target.value})}/>:<input value={edit[field]??''} onChange={e=>{
+   const val=e.target.value;const next={...edit,[field]:val}
+   if(section==='settings'&&(field==='whatsapp_number'||field==='support_email')){
+     try{const obj=JSON.parse(edit.value||'{}');obj[field]=val;next.value=JSON.stringify(obj,null,2)}catch{}
+   }
+   setEdit(next)
+ }}/>}</label>)}<button className="cf-btn">Save</button><button type="button" className="cf-btn secondary" onClick={()=>setEdit(null)}>Cancel</button></fieldset></form>}
  </section>
 }

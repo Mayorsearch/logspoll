@@ -22,8 +22,10 @@ import {
   Building2,
   PhoneCall,
   ShoppingBag,
-  Wallet
+  Wallet,
+  MessageSquare
 } from 'lucide-react'
+import { WhatsAppSupportButton } from '../components/WhatsAppSupportButton'
 
 interface Product {
   id: string
@@ -455,13 +457,20 @@ export function Checkout() {
                   Access Purchased Downloads <ArrowRight size={16} />
                 </Link>
               ) : isFailed ? (
-                <Link
-                  to={`/dashboard/support?ref=${encodeURIComponent(orderStatus.reference)}`}
-                  className="cart-primary-btn"
-                  style={{ background: '#ef4444', borderColor: '#ef4444' }}
-                >
-                  <PhoneCall size={16} /> Contact Support for Order Resolution
-                </Link>
+                <>
+                  <WhatsAppSupportButton
+                    orderReference={orderStatus.reference}
+                    variant="primary"
+                    buttonText="Contact Support on WhatsApp"
+                    style={{ width: '100%' }}
+                  />
+                  <Link
+                    to={`/dashboard/support?ref=${encodeURIComponent(orderStatus.reference)}`}
+                    className="cart-secondary-btn"
+                  >
+                    <PhoneCall size={16} /> Open Web Support Ticket
+                  </Link>
+                </>
               ) : (
                 <button
                   type="button"
@@ -554,6 +563,12 @@ export function Checkout() {
               <Link to="/cart" className="cart-secondary-btn">
                 Return to Cart
               </Link>
+              <WhatsAppSupportButton
+                orderReference={orderStatus.reference}
+                variant="outline"
+                buttonText="Report Issue on WhatsApp"
+                style={{ width: '100%' }}
+              />
             </div>
           </div>
         </div>
@@ -943,6 +958,33 @@ export function Checkout() {
                   </div>
                   <span>Zero supplier exposure to third parties</span>
                 </div>
+              </div>
+
+              {/* Checkout WhatsApp Help Section */}
+              <div
+                style={{
+                  marginTop: 18,
+                  padding: '14px 16px',
+                  borderRadius: 10,
+                  background: 'linear-gradient(135deg, rgba(37, 211, 102, 0.08), rgba(18, 140, 126, 0.05))',
+                  border: '1px solid rgba(37, 211, 102, 0.25)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: '0.85rem', color: '#128C7E' }}>
+                  <MessageSquare size={16} />
+                  <span>Need Checkout Assistance?</span>
+                </div>
+                <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--lp-text-muted)', lineHeight: 1.4 }}>
+                  Have questions about payment methods or need instant help? Our WhatsApp support desk is available to assist you.
+                </p>
+                <WhatsAppSupportButton
+                  variant="primary"
+                  buttonText="Contact Support on WhatsApp"
+                  style={{ width: '100%', marginTop: 4, minHeight: 38 }}
+                />
               </div>
             </aside>
           </div>

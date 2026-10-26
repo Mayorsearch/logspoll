@@ -205,6 +205,22 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
       }
     }
 
+    if (request.method === 'GET' && (url.pathname === '/api/config' || url.pathname === '/api/storefront/settings')) {
+      let settings = { whatsapp_number: '2348117472091', support_email: 'support@logspoll.com' }
+      try {
+        const row = await env.DB.prepare("SELECT value FROM website_settings WHERE key='general'").first<{ value: string }>()
+        if (row?.value) {
+          const parsed = JSON.parse(row.value)
+          if (parsed && typeof parsed === 'object') {
+            settings = { ...settings, ...parsed }
+          }
+        }
+      } catch {}
+      const res = json({ settings })
+      res.headers.set('Cache-Control', 'public, max-age=60')
+      return res
+    }
+
     const user = await identity(request, env)
     if (url.pathname === '/api/account/session') return json({ user })
     const customerResponse = await customerRead(request, env, user)
