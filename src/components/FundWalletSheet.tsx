@@ -74,7 +74,7 @@ export function FundWalletSheet({
   onClose,
   onSuccess,
   initialAmount = 10000,
-  fundingEnabled = true,
+  fundingEnabled = false,
   fundingReason,
 }: FundWalletSheetProps) {
   const { refreshWallet, showToast } = useDashboard()
@@ -351,6 +351,7 @@ export function FundWalletSheet({
                 pattern="[0-9]*"
                 autoComplete="off"
                 type="text"
+                disabled={submitting || !fundingEnabled}
                 value={amountRaw}
                 onChange={(e) => handleAmountChange(e.target.value)}
                 placeholder="10,000"
@@ -362,6 +363,7 @@ export function FundWalletSheet({
                 <button
                   key={amt}
                   type="button"
+                  disabled={submitting || !fundingEnabled}
                   onClick={() => handlePresetClick(amt)}
                   className={amountRaw === amt.toLocaleString('en-NG') ? 'active' : ''}
                 >

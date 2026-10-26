@@ -347,6 +347,7 @@ export function CustomerRecords({
   const { hideBalance, toggleHideBalance, walletBalanceMinor: sharedBalanceMinor } = useDashboard()
   const [walletBalanceMinor, setWalletBalanceMinor] = useState<number | null>(null)
   const [walletTransactions, setWalletTransactions] = useState<WalletTransactionItem[]>([])
+  const [fundingInfo, setFundingInfo] = useState<{ enabled: boolean; mode: string; reason: string } | null>(null)
   const [showFundSheet, setShowFundSheet] = useState(false)
   const [selectedTx, setSelectedTx] = useState<WalletTransactionItem | null>(null)
 
@@ -371,12 +372,22 @@ export function CustomerRecords({
       const isPurchasesMode = mode === 'purchases' || mode === 'downloads'
       const endpoint = isPurchasesMode ? '/api/orders?purchases=true' : '/api/orders'
 
-      void cloudflareRequest<{ wallet?: { balance_minor: number }; transactions?: WalletTransactionItem[] }>('/api/wallet')
+      void cloudflareRequest<{
+        wallet?: { balance_minor: number }
+        transactions?: WalletTransactionItem[]
+        funding?: { enabled: boolean; mode: string; reason: string }
+      }>('/api/wallet')
         .then((data) => {
           if (active && data.wallet) setWalletBalanceMinor(data.wallet.balance_minor)
           if (active && data.transactions) setWalletTransactions(data.transactions)
+          if (active && data.funding) setFundingInfo(data.funding)
         })
-        .catch(() => { if (active) setWalletBalanceMinor(null) })
+        .catch(() => {
+          if (active) {
+            setWalletBalanceMinor(null)
+            setFundingInfo(null)
+          }
+        })
       
       void cloudflareRequest<{ records: Order[] }>(endpoint)
         .then(({ records }) => {
@@ -1456,6 +1467,8 @@ export function CustomerRecords({
         isOpen={showFundSheet}
         onClose={() => setShowFundSheet(false)}
         onSuccess={() => setAttempt((a) => a + 1)}
+        fundingEnabled={fundingInfo ? fundingInfo.enabled : false}
+        fundingReason={fundingInfo?.reason}
       />
 
       <TransactionDetailsSheet
