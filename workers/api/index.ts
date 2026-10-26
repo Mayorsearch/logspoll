@@ -239,6 +239,5 @@ export default { fetch: apiFetch, scheduled: (_event: unknown, env: ApiEnv, cont
       catch { break /* Redacted failure/cooldown is persisted by the batch handler. */ }
       if(batch<3) await new Promise(resolve=>setTimeout(resolve,5500))
     }
-    await runSupplierAutomation(env).catch(()=>{})
   })())
 } }

@@ -291,13 +291,6 @@ export async function syncHstoraBatch(env:ApiEnv){
     db.prepare("INSERT INTO hstora_catalog_items(external_id,metadata,snapshot_id,checked_at) SELECT external_id,metadata,?,CAST(json_extract(metadata,'$.stock_checked_at') AS INTEGER) FROM hstora_snapshot_items WHERE job_id=? AND detail_done=1 ON CONFLICT(external_id) DO UPDATE SET metadata=excluded.metadata,snapshot_id=excluded.snapshot_id,checked_at=excluded.checked_at WHERE excluded.checked_at>=MAX(COALESCE(json_extract(hstora_catalog_items.metadata,'$.webhook_checked_at'),0),hstora_catalog_items.checked_at)").bind(job,job),
     db.prepare("UPDATE hstora_connection SET phase='complete',last_success=?,last_status=?,requested=0,scanned=? WHERE id='hstora'").bind(now, statusText, finalCount),
    ])
-   try {
-     const { bulkPublishHstora } = await import('./supplier-automation.ts')
-     const systemAdmin = (await db.prepare("SELECT id FROM users LIMIT 1").first<{id:string}>().catch(()=>null))?.id ?? 'system'
-     await bulkPublishHstora(db, 5000, 1500, systemAdmin, false)
-   } catch {
-     // Scheduled background automation will publish on cron tick
-   }
   }
  }catch(error){const message=error instanceof HstoraError?error.message:(error instanceof Error?error.message:'HStora storage or credential operation failed.');await db.prepare("UPDATE hstora_connection SET last_status=?,next_attempt=?,lease_owner=NULL,lease_until=NULL WHERE id='hstora' AND revision=? AND lease_owner=?").bind(message,Date.now()+(error instanceof HstoraError?([401,403].includes(error.status)?600000:error.retryAfterMs):60000),row.revision,owner).run()}
 }

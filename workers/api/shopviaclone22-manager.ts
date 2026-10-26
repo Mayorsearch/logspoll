@@ -341,7 +341,7 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
           db
             .prepare(
               `INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
-               SELECT id, ?, (SELECT id FROM users LIMIT 1), ? FROM products WHERE slug=?
+               SELECT id, ?, (SELECT user_id FROM user_roles WHERE role='admin' LIMIT 1), ? FROM products WHERE slug=?
                ON CONFLICT(product_id) DO UPDATE SET verified_at=excluded.verified_at`
             )
             .bind(JSON.stringify({ delivery: true, privacy: true, provider: true, reference: authRef }), now, slug)
