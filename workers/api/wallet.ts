@@ -204,12 +204,13 @@ export async function initiateWalletFunding(request: Request, env: ApiEnv, user:
   }
 
   const key = env.BACHS_API_KEY?.trim() ?? ''
-  const mode = fundingMode(env)
 
   // Stored-value compliance safeguard: live wallet deposits gated behind feature flag
-  if (mode === 'live' && env.WALLET_LIVE_FUNDING_ENABLED !== 'true') {
+  if (env.ENVIRONMENT === 'production' && env.WALLET_LIVE_FUNDING_ENABLED !== 'true') {
     throw new HttpError(403, 'Live wallet deposits are temporarily disabled while merchant account approval and stored-value compliance checks are finalized.')
   }
+
+  const mode = fundingMode(env)
 
   const feeMinor = 0
   const creditedMinor = amountMinor - feeMinor

@@ -1192,4 +1192,99 @@ test('repeated deposit requests for the same amount with fresh request IDs creat
   )
 })
 
+test('Deposit idempotency: retrying with unified requestId/request_id reuses pending session and does not duplicate', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+
+  env.ENVIRONMENT = 'production'
+  env.WALLET_LIVE_FUNDING_ENABLED = 'true'
+  env.BACHS_API_KEY = 'sk_live_merchant_production_key_12345'
+  env.BACHS_WEBHOOK_SECRET = 'whsec_test_secret_12345'
+
+  let sessionCalls = 0
+  t.mock.method(globalThis, 'fetch', async (url: string | URL | Request) => {
+    const urlStr = String(url)
+    if (urlStr.includes('/v1/checkout-sessions')) {
+      sessionCalls++
+      return new Response(JSON.stringify({
+        checkout_id: 'chk_unified_session_1',
+        checkout_url: 'https://checkout.bachs.io/c/chk_unified_session_1',
+        bank_transfer: {
+          account_number: '0123456789',
+          bank_name: 'Wema Bank',
+        }
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(null, { status: 404 })
+  })
+
+  const stableAttemptUuid = '33333333-cccc-4333-8333-333333333333'
+  const req1 = new Request('https://test.example/api/wallet/fund', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: '5000.00',
+      requestId: stableAttemptUuid,
+      request_id: stableAttemptUuid,
+    })
+  })
+
+  const res1 = await initiateWalletFunding(req1, env, { id: customer, email: 'user@example.com' })
+  assert.equal(res1.status, 200)
+  const data1 = await res1.json() as any
+  assert.equal(data1.ok, true)
+  assert.equal(data1.checkoutId, 'chk_unified_session_1')
+
+  // Network retry with the SAME unified attempt UUID
+  const req2 = new Request('https://test.example/api/wallet/fund', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: '5000.00',
+      requestId: stableAttemptUuid,
+      request_id: stableAttemptUuid,
+    })
+  })
+
+  const res2 = await initiateWalletFunding(req2, env, { id: customer, email: 'user@example.com' })
+  assert.equal(res2.status, 200)
+  const data2 = await res2.json() as any
+  assert.equal(data2.ok, true)
+  // Both responses point to the exact same attempt and reference
+  assert.equal(data2.attemptId, data1.attemptId)
+  assert.equal(data2.reference, data1.reference)
+
+  // Verify only 1 attempt row exists in DB
+  const attempts = sql.prepare("SELECT count(*) as count FROM wallet_funding_attempts WHERE customer_id=?").get(customer) as { count: number }
+  assert.equal(attempts.count, 1)
+})
+
+test('Disabled live wallet funding safely returns explanatory status and rejects initiation with 403', async t => {
+  const { sql, env } = fixture()
+  t.after(() => sql.close())
+
+  env.ENVIRONMENT = 'production'
+  env.WALLET_LIVE_FUNDING_ENABLED = 'false'
+  env.BACHS_API_KEY = '' // unconfigured live key
+  env.BACHS_WEBHOOK_SECRET = ''
+
+  // Overview explains funding requirement and marks funding disabled
+  const overview = await (await getWalletOverview(env.DB!, customer, env)).json() as any
+  assert.equal(overview.funding.enabled, false)
+  assert.equal(overview.funding.mode, 'disabled')
+  assert.match(overview.funding.reason, /verified provider configuration and prepaid-wallet approval/)
+
+  // Direct deposit attempt rejected with 403 compliance error
+  const req = new Request('https://test.example/api/wallet/fund', {
+    method: 'POST',
+    body: JSON.stringify({ amount: '5000.00', requestId: crypto.randomUUID() })
+  })
+  await assert.rejects(
+    initiateWalletFunding(req, env, { id: customer, email: 'user@example.com' }),
+    /Live wallet deposits are temporarily disabled while merchant account approval and stored-value compliance checks are finalized/
+  )
+})
+
+
 

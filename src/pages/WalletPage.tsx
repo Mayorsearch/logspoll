@@ -39,6 +39,7 @@ export function WalletPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [wallet, setWallet] = useState<WalletInfo | null>(null)
+  const [fundingInfo, setFundingInfo] = useState<{ enabled: boolean; mode?: string; reason: string } | null>(null)
   const [transactions, setTransactions] = useState<WalletTransactionItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -70,6 +71,7 @@ export function WalletPage() {
         setWalletBalanceMinor(data.wallet.balance_minor)
       }
       setTransactions(data.transactions || [])
+      setFundingInfo(data.funding ?? null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load wallet information.')
     } finally {
@@ -267,6 +269,21 @@ export function WalletPage() {
           <button type="button" onClick={() => void fetchWallet(true)} className="fintech-more" style={{ color: '#dc2626' }}>
             Retry
           </button>
+        </div>
+      )}
+
+      {fundingInfo && !fundingInfo.enabled && (
+        <div
+          className="fintech-notice"
+          style={{
+            borderColor: 'rgba(234, 88, 12, 0.35)',
+            background: 'rgba(255, 247, 237, 0.95)',
+            color: '#9a3412',
+            marginBottom: 16,
+          }}
+        >
+          <AlertCircle size={16} style={{ color: '#ea580c', flexShrink: 0 }} />
+          <span style={{ flex: 1, fontSize: 13, lineHeight: 1.45 }}>{fundingInfo.reason}</span>
         </div>
       )}
 
@@ -507,6 +524,8 @@ export function WalletPage() {
         isOpen={showFundSheet}
         onClose={() => setShowFundSheet(false)}
         onSuccess={() => void fetchWallet(true)}
+        fundingEnabled={fundingInfo ? fundingInfo.enabled : false}
+        fundingReason={fundingInfo?.reason}
       />
 
       {/* Transaction Details Sheet */}

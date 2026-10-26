@@ -34,11 +34,20 @@ interface FundWalletSheetProps {
   onClose: () => void
   onSuccess?: () => void
   initialAmount?: number
+  fundingEnabled?: boolean
+  fundingReason?: string
 }
 
 const PRESET_AMOUNTS = [5000, 10000, 20000, 50000]
 
-export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10000 }: FundWalletSheetProps) {
+export function FundWalletSheet({
+  isOpen,
+  onClose,
+  onSuccess,
+  initialAmount = 10000,
+  fundingEnabled = true,
+  fundingReason,
+}: FundWalletSheetProps) {
   const { refreshWallet, showToast } = useDashboard()
   const [amountRaw, setAmountRaw] = useState(() => initialAmount.toLocaleString('en-NG'))
   const [submitting, setSubmitting] = useState(false)
@@ -46,6 +55,7 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
   const [activeSession, setActiveSession] = useState<ActiveFundingSession | null>(null)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [reconciling, setReconciling] = useState(false)
+  const [depositRequestId, setDepositRequestId] = useState(() => crypto.randomUUID())
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const stopPolling = useCallback(() => {
@@ -102,11 +112,13 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
       if (res.paid || res.status === 'paid') {
         stopPolling()
         setActiveSession((prev) => (prev ? { ...prev, status: 'paid' } : null))
+        setDepositRequestId(crypto.randomUUID())
         await refreshWallet()
         onSuccess?.()
       } else if (res.status === 'failed' || res.status === 'expired') {
         stopPolling()
         setActiveSession((prev) => (prev ? { ...prev, status: 'failed' } : null))
+        setDepositRequestId(crypto.randomUUID())
       }
     } catch {
       // transient network error, keep polling
@@ -129,20 +141,31 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
     return () => stopPolling()
   }, [activeSession, checkStatus, stopPolling])
 
+  // Regenerate attempt UUID when opening for a fresh deposit session
+  useEffect(() => {
+    if (isOpen && !activeSession) {
+      setDepositRequestId(crypto.randomUUID())
+    }
+  }, [isOpen, activeSession])
+
   if (!isOpen) return null
 
   const handleAmountChange = (val: string) => {
     const raw = val.replace(/\D/g, '').slice(0, 10)
     setAmountRaw(raw ? Number(raw).toLocaleString('en-NG') : '')
     setError('')
+    setDepositRequestId(crypto.randomUUID())
   }
 
   const handlePresetClick = (amt: number) => {
     setAmountRaw(amt.toLocaleString('en-NG'))
     setError('')
+    setDepositRequestId(crypto.randomUUID())
   }
 
   const handleInitiate = async () => {
+    if (submitting || !fundingEnabled) return
+
     const numericAmount = Number(amountRaw.replace(/,/g, ''))
     if (!Number.isFinite(numericAmount) || numericAmount < 100) {
       setError('Minimum deposit is ₦100.00.')
@@ -155,6 +178,12 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
 
     setSubmitting(true)
     setError('')
+
+    // Stable unified deposit-attempt UUID: preserved across network retries until outcome confirmed
+    const currentRequestId = depositRequestId || crypto.randomUUID()
+    if (!depositRequestId) {
+      setDepositRequestId(currentRequestId)
+    }
 
     try {
       const res = await cloudflareRequest<{
@@ -189,8 +218,8 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
       }>('/api/wallet/fund', {
         amount: numericAmount,
         channel: 'bank_transfer',
-        request_id: crypto.randomUUID(),
-        requestId: crypto.randomUUID(),
+        request_id: currentRequestId,
+        requestId: currentRequestId,
       })
 
       const isSuccess = Boolean(res.ok || res.success)
@@ -319,6 +348,30 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
               </div>
             )}
 
+            {!fundingEnabled && (
+              <div
+                className="fintech-notice fintech-notice-error"
+                role="alert"
+                style={{
+                  borderColor: 'rgba(234, 88, 12, 0.4)',
+                  background: 'rgba(255, 247, 237, 0.95)',
+                  color: '#9a3412',
+                  padding: '12px 14px',
+                  borderRadius: 12,
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  marginTop: 10,
+                }}
+              >
+                <AlertCircle size={18} style={{ flexShrink: 0, marginTop: 2, color: '#ea580c' }} />
+                <div style={{ flex: 1, fontSize: 12.5, lineHeight: 1.45 }}>
+                  <strong style={{ display: 'block', marginBottom: 2, color: '#7c2d12' }}>Wallet Deposits Temporarily Paused</strong>
+                  <span>{fundingReason || 'Wallet funding requires verified provider configuration and prepaid-wallet approval. Existing balances and checkout purchases remain fully available.'}</span>
+                </div>
+              </div>
+            )}
+
             <div className="fintech-notice">
               <ShieldCheck size={16} />
               <span>
@@ -329,13 +382,18 @@ export function FundWalletSheet({ isOpen, onClose, onSuccess, initialAmount = 10
             <button
               type="button"
               className="fintech-btn fintech-btn-orange fintech-full"
-              disabled={submitting || !amountRaw}
+              disabled={submitting || !amountRaw || !fundingEnabled}
               onClick={handleInitiate}
             >
               {submitting ? (
                 <>
                   <RefreshCw size={16} className="spin-icon" />
                   <span>Requesting Payment Details…</span>
+                </>
+              ) : !fundingEnabled ? (
+                <>
+                  <Lock size={16} />
+                  <span>Deposits Temporarily Unavailable</span>
                 </>
               ) : (
                 <>
