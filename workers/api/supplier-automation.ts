@@ -417,7 +417,7 @@ export async function bulkPublishShopViaClone22(db: Database, markup_bps: number
       'ShopViaClone22',
       1,
       'active',
-      COALESCE(cr.delivery_type, (SELECT delivery_type FROM supplier_automation WHERE provider='shopviaclone22'), 'Subscription activation'),
+      COALESCE(cr.delivery_type, (SELECT delivery_type FROM supplier_automation WHERE provider='shopviaclone22'), 'Licensed digital download'),
       '[]',
       ${restore_overrides ? "'auto'" : "CASE WHEN s3.product_id IS NOT NULL AND (SELECT pricing_mode FROM products WHERE id=s3.product_id)='override' THEN 'override' ELSE 'auto' END"},
       1,
