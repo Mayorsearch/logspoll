@@ -227,8 +227,8 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
 
     // 2. Query global pricing config (50% markup = 5000 bps) and supplier automation settings
     const globalCfg = await db
-      .prepare("SELECT markup_bps, auto_publish, automatic_pricing, auto_approve, usd_to_ngn_rate FROM global_pricing_config WHERE id='global'")
-      .first<{ markup_bps: number; auto_publish: number; automatic_pricing: number; auto_approve: number; usd_to_ngn_rate?: number }>()
+      .prepare("SELECT markup_bps, auto_publish, automatic_pricing, auto_approve, usd_to_ngn_rate, delivery_type FROM global_pricing_config WHERE id='global'")
+      .first<{ markup_bps: number; auto_publish: number; automatic_pricing: number; auto_approve: number; usd_to_ngn_rate?: number; delivery_type?: string }>()
       .catch(() => null)
 
     const usdToNgnRate = Number(globalCfg?.usd_to_ngn_rate) > 0 ? Number(globalCfg?.usd_to_ngn_rate) : 1500.0
@@ -238,8 +238,8 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
     const writes: Statement[] = []
 
     const pol = await db
-      .prepare("SELECT markup_bps, automatic_pricing, auto_publish, auto_approve, updated_by FROM supplier_automation WHERE provider='shopviaclone22'")
-      .first<{ markup_bps: number; automatic_pricing: number; auto_publish: number; auto_approve: number; updated_by?: string }>()
+      .prepare("SELECT markup_bps, automatic_pricing, auto_publish, auto_approve, delivery_type, updated_by FROM supplier_automation WHERE provider='shopviaclone22'")
+      .first<{ markup_bps: number; automatic_pricing: number; auto_publish: number; auto_approve: number; delivery_type?: string; updated_by?: string }>()
       .catch(() => null)
 
     const defaultMarkup = globalCfg?.markup_bps ?? pol?.markup_bps ?? 5000
@@ -285,7 +285,7 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
       }).sellingPriceMinor
 
       const slug = `s3-${item.id}`
-      const deliveryType = catRule?.delivery_type || 'Manual fulfillment'
+      const deliveryType = catRule?.delivery_type || pol?.delivery_type || globalCfg?.delivery_type || 'Subscription activation'
       const authRef = catRule?.authorization_reference || 'ShopViaClone22 authorized supplier'
       const auditActor = catRule?.updated_by || pol?.updated_by
 
@@ -352,13 +352,15 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
                  status='active',
                  publication_verified=1,
                  authorized_resale=1,
+                 delivery_type=excluded.delivery_type,
                  price_minor=CASE WHEN pricing_mode='override' THEN products.price_minor ELSE excluded.price_minor END,
                  category_id=excluded.category_id
                WHERE products.status != 'active'
                   OR products.category_id IS NOT excluded.category_id
                   OR (products.pricing_mode = 'auto' AND products.price_minor != excluded.price_minor)
                   OR products.name != excluded.name
-                  OR products.description != excluded.description`
+                  OR products.description != excluded.description
+                  OR products.delivery_type != excluded.delivery_type`
             )
             .bind(
               crypto.randomUUID(),
