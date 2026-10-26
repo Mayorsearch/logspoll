@@ -258,6 +258,14 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
     ).results
     const catRuleMap = new Map(catRules.map((r) => [r.category_id, r]))
 
+    const existingItems = new Map(
+      (
+        await db
+          .prepare('SELECT external_id, approval_status, product_id FROM shopviaclone22_catalog_items')
+          .all<{ external_id: string; approval_status: string; product_id: string | null }>()
+      ).results.map((r) => [r.external_id, r])
+    )
+
     // 3. Upsert products into shopviaclone22_catalog_items
     for (const item of products) {
       const catId = defaultCat
@@ -281,7 +289,13 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
       const authRef = catRule?.authorization_reference || 'ShopViaClone22 authorized supplier'
       const auditActor = catRule?.updated_by || pol?.updated_by
 
-      const isApproved = (autoApprove || catRule?.trusted === 1) && item.stock > 0
+      const existing = existingItems.get(item.id)
+      const isAlreadyApproved = existing?.approval_status === 'approved'
+
+      // Safeguard 1: Automatic approval strictly requires autoApprove to be enabled.
+      // A category rule with trusted=1 CANNOT bypass autoApprove=0 (containment/disabled).
+      const canAutoApprove = autoApprove && (catRules.length === 0 || catRule?.trusted === 1) && item.stock > 0
+      const finalApprovalStatus = isAlreadyApproved ? 'approved' : (canAutoApprove ? 'approved' : 'pending')
 
       writes.push(
         db
@@ -318,13 +332,17 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
             jobId,
             now,
             price,
-            isApproved ? 'approved' : 'pending',
+            finalApprovalStatus,
             now
           )
       )
 
-      // Only publish to the public storefront if autoPublish is explicitly enabled and stock > 0
-      if (autoPublish && item.stock > 0) {
+      // Safeguard 2: Storefront publication strictly requires autoPublish to be enabled
+      // AND requires the product to be legitimately approved (either previously reviewed/approved or qualified for auto-approval).
+      // Enabling autoPublish NEVER silently approves or publishes unreviewed products.
+      const canPublish = autoPublish && (isAlreadyApproved || canAutoApprove) && item.stock > 0
+
+      if (canPublish) {
         writes.push(
           db
             .prepare(
@@ -354,8 +372,8 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
           db
             .prepare(
               `UPDATE shopviaclone22_catalog_items
-               SET approval_status='approved', product_id=(SELECT id FROM products WHERE slug=?), reviewed_at=?
-               WHERE external_id=? AND (approval_status != 'approved' OR product_id IS NULL)`
+               SET product_id=(SELECT id FROM products WHERE slug=?), reviewed_at=COALESCE(reviewed_at, ?)
+               WHERE external_id=? AND product_id IS NULL`
             )
             .bind(slug, now, item.id)
         )

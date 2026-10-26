@@ -288,6 +288,14 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
 
     const { products } = normalizeDigitalCoreCatalog(rawData, effectiveFxRate)
 
+    const existingItems = new Map(
+      (
+        await db
+          .prepare('SELECT external_id, approval_status, product_id FROM digitalcore_catalog_items')
+          .all<{ external_id: string; approval_status: string; product_id: string | null }>()
+      ).results.map((r) => [r.external_id, r])
+    )
+
     const jobId = crypto.randomUUID()
     const writes: Statement[] = []
 
@@ -306,7 +314,12 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
       }).sellingPriceMinor
 
       const slug = `s4-${item.id}`
-      const isApproved = autoApprove && item.stock > 0
+      const existing = existingItems.get(item.id)
+      const isAlreadyApproved = existing?.approval_status === 'approved'
+
+      // Safeguard 1: Automatic approval strictly requires autoApprove to be enabled.
+      const canAutoApprove = autoApprove && item.stock > 0
+      const finalApprovalStatus = isAlreadyApproved ? 'approved' : (canAutoApprove ? 'approved' : 'pending')
 
       writes.push(
         db
@@ -344,12 +357,16 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
             jobId,
             now,
             price,
-            isApproved ? 'approved' : 'pending',
+            finalApprovalStatus,
             now
           )
       )
 
-      if (autoPublish && item.stock > 0) {
+      // Safeguard 2: Storefront publication strictly requires autoPublish
+      // AND requires the product to be legitimately approved (already approved or qualified for auto-approval).
+      const canPublish = autoPublish && (isAlreadyApproved || canAutoApprove) && item.stock > 0
+
+      if (canPublish) {
         const logo = typeof item.raw?.logo === 'string' ? item.raw.logo : ''
         const logoArray = logo ? JSON.stringify([logo]) : '[]'
         const term = typeof item.raw?.warranty === 'string' ? item.raw.warranty : ''
@@ -402,8 +419,8 @@ export async function syncDigitalCoreBatch(env: ApiEnv) {
           db
             .prepare(
               `UPDATE digitalcore_catalog_items
-               SET approval_status='approved', product_id=(SELECT id FROM products WHERE slug=?), reviewed_at=?
-               WHERE external_id=? AND (approval_status != 'approved' OR product_id IS NULL)`
+               SET product_id=(SELECT id FROM products WHERE slug=?), reviewed_at=COALESCE(reviewed_at, ?)
+               WHERE external_id=? AND product_id IS NULL`
             )
             .bind(slug, now, item.id)
         )
