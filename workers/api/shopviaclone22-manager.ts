@@ -264,6 +264,10 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
 
     // Verified read-only merchant probe & product 342 preflight audit
     let merchantStatus = ''
+    let dynamicProduct: { id?: string; name?: string; price?: number; stock?: number } = {}
+    let dynamicCost: number | undefined
+    let dynamicStock: number | undefined
+    let dynamicName = 'Hotmail Trusted - OAuth2'
     try {
       const profile = await fetchShopViaProfile(apiKey, row.base_url)
       const username = profile.username || 'Verified Account'
@@ -281,10 +285,10 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
       }
 
       // Dynamically extract product 342 stock, wholesale price, and metadata from genuine response
-      const dynamicProduct = extractShopViaProductInfo(p342Info)
-      const dynamicCost = dynamicProduct.price
-      const dynamicStock = dynamicProduct.stock
-      const dynamicName = dynamicProduct.name || 'Hotmail Trusted - OAuth2'
+      dynamicProduct = extractShopViaProductInfo(p342Info)
+      dynamicCost = dynamicProduct.price
+      dynamicStock = dynamicProduct.stock
+      dynamicName = dynamicProduct.name || 'Hotmail Trusted - OAuth2'
 
       const isBalanceSufficient =
         spendable !== null &&
@@ -379,6 +383,32 @@ export async function syncShopViaClone22Batch(env: ApiEnv) {
 
     const usdToNgnRate = Number(globalCfg?.usd_to_ngn_rate) > 0 ? Number(globalCfg?.usd_to_ngn_rate) : 1500.0
     const { categories, products } = normalizeShopViaCatalog(rawData, usdToNgnRate, 'NGN')
+
+    // If specific verified product (e.g. product 342) was queried via dynamic lookup and is absent from products.php, include it
+    if (dynamicProduct.id && dynamicStock !== undefined && !products.some((p) => p.id === dynamicProduct.id)) {
+      const pCost = dynamicCost ?? 0.02
+      const usdMinor = Math.round(pCost * 100)
+      const ngnMinor = Math.round(usdMinor * usdToNgnRate)
+      products.push({
+        id: dynamicProduct.id,
+        categoryId: defaultCat ?? 's3_general',
+        categoryName: 'General',
+        name: dynamicName,
+        description: 'FORMAT: Mail|Pass|Refresh_token|Client_id|Recovery_email',
+        costMinor: ngnMinor,
+        usdCostMinor: usdMinor,
+        currency: 'NGN',
+        stock: dynamicStock,
+        raw: {
+          id: dynamicProduct.id,
+          name: dynamicName,
+          description: 'FORMAT: Mail|Pass|Refresh_token|Client_id|Recovery_email',
+          price: String(pCost),
+          amount: dynamicStock,
+          category_id: defaultCat ?? 's3_general',
+        },
+      })
+    }
 
     const jobId = crypto.randomUUID()
     const writes: Statement[] = []
