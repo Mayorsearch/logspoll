@@ -58,6 +58,52 @@ export type KoraCatalogItem = {
   auth_reviewer_id?: string | null
 }
 
+/**
+ * Strict product allowlist for Kora Store imports on Server 4.
+ * Only the requested brand categories are eligible for storefront publication:
+ * - Muse AI
+ * - Claude API
+ * - CapCut / CapCut Pro
+ * - Coursera
+ * - Notion
+ * - Kling AI Standard
+ * - Spotify
+ * - Amazon Prime
+ * - Duolingo
+ */
+export function isKoraStoreProductAllowed(name: string): boolean {
+  if (!name || typeof name !== 'string') return false
+  const n = name.trim().toLowerCase()
+  return (
+    /muse\s*ai/i.test(n) ||
+    /claude\s*api/i.test(n) ||
+    /capcut/i.test(n) ||
+    /coursera/i.test(n) ||
+    /notion/i.test(n) ||
+    /kling(?:\s*ai)?\s*standard/i.test(n) ||
+    /spot(?:i)?fy/i.test(n) ||
+    /amazon\s*prime/i.test(n) ||
+    /duolingo/i.test(n)
+  )
+}
+
+/**
+ * Strips any supplier origin branding ("Kora Store", "via Kora Store", "from Kora Store")
+ * from customer-facing product descriptions.
+ */
+export function cleanProductDescription(name: string, desc?: string | null): string {
+  if (desc && typeof desc === 'string') {
+    let cleaned = desc
+      .replace(/\s*(?:via|from)?\s*kora\s*store\b/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+    if (cleaned.length > 5) {
+      return cleaned
+    }
+  }
+  return `Authorized ${name} digital license subscription. Fast delivery and full warranty.`
+}
+
 export async function korastoreAdmin(request: Request, env: ApiEnv) {
   const actor = await adminActor(request, env)
   const db = env.DB!
@@ -316,7 +362,7 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
           .bind(
             item.id,
             item.name,
-            `Authorized ${item.name} license subscription via Kora Store`,
+            cleanProductDescription(item.name),
             item.price_kobo,
             item.price_kobo,
             sellingPrice,
@@ -531,7 +577,7 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
     const productId = item.product_id || `s4-kora-${item.external_id}`
     const slug = `s4-kora-${item.external_id}`
     const deliveryMethod = item.delivery_type === 'instant' ? 'Subscription activation' : 'Manual fulfillment'
-    const features = JSON.stringify(['Authorized AI Tool License', 'Instant Digital Delivery', 'Kora Store Resale Rights'])
+    const features = JSON.stringify(['Authorized AI Tool License', 'Instant Digital Delivery', 'Verified Digital License'])
     const now = Date.now()
 
     const catRow = await db
@@ -568,7 +614,7 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
           categoryId,
           slug,
           item.name,
-          item.description || `Authorized ${item.name} license subscription via Kora Store`,
+          cleanProductDescription(item.name, item.description),
           item.selling_price_minor,
           deliveryMethod,
           features,
@@ -620,6 +666,10 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
     const productId = item.product_id || `s4-kora-${item.external_id}`
 
     if (publish) {
+      if (!isKoraStoreProductAllowed(item.name)) {
+        throw new HttpError(400, 'This product is not in the authorized Server 4 catalog allowlist.')
+      }
+
       // Require genuine administrator-reviewed documentation establishing resale and delivery rights
       const auth = await db
         .prepare('SELECT evidence, reviewer_id, verified_at FROM product_authorizations WHERE product_id=?')
@@ -660,7 +710,7 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
 
       const slug = `s4-kora-${item.external_id}`
       const deliveryMethod = item.delivery_type === 'instant' ? 'Subscription activation' : 'Manual fulfillment'
-      const features = JSON.stringify(['Authorized AI Tool License', 'Instant Digital Delivery', 'Kora Store Resale Rights'])
+      const features = JSON.stringify(['Authorized AI Tool License', 'Instant Digital Delivery', 'Verified Digital License'])
 
       const writes: Statement[] = [
         db
@@ -680,6 +730,7 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
                category_id=excluded.category_id,
                name=excluded.name,
                description=excluded.description,
+               features=excluded.features,
                delivery_type=excluded.delivery_type`
           )
           .bind(
@@ -687,7 +738,7 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
             categoryId,
             slug,
             item.name,
-            item.description || `Authorized ${item.name} license subscription via Kora Store`,
+            cleanProductDescription(item.name, item.description),
             item.selling_price_minor,
             deliveryMethod,
             features,
@@ -1044,11 +1095,13 @@ export async function syncKoraStoreCatalog(env: ApiEnv, row?: KoraConnection) {
       sellingPrice = calculateKoraSellingPrice(newCost, markupBps)
     }
 
+    const isAllowed = isKoraStoreProductAllowed(item.name)
     const isAlreadyApproved = existing?.approval_status === 'approved'
     const inStock = item.available && (item.stock === null || item.stock > 0)
-    const canAutoApprove = autoApprove && inStock
-    const finalApprovalStatus: 'approved' | 'pending' = isAlreadyApproved || canAutoApprove ? 'approved' : 'pending'
-    const canPublish = autoPublish && (isAlreadyApproved || canAutoApprove) && inStock
+    const canAutoApprove = autoApprove && inStock && isAllowed
+    const finalApprovalStatus: 'approved' | 'pending' = (isAlreadyApproved || canAutoApprove) && isAllowed ? 'approved' : 'pending'
+    const canPublish = autoPublish && finalApprovalStatus === 'approved' && inStock && isAllowed
+    const itemDesc = cleanProductDescription(item.name, existing?.description)
 
     // 1. Upsert korastore_catalog_items with write containment
     writes.push(
@@ -1062,6 +1115,7 @@ export async function syncKoraStoreCatalog(env: ApiEnv, row?: KoraConnection) {
            VALUES(?, ?, ?, ?, ?, ?, 'NGN', ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(external_id) DO UPDATE SET
              name=excluded.name,
+             description=excluded.description,
              previous_cost_minor=CASE WHEN korastore_catalog_items.cost_minor != excluded.cost_minor THEN korastore_catalog_items.cost_minor ELSE korastore_catalog_items.previous_cost_minor END,
              cost_minor=excluded.cost_minor,
              selling_price_minor=excluded.selling_price_minor,
@@ -1070,21 +1124,22 @@ export async function syncKoraStoreCatalog(env: ApiEnv, row?: KoraConnection) {
              delivery_type=excluded.delivery_type,
              pricing_mode=excluded.pricing_mode,
              markup_bps=excluded.markup_bps,
-             approval_status=CASE WHEN excluded.approval_status='approved' THEN 'approved' ELSE korastore_catalog_items.approval_status END,
+             approval_status=excluded.approval_status,
              raw_metadata=excluded.raw_metadata,
              checked_at=excluded.checked_at
            WHERE korastore_catalog_items.cost_minor != excluded.cost_minor
               OR korastore_catalog_items.stock IS NOT excluded.stock
               OR korastore_catalog_items.available != excluded.available
               OR korastore_catalog_items.name != excluded.name
+              OR korastore_catalog_items.description != excluded.description
               OR korastore_catalog_items.selling_price_minor != excluded.selling_price_minor
-              OR (excluded.approval_status='approved' AND korastore_catalog_items.approval_status != 'approved')
+              OR korastore_catalog_items.approval_status != excluded.approval_status
               OR korastore_catalog_items.checked_at <= (? - 86400000)`
         )
         .bind(
           item.id,
           item.name,
-          `Authorized ${item.name} license subscription via Kora Store`,
+          itemDesc,
           newCost,
           oldCost,
           sellingPrice,
@@ -1099,6 +1154,19 @@ export async function syncKoraStoreCatalog(env: ApiEnv, row?: KoraConnection) {
           now
         )
     )
+
+    // Unpublish if not in authorized allowlist
+    if (!isAllowed) {
+      writes.push(
+        db
+          .prepare(
+            `UPDATE products
+             SET status='draft', publication_verified=0
+             WHERE slug=? AND (status != 'draft' OR publication_verified != 0)`
+          )
+          .bind(`s4-kora-${item.id}`)
+      )
+    }
 
     // 2. Track price change in history if cost changed on existing product
     if (existing && costChanged) {
@@ -1129,7 +1197,7 @@ export async function syncKoraStoreCatalog(env: ApiEnv, row?: KoraConnection) {
       const slug = `s4-kora-${item.id}`
       const productId = existing?.product_id || existingProductsBySlug.get(slug) || crypto.randomUUID()
       const deliveryMethod = item.delivery === 'instant' ? 'Subscription activation' : 'Manual fulfillment'
-      const features = JSON.stringify(['Authorized AI Tool License', 'Instant Digital Delivery', 'Kora Store Resale Rights'])
+      const features = JSON.stringify(['Authorized AI Tool License', 'Instant Digital Delivery', 'Verified Digital License'])
 
       writes.push(
         db
@@ -1148,12 +1216,14 @@ export async function syncKoraStoreCatalog(env: ApiEnv, row?: KoraConnection) {
                category_id=excluded.category_id,
                name=excluded.name,
                description=excluded.description,
+               features=excluded.features,
                delivery_type=excluded.delivery_type
              WHERE products.status != 'active'
                 OR products.category_id IS NOT excluded.category_id
                 OR (products.pricing_mode != 'override' AND products.price_minor != excluded.price_minor)
                 OR products.name != excluded.name
                 OR products.description != excluded.description
+                OR products.features != excluded.features
                 OR products.authorized_resale != 1
                 OR products.publication_verified != 1`
           )
@@ -1162,7 +1232,7 @@ export async function syncKoraStoreCatalog(env: ApiEnv, row?: KoraConnection) {
             categoryId,
             slug,
             item.name.slice(0, 200),
-            `Authorized ${item.name} license subscription via Kora Store`.slice(0, 10000),
+            itemDesc.slice(0, 10000),
             sellingPrice,
             deliveryMethod,
             features,
@@ -1186,7 +1256,7 @@ export async function syncKoraStoreCatalog(env: ApiEnv, row?: KoraConnection) {
                ON CONFLICT(product_id) DO NOTHING`
             )
             .bind(
-              JSON.stringify({ delivery: true, privacy: true, provider: true, reference: 'Kora Store authorized partner' }),
+              JSON.stringify({ delivery: true, privacy: true, provider: true, reference: 'Server 4 authorized partner' }),
               auditActor,
               now,
               slug

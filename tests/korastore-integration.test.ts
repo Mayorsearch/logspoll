@@ -592,7 +592,7 @@ test('Resale Authorization: unverified product cannot be published; explicit adm
     sql.prepare("INSERT INTO categories VALUES('cat-s4', 'server4', 'Server 4', 1)").run()
     sql.prepare("INSERT INTO korastore_connection(id, enabled, base_url) VALUES('korastore', 1, 'https://korastore.cv/v1')").run()
     sql.prepare(`INSERT INTO korastore_catalog_items(external_id, name, description, cost_minor, selling_price_minor, currency, stock, available, delivery_type, pricing_mode, markup_bps, approval_status, checked_at)
-      VALUES('kora-resale-test', 'Claude Pro License', 'Claude Pro AI', 3200000, 4800000, 'NGN', 50, 1, 'instant', 'markup', 5000, 'pending', ?)`)
+      VALUES('kora-resale-test', 'Claude API Plans > 100$', 'Claude API', 3200000, 4800000, 'NGN', 50, 1, 'instant', 'markup', 5000, 'pending', ?)`)
       .run(Date.now())
 
     const { korastoreAdmin } = await import('../workers/api/korastore-manager.ts')
@@ -1069,9 +1069,10 @@ test('Kora Store Catalog Sync: syncKoraStoreCatalog synchronizes catalog, applie
           JSON.stringify({
             ok: true,
             products: [
-              { id: 'chatgpt-plus-1m', name: 'ChatGPT Plus 1 Month', price_kobo: 3000000, price_naira: 30000, stock: 50, available: true, delivery: 'instant' },
-              { id: 'claude-pro-1m', name: 'Claude Pro 1 Month', price_kobo: 4000000, price_naira: 40000, stock: null, available: true, delivery: 'instant' },
+              { id: 'capcut-pro-1m', name: 'CapCut Pro 1 Month', price_kobo: 3000000, price_naira: 30000, stock: 50, available: true, delivery: 'instant' },
+              { id: 'claude-api-100', name: 'Claude API Plans > Claude 100$ API', price_kobo: 4000000, price_naira: 40000, stock: null, available: true, delivery: 'instant' },
               { id: 'muse-ai-annual', name: 'Muse AI Annual', price_kobo: 2000000, price_naira: 20000, stock: 0, available: false, delivery: 'manual' },
+              { id: 'gemini-pro-family', name: 'Gemini pro 18 month family plan', price_kobo: 5000000, price_naira: 50000, stock: 10, available: true, delivery: 'instant' },
             ],
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -1087,30 +1088,65 @@ test('Kora Store Catalog Sync: syncKoraStoreCatalog synchronizes catalog, applie
       CATALOG_SYNC_ENABLED: 'true',
     }
 
-    const { syncKoraStoreCatalog } = await import('../workers/api/korastore-manager.ts')
+    const { syncKoraStoreCatalog, isKoraStoreProductAllowed, cleanProductDescription } = await import('../workers/api/korastore-manager.ts')
+
+    // Verify unit helpers
+    assert.equal(isKoraStoreProductAllowed('Muse Ai - 1 billion token Account'), true)
+    assert.equal(isKoraStoreProductAllowed('Claude API Plans > Claude 100$ API 30DAYS'), true)
+    assert.equal(isKoraStoreProductAllowed('CAPCUT PRO INDIVIDUAL 1 MONTH (FW)'), true)
+    assert.equal(isKoraStoreProductAllowed('Capcut pro 1 month'), true)
+    assert.equal(isKoraStoreProductAllowed('Coursera 1 Year Premium'), true)
+    assert.equal(isKoraStoreProductAllowed('NOTION BUSINESS 3 MONTH (LINK)'), true)
+    assert.equal(isKoraStoreProductAllowed('KLING AI STANDARD PLAN 1000+ CREDIT'), true)
+    assert.equal(isKoraStoreProductAllowed('Spotify 3m Redeem Link ( Card required )'), true)
+    assert.equal(isKoraStoreProductAllowed('Amazon prime 6 month with ads'), true)
+    assert.equal(isKoraStoreProductAllowed('Duolingo super 12m (NW)'), true)
+    assert.equal(isKoraStoreProductAllowed('Duolingo 2 Month (NW) Card Required'), true)
+    assert.equal(isKoraStoreProductAllowed('Antigravity Slot x20 Ultra 1 month'), false)
+    assert.equal(isKoraStoreProductAllowed('Gemini pro 18 month family plan'), false)
+    assert.equal(isKoraStoreProductAllowed('LinkedIn Career Premium – 3 Months'), false)
+    assert.equal(isKoraStoreProductAllowed('MICROSOFT 365 FAMILY 12 MONTH'), false)
+    assert.equal(isKoraStoreProductAllowed('Nord VPN 3 MONTH (shared)'), false)
+    assert.equal(isKoraStoreProductAllowed('Office365 (lifetime plan)'), false)
+    assert.equal(isKoraStoreProductAllowed('Leonardo.ai Account 8500 Credits (Includes Seedance2 & Kling 3.0)'), false)
+
+    assert.equal(
+      cleanProductDescription('Amazon Prime', 'Authorized Amazon Prime license subscription via Kora Store'),
+      'Authorized Amazon Prime license subscription'
+    )
+    assert.equal(cleanProductDescription('Notion').includes('Kora Store'), false)
 
     // Run Pass 1: Initial catalog synchronization
     const result1 = await syncKoraStoreCatalog(mockEnv)
-    assert.equal(result1.total_synced, 3)
-    assert.equal(result1.published, 2, 'In-stock products (ChatGPT, Claude) must be published, out-of-stock (Muse) unpublished')
+    assert.equal(result1.total_synced, 4)
+    assert.equal(result1.published, 2, 'Only allowed in-stock products (CapCut, Claude API) must be published. Out-of-stock and unallowed must not be published.')
 
     // Verify korastore_catalog_items entries
     const items = sql.prepare('SELECT * FROM korastore_catalog_items ORDER BY external_id ASC').all() as any[]
-    assert.equal(items.length, 3)
+    assert.equal(items.length, 4)
 
-    const chatgpt = items.find((i) => i.external_id === 'chatgpt-plus-1m')
-    assert.ok(chatgpt)
-    assert.equal(chatgpt.cost_minor, 3000000)
+    const capcut = items.find((i) => i.external_id === 'capcut-pro-1m')
+    assert.ok(capcut)
+    assert.equal(capcut.cost_minor, 3000000)
     // 50% markup on 3,000,000 kobo = 4,500,000 kobo (₦45,000)
-    assert.equal(chatgpt.selling_price_minor, 4500000)
-    assert.equal(chatgpt.approval_status, 'approved')
-    assert.ok(chatgpt.product_id)
+    assert.equal(capcut.selling_price_minor, 4500000)
+    assert.equal(capcut.approval_status, 'approved')
+    assert.ok(capcut.product_id)
+    assert.equal(capcut.description.includes('Kora Store'), false, 'Description must not mention Kora Store')
+
+    const gemini = items.find((i) => i.external_id === 'gemini-pro-family')
+    assert.ok(gemini)
+    assert.equal(gemini.approval_status, 'pending', 'Unallowed items must remain in pending status')
 
     // Verify published storefront products
     const prods = sql.prepare("SELECT * FROM products WHERE server_number=4 AND supplier_name='KoraStore'").all() as any[]
     assert.equal(prods.length, 2)
-    assert.ok(prods.some((p) => p.slug === 's4-kora-chatgpt-plus-1m' && p.status === 'active' && p.price_minor === 4500000))
-    assert.ok(prods.some((p) => p.slug === 's4-kora-claude-pro-1m' && p.status === 'active' && p.price_minor === 6000000))
+    assert.ok(prods.some((p) => p.slug === 's4-kora-capcut-pro-1m' && p.status === 'active' && p.price_minor === 4500000))
+    assert.ok(prods.some((p) => p.slug === 's4-kora-claude-api-100' && p.status === 'active' && p.price_minor === 6000000))
+    for (const p of prods) {
+      assert.equal(p.description.includes('Kora Store'), false, 'Product description must not mention Kora Store')
+      assert.equal(p.features.includes('Kora Store'), false, 'Product features must not mention Kora Store')
+    }
 
     // Verify product_authorizations
     const auths = sql.prepare('SELECT * FROM product_authorizations').all() as any[]
@@ -1118,13 +1154,13 @@ test('Kora Store Catalog Sync: syncKoraStoreCatalog synchronizes catalog, applie
 
     // Verify korastore_connection status
     const conn = sql.prepare("SELECT total, scanned, phase, last_status FROM korastore_connection WHERE id='korastore'").get() as any
-    assert.equal(conn.total, 3)
-    assert.equal(conn.scanned, 3)
+    assert.equal(conn.total, 4)
+    assert.equal(conn.scanned, 4)
     assert.equal(conn.phase, 'complete')
 
     // Pass 2: Re-run sync with identical products -> strict write containment
     const result2 = await syncKoraStoreCatalog(mockEnv)
-    assert.equal(result2.total_synced, 3)
+    assert.equal(result2.total_synced, 4)
     assert.equal(result2.price_changes, 0)
   } finally {
     globalThis.fetch = origFetch
