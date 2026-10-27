@@ -79,7 +79,20 @@ export async function adminOperations(request:Request,env:ApiEnv){
  }else if(b.action==='moderate_review'){table='reviews';if(!['approved','rejected'].includes(String(b.status)))throw new HttpError(400,'Invalid moderation status.');writes.push(db.prepare("UPDATE reviews SET status=?,reviewed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?").bind(String(b.status),id))
  }else if(b.action==='settings'){table='website_settings';const value=JSON.stringify(b.value);if(!b.value||typeof b.value!=='object'||Array.isArray(b.value)||value.length>16000)throw new HttpError(400,'Settings object required.');writes.push(db.prepare("INSERT INTO website_settings(key,value) VALUES('general',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(value))
  }else if(b.action==='deliver'){table='orders';const items=await db.prepare("SELECT i.id FROM order_items i JOIN orders o ON o.id=i.order_id WHERE o.id=? AND o.payment_status='paid' AND o.fulfillment_status<>'delivered'").bind(id).all<{id:string}>();if(!items.results.length)throw new HttpError(409,'Undelivered paid order required.');const instructions=text(b.instructions,1,20000);writes.push(db.prepare("INSERT INTO admin_write_fences(id,valid) SELECT ?,CASE WHEN EXISTS(SELECT 1 FROM orders WHERE id=? AND payment_status='paid' AND fulfillment_status<>'delivered') THEN 1 ELSE 0 END").bind(id,id));for(const item of items.results)writes.push(db.prepare('INSERT INTO product_entitlements(id,order_item_id,instructions) VALUES(?,?,?) ON CONFLICT(order_item_id) DO NOTHING').bind(crypto.randomUUID(),item.id,instructions));writes.push(db.prepare("UPDATE orders SET fulfillment_status='delivered' WHERE id=? AND payment_status='paid'").bind(id),db.prepare('DELETE FROM admin_write_fences WHERE id=?').bind(id));const order=await db.prepare('SELECT customer_id FROM orders WHERE id=?').bind(id).first<{customer_id:string}>();kind='order_delivered';recipient=order!.customer_id
- }else if(b.action==='fulfill_automated'){const {fulfillPaidOrder}=await import('./fulfillment.ts');const res=await fulfillPaidOrder(env,id,{adminOverride:true});return json(res)
+ }else if(b.action==='fulfill_automated'){
+  const {fulfillPaidOrder}=await import('./fulfillment.ts')
+  const isOverride=Boolean(b.admin_override||b.adminOverride||b.override)
+  if(isOverride){
+   const reason=typeof b.reason==='string'&&b.reason.trim().length>=5?b.reason.trim():'Admin price override approved'
+   await db.batch([
+    db.prepare("INSERT INTO audit_logs(id,actor_id,table_name,record_id,action) VALUES(?,?,?,?,?)")
+     .bind(crypto.randomUUID(),actor.id,'orders',id,'UPDATE'),
+    db.prepare("UPDATE fulfillment_jobs SET last_error=? WHERE order_id=? AND state='blocked'")
+     .bind(`OVERRIDE:${reason}`,id)
+   ]).catch(()=>undefined)
+  }
+  const res=await fulfillPaidOrder(env,id,{adminOverride:isOverride})
+  return json(res)
  }else if(b.action==='refund_order'){
   table='orders'
   const ord=await db.prepare("SELECT id,customer_id,reference,total_minor,currency,payment_status,fulfillment_status,payment_method FROM orders WHERE id=?").bind(id).first<{id:string;customer_id:string;reference:string;total_minor:number;currency:string;payment_status:string;fulfillment_status:string;payment_method:string}>()

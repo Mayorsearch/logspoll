@@ -68,8 +68,21 @@ export async function runFulfillment(env:ApiEnv,orderId?:string,adminOverride=fa
   let credentials: {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
   if (mapping.provider === 'youngpg') {
     credentials = {key:raw,apiKey:raw}
-  } else if (mapping.provider === 'shopviaclone22' || mapping.provider === 'digitalcore') {
+  } else if (mapping.provider === 'shopviaclone22') {
     credentials = {key:raw,apiKey:raw,baseUrl:mapping.base_url?.trim()||undefined}
+  } else if (mapping.provider === 'digitalcore') {
+    let dcKey = raw
+    let dcBase = mapping.base_url?.trim() || undefined
+    try {
+      const parsed = JSON.parse(raw) as { apiKey?: string; baseUrl?: string }
+      if (typeof parsed?.apiKey === 'string' && parsed.apiKey.trim()) {
+        dcKey = parsed.apiKey.trim()
+      }
+      if (typeof parsed?.baseUrl === 'string' && parsed.baseUrl.trim()) {
+        dcBase = parsed.baseUrl.trim()
+      }
+    } catch {}
+    credentials = { key: dcKey, apiKey: dcKey, baseUrl: dcBase }
   } else if (mapping.provider === 'korastore') {
     let koraKey = raw
     let koraBase = mapping.base_url?.trim() || undefined
@@ -140,10 +153,20 @@ export async function runFulfillment(env:ApiEnv,orderId?:string,adminOverride=fa
 }
 async function finish(env:ApiEnv,orderId:string){
  const db=env.DB!
- await db.batch([
+ const hasNotif=Boolean(await db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notifications'").first().catch(()=>null))
+ const writes=[
   db.prepare("UPDATE orders SET fulfillment_status='delivered',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND payment_status='paid' AND EXISTS(SELECT 1 FROM order_items WHERE order_id=orders.id) AND NOT EXISTS(SELECT 1 FROM order_items i WHERE i.order_id=orders.id AND NOT EXISTS(SELECT 1 FROM product_entitlements e WHERE e.order_item_id=i.id))").bind(orderId),
   db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) SELECT id||':order_delivered','order_delivered',customer_id,? FROM orders WHERE id=? AND payment_status='paid' AND fulfillment_status='delivered' ON CONFLICT(id) DO NOTHING").bind(Date.now(),orderId)
- ])
+ ]
+ if (hasNotif) {
+  writes.push(
+   db.prepare(`INSERT INTO notifications(id, user_id, title, message, order_id)
+     SELECT 'notif_' || id, customer_id, 'Order Delivered', 'Your order ' || reference || ' has been delivered. Access your license credentials in your Vault.', id
+     FROM orders WHERE id=? AND payment_status='paid' AND fulfillment_status='delivered'
+     ON CONFLICT(id) DO NOTHING`).bind(orderId)
+  )
+ }
+ await db.batch(writes)
  await drainBusinessMail(env).catch(()=>undefined)
  await drainMail(env).catch(()=>undefined)
 }

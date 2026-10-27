@@ -175,10 +175,20 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
    stock=match.stock??(match.available?999:0)
   }
  }else{
-  const key=credentials.apiKey?.trim();if(!key)throw new DeliveryError('DigitalCore API key is missing.')
-  if(credentials.baseUrl&&new URL(credentials.baseUrl).origin!=='https://digitalcore.top')throw new DeliveryError('DigitalCore purchase host is not verified.')
+  let key=credentials.apiKey?.trim()||credentials.key?.trim()||''
+  let baseUrl=credentials.baseUrl?.trim()||'https://digitalcore.top'
+  if(key.startsWith('{')){
+   try{
+    const parsed=JSON.parse(key)
+    if(typeof parsed?.apiKey==='string'&&parsed.apiKey.trim())key=parsed.apiKey.trim()
+    if(typeof parsed?.baseUrl==='string'&&parsed.baseUrl.trim())baseUrl=parsed.baseUrl.trim()
+   }catch{}
+  }
+  if(!key)throw new DeliveryError('DigitalCore API key is missing.')
+  const parsedBase=new URL(baseUrl)
+  if(parsedBase.protocol!=='https:'||parsedBase.hostname!=='digitalcore.top'||parsedBase.port||parsedBase.username||parsedBase.password)throw new DeliveryError('DigitalCore purchase host is not verified.')
   headers.set('Api-Key',key)
-  const dcBase=credentials.baseUrl?.trim().replace(/\/+$/,'')||'https://digitalcore.top'
+  const dcBase=baseUrl.replace(/\/+$/,'')
   if(!input.recovering){const detail=await request(dcBase+'/api/user/product?id='+encodeURIComponent(input.externalId),headers)
    if(String(detail.id)!==input.externalId)throw new DeliveryError('DigitalCore product identity changed.')
    price=detail.price;currency='USD';stock=detail.stock}
@@ -256,7 +266,8 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
     const deliveredItems=items(res.items,input.quantity)
     return{receipt:id,items:deliveredItems,delivered:res.status==='delivered'&&deliveredItems.length===input.quantity}
    }
-   const url=provider==='youngpg'?YOUNGPG_ORIGIN+'/api/v1/orders/'+encodeURIComponent(receipt(id)):'https://digitalcore.top/api/user/order?id='+encodeURIComponent(receipt(id))
+   const dcBase=credentials.baseUrl?.trim().replace(/\/+$/,'')||'https://digitalcore.top'
+   const url=provider==='youngpg'?YOUNGPG_ORIGIN+'/api/v1/orders/'+encodeURIComponent(receipt(id)):dcBase+'/api/user/order?id='+encodeURIComponent(receipt(id))
    const result=parse(await request(url,headers));if(result.receipt!==id)throw new DeliveryError('Supplier receipt identity mismatch.','uncertain');return result
   }
  }

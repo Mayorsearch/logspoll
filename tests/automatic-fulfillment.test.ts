@@ -238,3 +238,36 @@ test('stale FX rate falls back to configured usd_to_ngn_rate without blocking US
  assert.equal(delivery.receipt,'ord_dc_88')
  assert.equal(delivery.delivered,true)
 })
+
+test('DigitalCore JSON-serialized credentials are parsed safely and send genuine Api-Key header', async t => {
+ const jsonCreds = { apiKey: JSON.stringify({ apiKey: 'dc_genuine_key_999', baseUrl: 'https://digitalcore.top' }), baseUrl: 'https://digitalcore.top' }
+ const ref = 'req_dc_json_test'
+ let capturedKey = ''
+ let preflightKey = ''
+ t.mock.method(globalThis, 'fetch', async (url, init) => {
+  const u = new URL(String(url))
+  const key = new Headers(init?.headers).get('Api-Key')
+  if (init?.method === 'POST') {
+   capturedKey = key ?? ''
+   return Response.json({ success: true, order_id: 'ord_dc_json_1', quantity: 1, items: ['dc:access:token'] })
+  }
+  preflightKey = key ?? ''
+  return Response.json({ id: 'dc_prod_json', price: '1.00', stock: 10 })
+ })
+ const plan = await prepareDelivery('digitalcore', jsonCreds, { externalId: 'dc_prod_json', quantity: 1, requestId: ref, maxCostMinor: 450000, fxRate: '1500' })
+ const delivery = await plan.buy()
+ assert.equal(delivery.receipt, 'ord_dc_json_1')
+ assert.equal(delivery.delivered, true)
+ assert.equal(preflightKey, 'dc_genuine_key_999')
+ assert.equal(capturedKey, 'dc_genuine_key_999')
+ assert.doesNotMatch(preflightKey, /^\{/)
+ assert.doesNotMatch(capturedKey, /^\{/)
+})
+
+test('DigitalCore rejects unverified baseUrl host origins', async t => {
+ const badCreds = { apiKey: 'dc_key', baseUrl: 'https://evil-phishing-host.com' }
+ await assert.rejects(
+  () => prepareDelivery('digitalcore', badCreds, { externalId: 'dc_prod', quantity: 1, requestId: 'test', maxCostMinor: 100000 }),
+  /DigitalCore purchase host is not verified/
+ )
+})

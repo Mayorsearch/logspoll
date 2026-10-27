@@ -363,3 +363,51 @@ test('8. Admin override fulfills order despite supplier price increase', async t
   const ent = sql.prepare('SELECT instructions FROM product_entitlements WHERE order_item_id=?').get(item) as { instructions: string }
   assert.equal(ent.instructions, 'vault:delivery:override')
 })
+
+test('9. Admin fulfill_automated without override preserves price block; explicit override succeeds and creates audit_log record', async t => {
+  const { sql, env, adminCookie } = await testFixture()
+  t.after(() => sql.close())
+
+  let buys = 0
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    if (init?.method === 'POST' && String(url).includes('purchase')) {
+      buys++
+      return Response.json({ success: true, data: { order_id: 888, accounts: ['vault:delivery:audit_override'] } })
+    }
+    // Price increased from 450 NGN to 500 NGN
+    return Response.json({ success: true, data: { id: 12, slug: 'subscription-test', price_ngn: '500.00', available_stock: 5 } })
+  })
+
+  // Set job blocked first
+  sql.prepare("UPDATE fulfillment_jobs SET state='blocked', last_error='PRICE_REVIEW:live_cost=50000:cost exceeded' WHERE order_item_id=?").run(item)
+
+  // 1. Admin retries without override
+  const reqNoOverride = new Request('https://staging.test/api/admin/operations', {
+    method: 'POST',
+    headers: { Origin: 'https://staging.test', 'Content-Type': 'application/json', Cookie: adminCookie },
+    body: JSON.stringify({ action: 'fulfill_automated', id: order, admin_override: false })
+  })
+  const resNoOverride = await adminOperations(reqNoOverride, env)
+  assert.equal(resNoOverride.status, 200)
+  const bodyNoOverride = await resNoOverride.json() as { success: boolean; delivered: boolean }
+  assert.equal(bodyNoOverride.delivered, false)
+  assert.equal(buys, 0)
+  const auditLogsNoOverride = sql.prepare("SELECT * FROM audit_logs WHERE table_name='orders' AND record_id=?").all(order)
+  assert.equal(auditLogsNoOverride.length, 0)
+
+  // 2. Admin retries with explicit override and reason
+  const reqOverride = new Request('https://staging.test/api/admin/operations', {
+    method: 'POST',
+    headers: { Origin: 'https://staging.test', 'Content-Type': 'application/json', Cookie: adminCookie },
+    body: JSON.stringify({ action: 'fulfill_automated', id: order, admin_override: true, reason: 'Customer VIP manual clearance' })
+  })
+  const resOverride = await adminOperations(reqOverride, env)
+  assert.equal(resOverride.status, 200)
+  const bodyOverride = await resOverride.json() as { success: boolean; delivered: boolean }
+  assert.equal(bodyOverride.delivered, true)
+  assert.equal(buys, 1)
+
+  const auditLogs = sql.prepare("SELECT * FROM audit_logs WHERE table_name='orders' AND record_id=?").all(order) as { action: string }[]
+  assert.equal(auditLogs.length, 1)
+  assert.equal(auditLogs[0].action, 'UPDATE')
+})
