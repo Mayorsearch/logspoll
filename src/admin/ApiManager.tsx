@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import HstoraManager from './HstoraManager'
 import Shopviaclone22Manager from './Shopviaclone22Manager'
 import DigitalCoreManager from './DigitalCoreManager'
+import KoraStoreManager from './KoraStoreManager'
 import ExchangeRateManager from './ExchangeRateManager'
 import CloudflareCatalog from './CloudflareCatalog'
 import SupplierAutomation from './SupplierAutomation'
@@ -21,6 +22,8 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
   const [hStatus, setHStatus] = useState<{ enabled: number; imported: number; last_status: string } | null>(null)
   const [s3Status, setS3Status] = useState<{ enabled: number; imported: number; in_stock: number; last_status: string } | null>(null)
   const [s4Status, setS4Status] = useState<{ enabled: number; imported: number; in_stock: number; last_status: string } | null>(null)
+  const [koraStatus, setKoraStatus] = useState<{ enabled: number; imported: number; in_stock: number; last_status: string } | null>(null)
+  const [s4SubTab, setS4SubTab] = useState<'digitalcore' | 'korastore'>('digitalcore')
 
   useEffect(() => {
     if (initialTab) {
@@ -40,6 +43,10 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
 
     void cloudflareRequest<{ connection: { enabled: number; imported: number; in_stock: number; last_status: string } | null }>('/api/admin/digitalcore')
       .then((res) => setS4Status(res.connection))
+      .catch(() => {})
+
+    void cloudflareRequest<{ connection: { enabled: number; imported: number; in_stock: number; last_status: string } | null }>('/api/admin/korastore')
+      .then((res) => setKoraStatus(res.connection))
       .catch(() => {})
   }, [activeTab])
 
@@ -215,19 +222,19 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
             }}
           >
             <Cpu size={15} />
-            <span>Server 4 — DigitalCore</span>
-            {s4Status && (
+            <span>Server 4 · AI Tools</span>
+            {(s4Status || koraStatus) && (
               <span
                 style={{
                   fontSize: '0.7rem',
                   padding: '2px 6px',
                   borderRadius: 10,
-                  background: activeTab === 'server4' ? 'rgba(255,255,255,0.25)' : s4Status.enabled ? '#10b98120' : '#64748b20',
-                  color: activeTab === 'server4' ? '#ffffff' : s4Status.enabled ? '#10b981' : '#64748b',
+                  background: activeTab === 'server4' ? 'rgba(255,255,255,0.25)' : (s4Status?.enabled || koraStatus?.enabled) ? '#10b98120' : '#64748b20',
+                  color: activeTab === 'server4' ? '#ffffff' : (s4Status?.enabled || koraStatus?.enabled) ? '#10b981' : '#64748b',
                   fontWeight: 700,
                 }}
               >
-                {s4Status.enabled ? 'ON' : 'OFF'}
+                {(s4Status?.enabled || koraStatus?.enabled) ? 'ON' : 'OFF'}
               </span>
             )}
           </button>
@@ -332,7 +339,91 @@ export default function ApiManager({ initialTab = 'server1', onComplete }: ApiMa
 
       {activeTab === 'server4' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <DigitalCoreManager onComplete={onComplete} />
+          {/* Server 4 Sub-Tabs: DigitalCore | Kora Store */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              padding: '6px',
+              borderRadius: 10,
+              background: 'var(--admin-subtle, #f1f5f9)',
+              border: '1px solid var(--admin-border, #e2e8f0)',
+              width: 'fit-content',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setS4SubTab('digitalcore')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 16px',
+                borderRadius: 8,
+                fontSize: '0.85rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                border: 'none',
+                background: s4SubTab === 'digitalcore' ? '#ffffff' : 'transparent',
+                color: s4SubTab === 'digitalcore' ? '#0f172a' : '#64748b',
+                boxShadow: s4SubTab === 'digitalcore' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <span>DigitalCore</span>
+              {s4Status && (
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    padding: '1px 6px',
+                    borderRadius: 8,
+                    background: s4Status.enabled ? '#10b98120' : '#64748b20',
+                    color: s4Status.enabled ? '#10b981' : '#64748b',
+                  }}
+                >
+                  {s4Status.enabled ? 'ON' : 'OFF'}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setS4SubTab('korastore')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 16px',
+                borderRadius: 8,
+                fontSize: '0.85rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                border: 'none',
+                background: s4SubTab === 'korastore' ? '#ffffff' : 'transparent',
+                color: s4SubTab === 'korastore' ? '#0f172a' : '#64748b',
+                boxShadow: s4SubTab === 'korastore' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <span>Kora Store</span>
+              {koraStatus && (
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    padding: '1px 6px',
+                    borderRadius: 8,
+                    background: koraStatus.enabled ? '#10b98120' : '#64748b20',
+                    color: koraStatus.enabled ? '#10b981' : '#64748b',
+                  }}
+                >
+                  {koraStatus.enabled ? 'ON' : 'OFF'}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {s4SubTab === 'digitalcore' && <DigitalCoreManager onComplete={onComplete} />}
+          {s4SubTab === 'korastore' && <KoraStoreManager onComplete={onComplete} />}
         </div>
       )}
 

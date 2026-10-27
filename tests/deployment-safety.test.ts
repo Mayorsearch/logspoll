@@ -56,3 +56,4 @@ test('deployment safety: protects all critical production secret keys', () => {
     assert.ok(PROTECTED_SECRET_KEYS.includes(k), `PROTECTED_SECRET_KEYS must include ${k}`)
   }
 })
+

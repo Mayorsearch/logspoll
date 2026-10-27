@@ -895,7 +895,7 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
        WHERE cost_minor>0`).bind(markup_bps),
      db.prepare(`UPDATE products
        SET price_minor=(SELECT dc.selling_price_minor FROM digitalcore_catalog_items dc WHERE dc.product_id=products.id)
-       WHERE server_number=4 AND (pricing_mode='auto' OR pricing_mode IS NULL)`)
+       WHERE server_number=4 AND (pricing_mode='auto' OR pricing_mode IS NULL) AND EXISTS (SELECT 1 FROM digitalcore_catalog_items dc WHERE dc.product_id=products.id)`)
     ])
    }
   }
@@ -1000,7 +1000,7 @@ export async function supplierAutomation(request:Request,env:ApiEnv){
       WHERE cost_minor>0`).bind(dcoreEffMarkup),
     db.prepare(`UPDATE products
       SET price_minor=(SELECT dc.selling_price_minor FROM digitalcore_catalog_items dc WHERE dc.product_id=products.id)
-      WHERE server_number=4 AND (pricing_mode='auto' OR pricing_mode IS NULL)`)
+      WHERE server_number=4 AND (pricing_mode='auto' OR pricing_mode IS NULL) AND EXISTS (SELECT 1 FROM digitalcore_catalog_items dc WHERE dc.product_id=products.id)`)
    ])
    updated+=(await db.prepare('SELECT count(*) n FROM digitalcore_catalog_items WHERE cost_minor>0').first<{n:number}>())?.n??0
   }

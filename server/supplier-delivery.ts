@@ -1,7 +1,8 @@
 import {hstoraHeaders,type HstoraCredentials} from './hstora.ts'
 import {youngpgGet,YOUNGPG_ORIGIN,listingSlug} from './youngpg.ts'
+import {fetchKoraProducts,buyKoraProduct,getKoraOrder} from './korastore.ts'
 
-export type DeliveryProvider='youngpg'|'hstora'|'digitalcore'|'shopviaclone22'
+export type DeliveryProvider='youngpg'|'hstora'|'digitalcore'|'shopviaclone22'|'korastore'
 export type Delivery={receipt:string;items:string[];delivered:boolean}
 export class DeliveryError extends Error {
  readonly state:'retry'|'blocked'|'uncertain'
@@ -21,12 +22,12 @@ export function deliveryCostMinor(price:unknown,quantity:number,currency:string,
 }
 async function request(url:string,headers:Headers,method='GET',body?:string){
  const parsed=new URL(url)
- if(parsed.protocol!=='https:'||!['youngpgmedia.com.ng','hstora.com','digitalcore.top','shopviaclone22.com'].includes(parsed.hostname)||parsed.port||parsed.username||parsed.password)throw new DeliveryError('Supplier purchase host is not verified.')
+ if(parsed.protocol!=='https:'||!['youngpgmedia.com.ng','hstora.com','digitalcore.top','shopviaclone22.com','korastore.cv'].includes(parsed.hostname)||parsed.port||parsed.username||parsed.password)throw new DeliveryError('Supplier purchase host is not verified.')
  let r:Response
  try{r=await fetch(url,{method,headers,body,redirect:'manual',signal:AbortSignal.timeout(12000)})}catch{throw new DeliveryError('Supplier connection failed; check order history before any purchase retry.',method==='POST'?'uncertain':'retry')}
  if([301,302,307,308].includes(r.status)&&r.headers.get('location')){
   const loc=new URL(r.headers.get('location')!,url)
-  if(loc.protocol==='https:'&&['youngpgmedia.com.ng','hstora.com','digitalcore.top','shopviaclone22.com'].includes(loc.hostname)){
+  if(loc.protocol==='https:'&&['youngpgmedia.com.ng','hstora.com','digitalcore.top','shopviaclone22.com','korastore.cv'].includes(loc.hostname)){
    try{r=await fetch(loc.toString(),{method:method==='POST'?'POST':'GET',headers,body,redirect:'manual',signal:AbortSignal.timeout(12000)})}catch{throw new DeliveryError('Supplier connection failed; check order history before any purchase retry.',method==='POST'?'uncertain':'retry')}
   }
  }
@@ -152,6 +153,20 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
      }
    }
   }
+ }else if(provider==='korastore'){
+  const key=credentials.apiKey?.trim()||credentials.key?.trim()
+  if(!key)throw new DeliveryError('Kora Store API key is missing.')
+  const baseUrl=credentials.baseUrl?.trim()||'https://korastore.cv/v1'
+  const parsedBase=new URL(baseUrl)
+  if(parsedBase.protocol!=='https:'||parsedBase.hostname!=='korastore.cv')throw new DeliveryError('Kora Store purchase host is not verified.')
+  if(!input.recovering){
+   const products=await fetchKoraProducts(key,baseUrl)
+   const match=products.find(p=>p.id===input.externalId)
+   if(!match)throw new DeliveryError('Kora Store product not found in supplier catalog.')
+   price=match.price_kobo/100
+   currency='NGN'
+   stock=match.stock??(match.available?999:0)
+  }
  }else{
   const key=credentials.apiKey?.trim();if(!key)throw new DeliveryError('DigitalCore API key is missing.')
   if(credentials.baseUrl&&new URL(credentials.baseUrl).origin!=='https://digitalcore.top')throw new DeliveryError('DigitalCore purchase host is not verified.')
@@ -188,6 +203,14 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
     const shopHeaders=new Headers({Accept:'application/json','Content-Type':'application/x-www-form-urlencoded','X-API-Key':key})
     return parse(await request(url,shopHeaders,'POST',body))
    }
+   if(provider==='korastore'){
+    const baseUrl=credentials.baseUrl?.trim()||'https://korastore.cv/v1'
+    const key=credentials.apiKey?.trim()||credentials.key?.trim()||''
+    const res=await buyKoraProduct(key,input.externalId,input.requestId,baseUrl)
+    const id=receipt(res.order_id)
+    const deliveredItems=items(res.items,input.quantity)
+    return{receipt:id,items:deliveredItems,delivered:res.status==='delivered'&&deliveredItems.length===input.quantity}
+   }
    const dcBase=credentials.baseUrl?.trim().replace(/\/+$/,'')||'https://digitalcore.top'
    const url=provider==='youngpg'?YOUNGPG_ORIGIN+'/api/v1/purchase':dcBase+'/api/user/buy'
    const body=provider==='youngpg'?{slug:input.slug,quantity:input.quantity}:{id:input.externalId,count:input.quantity}
@@ -203,6 +226,14 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
     const result=parse(await request(url,new Headers({Accept:'application/json'})))
     if(result.receipt!==id)throw new DeliveryError('Supplier receipt identity mismatch.','uncertain')
     return result
+   }
+   if(provider==='korastore'){
+    const baseUrl=credentials.baseUrl?.trim()||'https://korastore.cv/v1'
+    const key=credentials.apiKey?.trim()||credentials.key?.trim()||''
+    const res=await getKoraOrder(key,id,baseUrl)
+    if(res.order_id!==id)throw new DeliveryError('Supplier receipt identity mismatch.','uncertain')
+    const deliveredItems=items(res.items,input.quantity)
+    return{receipt:id,items:deliveredItems,delivered:res.status==='delivered'&&deliveredItems.length===input.quantity}
    }
    const url=provider==='youngpg'?YOUNGPG_ORIGIN+'/api/v1/orders/'+encodeURIComponent(receipt(id)):'https://digitalcore.top/api/user/order?id='+encodeURIComponent(receipt(id))
    const result=parse(await request(url,headers));if(result.receipt!==id)throw new DeliveryError('Supplier receipt identity mismatch.','uncertain');return result
