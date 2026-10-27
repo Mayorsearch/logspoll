@@ -271,3 +271,29 @@ test('DigitalCore rejects unverified baseUrl host origins', async t => {
   /DigitalCore purchase host is not verified/
  )
 })
+
+test('DigitalCore strictly blocks Gemini Pro 18 Months if price exceeds $0.90 USD', async t => {
+ const creds = { apiKey: 'dc_key', baseUrl: 'https://digitalcore.top' }
+ t.mock.method(globalThis, 'fetch', async () => {
+  return Response.json({ id: 'gemini_pro_18_months', price: '1.20', stock: 10 })
+ })
+ await assert.rejects(
+  () => prepareDelivery('digitalcore', creds, { externalId: 'gemini_pro_18_months', quantity: 1, requestId: 'req_gp_test', maxCostMinor: 500000, fxRate: '1400' }),
+  /Supplier wholesale price \(\$1.20 USD\) exceeds authorized limit of \$0.90 USD/
+ )
+})
+
+test('DigitalCore permits Gemini Pro 18 Months when price is $0.90 USD', async t => {
+ const creds = { apiKey: 'dc_key', baseUrl: 'https://digitalcore.top' }
+ t.mock.method(globalThis, 'fetch', async (url, init) => {
+  if (init?.method === 'POST') {
+   return Response.json({ success: true, order_id: 'ord_gp_pass', quantity: 1, items: ['gemini:pro:license'] })
+  }
+  return Response.json({ id: 'gemini_pro_18_months', price: '0.90', stock: 10 })
+ })
+ const plan = await prepareDelivery('digitalcore', creds, { externalId: 'gemini_pro_18_months', quantity: 1, requestId: 'req_gp_test', maxCostMinor: 250000, fxRate: '1400' })
+ const delivery = await plan.buy()
+ assert.equal(delivery.receipt, 'ord_gp_pass')
+ assert.equal(delivery.delivered, true)
+ assert.deepEqual(delivery.items, ['gemini:pro:license'])
+})

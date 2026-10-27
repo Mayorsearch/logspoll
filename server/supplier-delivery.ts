@@ -194,6 +194,7 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
    price=detail.price;currency='USD';stock=detail.stock}
  }
  if(!input.recovering){
+  if(provider==='digitalcore'&&input.externalId==='gemini_pro_18_months'&&Number(price)>0.90)throw new DeliveryError(`Supplier wholesale price ($${price} USD) exceeds authorized limit of $0.90 USD.`)
   if(!Number.isSafeInteger(Number(stock))||Number(stock)<input.quantity)throw new DeliveryError('Supplier stock is insufficient; delivery will retry later.','retry')
   if(!input.adminOverride){const liveCost=deliveryCostMinor(price,input.quantity,currency!,input.fxRate);if(liveCost>input.maxCostMinor)throw new DeliveryError(`PRICE_REVIEW:live_cost=${liveCost}:Supplier cost (${liveCost}) exceeds locked payment (${input.maxCostMinor}); administrator review required.`)}
  }
