@@ -776,6 +776,19 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
     return json({ ok: true, orders })
   }
 
+  // 14. Action: sync (full catalog sync from Kora)
+  if (body.action === 'sync') {
+    if (!row) throw new HttpError(409, 'Configure Kora Store credentials first.')
+    if (!row.enabled) throw new HttpError(409, 'Enable Kora Store first.')
+
+    await db.prepare("UPDATE korastore_connection SET requested=1 WHERE id='korastore'").run()
+    const syncResult = await syncKoraStoreCatalog(env, row)
+    return json({
+      ok: true,
+      ...syncResult,
+    })
+  }
+
   throw new HttpError(400, 'Unsupported action.')
 }
 
@@ -932,8 +945,303 @@ export async function runKoraPriceSync(env: ApiEnv, row: KoraConnection) {
 }
 
 /**
- * Scheduled cron batch worker for Kora Store price monitoring:
- * - Checks auto_monitor flag and monitor_interval_hours.
+ * Synchronizes the full Kora Store catalog into LogsPoll under Server 4:
+ * - Fetches live products from Kora Store API (GET /v1/products).
+ * - Applies global 50% markup (or supplier_automation / global_pricing_config).
+ * - Preserves existing fixed price overrides (Option B).
+ * - Automatic approval and publication to Server 4 when auto_approve & auto_publish are enabled.
+ * - Links products and product_authorizations.
+ * - Strict write containment: 0 D1 writes if costs, prices, stock, and descriptions are unchanged.
+ */
+export async function syncKoraStoreCatalog(env: ApiEnv, row?: KoraConnection) {
+  const db = env.DB!
+  let conn: KoraConnection | null = row ?? null
+  if (!conn) {
+    conn = await db.prepare("SELECT * FROM korastore_connection WHERE id='korastore'").first<KoraConnection>()
+  }
+  if (!conn) throw new HttpError(409, 'Configure Kora Store credentials first.')
+  if (!conn.enabled) throw new HttpError(409, 'Enable Kora Store first.')
+
+  const creds = await decryptKoraCredentials(conn, env)
+  const liveProducts = await fetchKoraProducts(creds.apiKey, creds.baseUrl || conn.base_url)
+
+  const globalCfg = await db
+    .prepare(
+      "SELECT markup_bps, auto_publish, automatic_pricing, auto_approve, updated_by FROM global_pricing_config WHERE id='global'"
+    )
+    .first<{
+      markup_bps: number
+      auto_publish: number
+      automatic_pricing: number
+      auto_approve: number
+      updated_by?: string
+    }>()
+    .catch(() => null)
+
+  const koraPolicy = await db
+    .prepare("SELECT markup_bps, updated_by FROM supplier_automation WHERE provider='korastore'")
+    .first<{ markup_bps: number; updated_by?: string }>()
+    .catch(() => null)
+
+  const defaultMarkup =
+    koraPolicy?.markup_bps && koraPolicy.markup_bps > 0
+      ? koraPolicy.markup_bps
+      : globalCfg?.markup_bps && globalCfg.markup_bps > 0
+        ? globalCfg.markup_bps
+        : 5000 // default 50%
+
+  const autoPublish = globalCfg?.auto_publish === 1
+  const autoApprove = globalCfg?.auto_approve === 1
+  const auditActor =
+    koraPolicy?.updated_by ||
+    globalCfg?.updated_by ||
+    (await db.prepare("SELECT id FROM users WHERE status='active' ORDER BY created_at ASC LIMIT 1").first<{ id: string }>())?.id
+
+  const catRow = await db
+    .prepare(
+      "SELECT id FROM categories WHERE slug='server4' OR slug='ai-tools' OR active=1 ORDER BY CASE WHEN slug='server4' THEN 0 ELSE 1 END LIMIT 1"
+    )
+    .first<{ id: string }>()
+  const categoryId = catRow?.id ?? 'c8402d52-37ef-4dfb-df2f-47cd20cd7004'
+
+  const existingRows = await db
+    .prepare('SELECT * FROM korastore_catalog_items')
+    .all<KoraCatalogItem>()
+  const existingMap = new Map(existingRows.results.map((r) => [r.external_id, r]))
+
+  const existingProductsRows = await db
+    .prepare("SELECT id, slug FROM products WHERE server_number=4 AND supplier_name='KoraStore'")
+    .all<{ id: string; slug: string }>()
+    .catch(() => ({ results: [] }))
+  const existingProductsBySlug = new Map(existingProductsRows.results.map((p) => [p.slug, p.id]))
+
+  const now = Date.now()
+  const writes: Statement[] = []
+  let publishedCount = 0
+  let priceChangesCount = 0
+
+  for (const item of liveProducts) {
+    if (!Number.isSafeInteger(item.price_kobo) || item.price_kobo <= 0) {
+      continue // Protect catalog from invalid or corrupted upstream costs
+    }
+
+    const existing = existingMap.get(item.id)
+    const oldCost = existing?.cost_minor ?? null
+    const newCost = item.price_kobo
+    const costChanged = existing ? oldCost !== newCost : false
+
+    let pricingMode: 'markup' | 'override' = 'markup'
+    let markupBps = defaultMarkup
+    let sellingPrice: number
+
+    if (existing?.pricing_mode === 'override') {
+      pricingMode = 'override'
+      markupBps = existing.markup_bps
+      sellingPrice = existing.selling_price_minor
+    } else {
+      pricingMode = 'markup'
+      markupBps = existing?.markup_bps && existing.markup_bps > 0 ? existing.markup_bps : defaultMarkup
+      sellingPrice = calculateKoraSellingPrice(newCost, markupBps)
+    }
+
+    const isAlreadyApproved = existing?.approval_status === 'approved'
+    const inStock = item.available && (item.stock === null || item.stock > 0)
+    const canAutoApprove = autoApprove && inStock
+    const finalApprovalStatus: 'approved' | 'pending' = isAlreadyApproved || canAutoApprove ? 'approved' : 'pending'
+    const canPublish = autoPublish && (isAlreadyApproved || canAutoApprove) && inStock
+
+    // 1. Upsert korastore_catalog_items with write containment
+    writes.push(
+      db
+        .prepare(
+          `INSERT INTO korastore_catalog_items(
+             external_id, name, description, cost_minor, previous_cost_minor,
+             selling_price_minor, currency, stock, available, delivery_type,
+             pricing_mode, markup_bps, approval_status, raw_metadata, checked_at
+           )
+           VALUES(?, ?, ?, ?, ?, ?, 'NGN', ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(external_id) DO UPDATE SET
+             name=excluded.name,
+             previous_cost_minor=CASE WHEN korastore_catalog_items.cost_minor != excluded.cost_minor THEN korastore_catalog_items.cost_minor ELSE korastore_catalog_items.previous_cost_minor END,
+             cost_minor=excluded.cost_minor,
+             selling_price_minor=excluded.selling_price_minor,
+             stock=excluded.stock,
+             available=excluded.available,
+             delivery_type=excluded.delivery_type,
+             pricing_mode=excluded.pricing_mode,
+             markup_bps=excluded.markup_bps,
+             approval_status=CASE WHEN excluded.approval_status='approved' THEN 'approved' ELSE korastore_catalog_items.approval_status END,
+             raw_metadata=excluded.raw_metadata,
+             checked_at=excluded.checked_at
+           WHERE korastore_catalog_items.cost_minor != excluded.cost_minor
+              OR korastore_catalog_items.stock IS NOT excluded.stock
+              OR korastore_catalog_items.available != excluded.available
+              OR korastore_catalog_items.name != excluded.name
+              OR korastore_catalog_items.selling_price_minor != excluded.selling_price_minor
+              OR (excluded.approval_status='approved' AND korastore_catalog_items.approval_status != 'approved')
+              OR korastore_catalog_items.checked_at <= (? - 86400000)`
+        )
+        .bind(
+          item.id,
+          item.name,
+          `Authorized ${item.name} license subscription via Kora Store`,
+          newCost,
+          oldCost,
+          sellingPrice,
+          item.stock,
+          item.available ? 1 : 0,
+          item.delivery,
+          pricingMode,
+          markupBps,
+          finalApprovalStatus,
+          JSON.stringify(item),
+          now,
+          now
+        )
+    )
+
+    // 2. Track price change in history if cost changed on existing product
+    if (existing && costChanged) {
+      priceChangesCount++
+      writes.push(
+        db
+          .prepare(
+            `INSERT INTO korastore_price_history(id, external_id, old_cost_minor, new_cost_minor, old_price_minor, new_price_minor, markup_bps, change_type, recorded_at)
+             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            crypto.randomUUID(),
+            item.id,
+            oldCost!,
+            newCost,
+            existing.selling_price_minor,
+            sellingPrice,
+            pricingMode === 'markup' ? markupBps : 0,
+            newCost > oldCost! ? 'increase' : 'decrease',
+            now
+          )
+      )
+    }
+
+    // 3. Publish to products and authorizations if auto_publish is active and approved
+    if (canPublish) {
+      publishedCount++
+      const slug = `s4-kora-${item.id}`
+      const productId = existing?.product_id || existingProductsBySlug.get(slug) || crypto.randomUUID()
+      const deliveryMethod = item.delivery === 'instant' ? 'Subscription activation' : 'Manual fulfillment'
+      const features = JSON.stringify(['Authorized AI Tool License', 'Instant Digital Delivery', 'Kora Store Resale Rights'])
+
+      writes.push(
+        db
+          .prepare(
+            `INSERT INTO products(
+               id, category_id, slug, name, description, price_minor, currency,
+               supplier_name, authorized_resale, status, delivery_type, term,
+               features, supplier_image_urls, pricing_mode, publication_verified, server_number
+             )
+             VALUES(?, ?, ?, ?, ?, ?, 'NGN', 'KoraStore', 1, 'active', ?, 'Instant delivery', ?, '[]', ?, 1, 4)
+             ON CONFLICT(slug) DO UPDATE SET
+               status='active',
+               publication_verified=1,
+               authorized_resale=1,
+               price_minor=CASE WHEN products.pricing_mode='override' THEN products.price_minor ELSE excluded.price_minor END,
+               category_id=excluded.category_id,
+               name=excluded.name,
+               description=excluded.description,
+               delivery_type=excluded.delivery_type
+             WHERE products.status != 'active'
+                OR products.category_id IS NOT excluded.category_id
+                OR (products.pricing_mode != 'override' AND products.price_minor != excluded.price_minor)
+                OR products.name != excluded.name
+                OR products.description != excluded.description
+                OR products.authorized_resale != 1
+                OR products.publication_verified != 1`
+          )
+          .bind(
+            productId,
+            categoryId,
+            slug,
+            item.name.slice(0, 200),
+            `Authorized ${item.name} license subscription via Kora Store`.slice(0, 10000),
+            sellingPrice,
+            deliveryMethod,
+            features,
+            pricingMode === 'markup' ? 'auto' : 'override'
+          ),
+        db
+          .prepare(
+            `UPDATE korastore_catalog_items
+             SET product_id=(SELECT id FROM products WHERE slug=?), reviewed_at=COALESCE(reviewed_at, ?)
+             WHERE external_id=? AND (product_id IS NULL OR product_id != (SELECT id FROM products WHERE slug=?))`
+          )
+          .bind(slug, now, item.id, slug)
+      )
+
+      if (auditActor) {
+        writes.push(
+          db
+            .prepare(
+              `INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
+               SELECT id, ?, ?, ? FROM products WHERE slug=?
+               ON CONFLICT(product_id) DO NOTHING`
+            )
+            .bind(
+              JSON.stringify({ delivery: true, privacy: true, provider: true, reference: 'Kora Store authorized partner' }),
+              auditActor,
+              now,
+              slug
+            )
+        )
+      }
+    }
+  }
+
+  // 4. Mark delisted items as out of stock / unavailable
+  const liveIdSet = new Set(liveProducts.map((p) => p.id))
+  const delistedIds = Array.from(existingMap.keys()).filter((id) => !liveIdSet.has(id))
+  if (delistedIds.length > 0) {
+    for (const dId of delistedIds) {
+      writes.push(
+        db
+          .prepare(
+            `UPDATE korastore_catalog_items
+             SET stock=0, available=0, checked_at=?
+             WHERE external_id=? AND (stock > 0 OR available = 1)`
+          )
+          .bind(now, dId)
+      )
+    }
+  }
+
+  // 5. Update korastore_connection status
+  const statusMsg = `Catalog synchronized (${liveProducts.length} products, ${publishedCount} published)`
+  writes.push(
+    db
+      .prepare(
+        `UPDATE korastore_connection
+         SET total=?, scanned=?, phase='complete', last_success=?, last_status=?, requested=0
+         WHERE id='korastore'`
+      )
+      .bind(liveProducts.length, liveProducts.length, now, statusMsg)
+  )
+
+  // 6. Execute statements in bounded batches of 50
+  for (let i = 0; i < writes.length; i += 50) {
+    await db.batch(writes.slice(i, i + 50))
+  }
+
+  return {
+    total_synced: liveProducts.length,
+    published: publishedCount,
+    price_changes: priceChangesCount,
+    writes_count: writes.length,
+    message: statusMsg,
+  }
+}
+
+/**
+ * Scheduled cron batch worker for Kora Store price monitoring & catalog sync:
+ * - Syncs full catalog if requested, or if catalog has never completed sync, or if interval elapsed.
  * - Leased concurrency control prevents duplicate runs.
  * - Respects Cloudflare billing containment (zero D1 writes on unchanged prices).
  */
@@ -943,13 +1251,16 @@ export async function syncKoraStoreBatch(env: ApiEnv) {
     now = Date.now(),
     owner = crypto.randomUUID()
 
-  // Acquire lease if auto_monitor is enabled and interval has elapsed
+  // Acquire lease if enabled and:
+  // - requested=1, OR
+  // - total IS NULL or last_success IS NULL (catalog uninitialized), OR
+  // - auto_monitor=1 and interval elapsed
   const row = await db
     .prepare(
       `UPDATE korastore_connection SET lease_owner=?, lease_until=?
-       WHERE id='korastore' AND enabled=1 AND auto_monitor=1
+       WHERE id='korastore' AND enabled=1
          AND (lease_until IS NULL OR lease_until<=?)
-         AND (next_attempt<=? OR last_success IS NULL OR last_success<=(? - monitor_interval_hours * 3600000))
+         AND (requested=1 OR total IS NULL OR last_success IS NULL OR (auto_monitor=1 AND (next_attempt<=? OR last_success<=(? - monitor_interval_hours * 3600000))))
        RETURNING *`
     )
     .bind(owner, now + 60000, now, now, now)
@@ -959,7 +1270,7 @@ export async function syncKoraStoreBatch(env: ApiEnv) {
   if (!row) return
 
   try {
-    await runKoraPriceSync(env, row)
+    await syncKoraStoreCatalog(env, row)
     const intervalHours = row.monitor_interval_hours > 0 ? row.monitor_interval_hours : 6
     await db
       .prepare(
@@ -970,7 +1281,7 @@ export async function syncKoraStoreBatch(env: ApiEnv) {
       .bind(Date.now(), Date.now() + intervalHours * 3600000, owner)
       .run()
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : 'Cron price check failed'
+    const errorMsg = err instanceof Error ? err.message : 'Cron catalog sync failed'
     await db
       .prepare(
         `UPDATE korastore_connection

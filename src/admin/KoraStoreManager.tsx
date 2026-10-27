@@ -236,6 +236,10 @@ export default function KoraStoreManager({ onComplete }: { onComplete?: () => vo
       } else if (action === 'toggle_publish') {
         await loadData()
         if (onComplete) onComplete()
+      } else if (action === 'sync') {
+        await loadData()
+        if (res.message) setMessage(res.message)
+        if (onComplete) onComplete()
       } else if (action === 'sync_prices') {
         setSyncStats({
           total_checked: res.total_checked,
@@ -359,6 +363,28 @@ export default function KoraStoreManager({ onComplete }: { onComplete?: () => vo
             >
               <RefreshCw size={14} className={busy ? 'spin' : ''} />
               Test Connection
+            </button>
+
+            <button
+              type="button"
+              disabled={busy || !status?.enabled}
+              onClick={() => executeAction('sync')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '8px 14px',
+                borderRadius: 8,
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                cursor: status?.enabled ? 'pointer' : 'not-allowed',
+                background: '#f97316',
+                color: '#ffffff',
+                border: 'none',
+              }}
+            >
+              <RefreshCw size={14} className={busy ? 'spin' : ''} />
+              Sync Products Now
             </button>
 
             <button
@@ -746,6 +772,28 @@ export default function KoraStoreManager({ onComplete }: { onComplete?: () => vo
               >
                 <RefreshCw size={14} className={busy ? 'spin' : ''} />
                 Fetch Live Products from Kora
+              </button>
+
+              <button
+                type="button"
+                disabled={busy || !status?.enabled}
+                onClick={() => executeAction('sync')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '8px 14px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: '#ea580c',
+                  color: '#ffffff',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  cursor: status?.enabled ? 'pointer' : 'not-allowed',
+                }}
+              >
+                <RefreshCw size={14} className={busy ? 'spin' : ''} />
+                Sync All Products from Kora
               </button>
 
               <button

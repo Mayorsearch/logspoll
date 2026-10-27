@@ -5,6 +5,7 @@ import HstoraReview from './HstoraReview'
 import CloudflareCatalog from './CloudflareCatalog'
 import Shopviaclone22Manager from './Shopviaclone22Manager'
 import DigitalCoreManager from './DigitalCoreManager'
+import KoraStoreManager from './KoraStoreManager'
 import { cloudflareRequest } from '../lib/cloudflare-auth'
 
 type Supplier = {
@@ -55,6 +56,7 @@ export default function SupplierHub() {
   const [youngpg, setYoungpg] = useState<Supplier | null>(null)
   const [shopviaclone22, setShopviaclone22] = useState<ShopVia | null>(null)
   const [digitalcore, setDigitalcore] = useState<any | null>(null)
+  const [korastore, setKorastore] = useState<any | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState<Record<string, boolean>>({})
@@ -66,6 +68,7 @@ export default function SupplierHub() {
       cloudflareRequest<{ suppliers: Supplier[] }>('/api/admin/catalog'),
       cloudflareRequest<{ connection: ShopVia | null }>('/api/admin/shopviaclone22'),
       cloudflareRequest<{ connection: any | null }>('/api/admin/digitalcore'),
+      cloudflareRequest<{ connection: any | null }>('/api/admin/korastore'),
     ])
 
     if (results[0].status === 'fulfilled') {
@@ -84,12 +87,17 @@ export default function SupplierHub() {
       setDigitalcore(results[3].value.connection)
       setLoaded((v) => ({ ...v, digitalcore: true }))
     }
+    if (results[4].status === 'fulfilled') {
+      setKorastore(results[4].value.connection)
+      setLoaded((v) => ({ ...v, korastore: true }))
+    }
 
     setErrors({
       hstora: results[0].status === 'rejected' ? (results[0].reason instanceof Error ? results[0].reason.message : 'Unavailable') : '',
       youngpg: results[1].status === 'rejected' ? (results[1].reason instanceof Error ? results[1].reason.message : 'Unavailable') : '',
       shopviaclone22: results[2].status === 'rejected' ? (results[2].reason instanceof Error ? results[2].reason.message : 'Unavailable') : '',
       digitalcore: results[3].status === 'rejected' ? (results[3].reason instanceof Error ? results[3].reason.message : 'Unavailable') : '',
+      korastore: results[4].status === 'rejected' ? (results[4].reason instanceof Error ? results[4].reason.message : 'Unavailable') : '',
     })
 
     const rejectedMsgs = results
@@ -107,17 +115,17 @@ export default function SupplierHub() {
   }, [])
 
   async function action(prov: string, act: string) {
-    const row = prov === 'hstora' ? hstora : prov === 'shopviaclone22' ? shopviaclone22 : prov === 'digitalcore' ? digitalcore : youngpg
+    const row = prov === 'hstora' ? hstora : prov === 'shopviaclone22' ? shopviaclone22 : prov === 'digitalcore' ? digitalcore : prov === 'korastore' ? korastore : youngpg
     if (!row) return
     if (act === 'toggle' && row.enabled && !confirm(`Disable ${prov.toUpperCase()}? New syncs and purchases stop. Existing products remain.`)) return
 
     setBusy(true)
     try {
-      const endpoint = prov === 'hstora' ? '/api/admin/hstora' : prov === 'shopviaclone22' ? '/api/admin/shopviaclone22' : prov === 'digitalcore' ? '/api/admin/digitalcore' : act === 'test' ? '/api/admin/supplier-manager' : '/api/admin/catalog'
+      const endpoint = prov === 'hstora' ? '/api/admin/hstora' : prov === 'shopviaclone22' ? '/api/admin/shopviaclone22' : prov === 'digitalcore' ? '/api/admin/digitalcore' : prov === 'korastore' ? '/api/admin/korastore' : act === 'test' ? '/api/admin/supplier-manager' : '/api/admin/catalog'
       let body: Record<string, unknown>
       if (prov === 'hstora') {
         body = act === 'toggle' ? { action: 'save', enabled: !row.enabled } : { action: act }
-      } else if (prov === 'shopviaclone22' || prov === 'digitalcore') {
+      } else if (prov === 'shopviaclone22' || prov === 'digitalcore' || prov === 'korastore') {
         body = act === 'toggle' ? { action: 'toggle' } : { action: act }
       } else {
         body = act === 'toggle' ? { action: 'save', id: youngpg!.id, name: youngpg!.name, revision: youngpg!.revision, enabled: !youngpg!.enabled } : { action: act, id: youngpg!.id }
@@ -193,7 +201,8 @@ export default function SupplierHub() {
                 { id: 'hstora', name: 'Server 1 · HStora', row: hstora, count: hstora?.imported ?? 0 },
                 { id: 'youngpg', name: 'Server 2 · YoungPG', row: youngpg, count: youngpg?.scanned ?? youngpg?.total ?? 0 },
                 { id: 'shopviaclone22', name: 'Server 3 · ShopViaClone22', row: shopviaclone22, count: shopviaclone22?.imported ?? 0 },
-                { id: 'digitalcore', name: 'Server 4 — DigitalCore', row: digitalcore, count: digitalcore?.imported ?? 0 },
+                { id: 'digitalcore', name: 'Server 4 · DigitalCore', row: digitalcore, count: digitalcore?.imported ?? 0 },
+                { id: 'korastore', name: 'Server 4 · Kora Store', row: korastore, count: korastore?.imported ?? 0 },
               ].map((item) => (
                 <section className="supplier-card" key={item.id}>
                   <div className="supplier-card-top">
@@ -302,6 +311,8 @@ export default function SupplierHub() {
                   <Shopviaclone22Manager onComplete={refresh} />
                 ) : managed === 'digitalcore' ? (
                   <DigitalCoreManager onComplete={refresh} />
+                ) : managed === 'korastore' ? (
+                  <KoraStoreManager onComplete={refresh} />
                 ) : null}
               </section>
             )}
@@ -309,13 +320,36 @@ export default function SupplierHub() {
         ) : (
           <>
             <div className="supplier-tabs" role="tablist" aria-label="Supplier products">
-              {['hstora', 'youngpg', 'shopviaclone22', 'digitalcore'].map((id) => (
+              {['hstora', 'youngpg', 'shopviaclone22', 'digitalcore', 'korastore'].map((id) => (
                 <button role="tab" aria-selected={provider === id} key={id} onClick={() => setProvider(id)}>
-                  {id === 'hstora' ? 'SERVER 1 · HSTORA' : id === 'youngpg' ? 'SERVER 2 · YOUNGPG' : id === 'shopviaclone22' ? 'SERVER 3 · SHOPVIACLONE22' : 'SERVER 4 · DIGITALCORE'}
+                  {id === 'hstora'
+                    ? 'SERVER 1 · HSTORA'
+                    : id === 'youngpg'
+                      ? 'SERVER 2 · YOUNGPG'
+                      : id === 'shopviaclone22'
+                        ? 'SERVER 3 · SHOPVIACLONE22'
+                        : id === 'digitalcore'
+                          ? 'SERVER 4 · DIGITALCORE'
+                          : 'SERVER 4 · KORA STORE'}
                 </button>
               ))}
             </div>
-            {provider === 'digitalcore' ? (
+            {provider === 'korastore' ? (
+              <section className="supplier-card">
+                <h2>Server 4 · Kora AI Store Products</h2>
+                <p>
+                  {korastore?.imported ?? 0} products imported ({korastore?.in_stock ?? 0} in stock).
+                </p>
+                <div className="cf-actions">
+                  <button className="cf-btn" onClick={() => setManaged('korastore')}>
+                    Configure API
+                  </button>
+                  <button className="cf-btn secondary" disabled={busy || !korastore?.enabled} onClick={() => void action('korastore', 'sync')}>
+                    Sync Now
+                  </button>
+                </div>
+              </section>
+            ) : provider === 'digitalcore' ? (
               <section className="supplier-card">
                 <h2>Server 4 · DigitalCore AI Tools Products</h2>
                 <p>

@@ -992,3 +992,143 @@ test('End-to-End Fulfillment: cost review, idempotency, vault entitlement delive
   }
 })
 
+test('Kora Store Catalog Sync: syncKoraStoreCatalog synchronizes catalog, applies 50% markup, auto-publishes to Server 4, and contains writes', async () => {
+  const origFetch = globalThis.fetch
+  const { DatabaseSync } = await import('node:sqlite')
+  const sql = new DatabaseSync(':memory:')
+
+  try {
+    sql.exec(`
+      CREATE TABLE users(id TEXT PRIMARY KEY, status TEXT, created_at TEXT);
+      CREATE TABLE categories(id TEXT PRIMARY KEY, slug TEXT, name TEXT, active INTEGER);
+      CREATE TABLE products(id TEXT PRIMARY KEY, category_id TEXT, slug TEXT UNIQUE, name TEXT, description TEXT, price_minor INTEGER, currency TEXT, supplier_name TEXT, authorized_resale INTEGER, status TEXT, delivery_type TEXT, term TEXT, features TEXT, supplier_image_urls TEXT, pricing_mode TEXT, publication_verified INTEGER, server_number INTEGER);
+      CREATE TABLE product_authorizations(product_id TEXT PRIMARY KEY, evidence TEXT NOT NULL, reviewer_id TEXT NOT NULL, verified_at INTEGER NOT NULL);
+      CREATE TABLE korastore_connection(id TEXT PRIMARY KEY, ciphertext TEXT, nonce TEXT, enabled INTEGER, base_url TEXT, auto_monitor INTEGER, monitor_interval_hours INTEGER, revision INTEGER, lease_owner TEXT, lease_until INTEGER, last_status TEXT, requested INTEGER, phase TEXT, total INTEGER, scanned INTEGER, next_attempt INTEGER, last_success INTEGER);
+      CREATE TABLE korastore_catalog_items(external_id TEXT PRIMARY KEY, name TEXT, description TEXT, cost_minor INTEGER, previous_cost_minor INTEGER, selling_price_minor INTEGER, currency TEXT, stock INTEGER, available INTEGER, delivery_type TEXT, pricing_mode TEXT, markup_bps INTEGER, approval_status TEXT, product_id TEXT, raw_metadata TEXT, checked_at INTEGER, reviewed_at INTEGER, price_updated_at INTEGER);
+      CREATE TABLE korastore_price_history(id TEXT PRIMARY KEY, external_id TEXT, old_cost_minor INTEGER, new_cost_minor INTEGER, old_price_minor INTEGER, new_price_minor INTEGER, markup_bps INTEGER, change_type TEXT, recorded_at INTEGER);
+      CREATE TABLE global_pricing_config(id TEXT PRIMARY KEY, markup_bps INTEGER, auto_publish INTEGER, automatic_pricing INTEGER, auto_approve INTEGER, updated_by TEXT);
+      CREATE TABLE supplier_automation(provider TEXT PRIMARY KEY, markup_bps INTEGER, updated_by TEXT);
+    `)
+
+    const prepare = (query: string): any => {
+      let args: (string | number | null)[] = []
+      return {
+        bind(...v: any[]) {
+          args = v
+          return this
+        },
+        async first<T>() {
+          return (sql.prepare(query).get(...args) ?? null) as T | null
+        },
+        async all<T>() {
+          const results = sql.prepare(query).all(...args) as T[]
+          return { success: true, results, meta: { changes: 0, last_row_id: 0 } }
+        },
+        async run() {
+          return this.all()
+        },
+      }
+    }
+
+    const db: any = {
+      prepare,
+      async batch(queries: any[]) {
+        sql.exec('BEGIN')
+        try {
+          const r = []
+          for (const q of queries) r.push(await q.run())
+          sql.exec('COMMIT')
+          return r
+        } catch (e) {
+          sql.exec('ROLLBACK')
+          throw e
+        }
+      },
+    }
+
+    const testAdminId = 'ca97e1cb-7cfe-4f23-a09b-cb5a931bdac6'
+    sql.prepare("INSERT INTO users(id, status) VALUES(?, 'active')").run(testAdminId)
+    sql.prepare("INSERT INTO categories(id, slug, name, active) VALUES('c8402d52-37ef-4dfb-df2f-47cd20cd7004', 'server4', 'AI Tools', 1)").run()
+    sql.prepare("INSERT INTO global_pricing_config(id, markup_bps, auto_publish, automatic_pricing, auto_approve, updated_by) VALUES('global', 5000, 1, 1, 1, ?)").run(testAdminId)
+
+    const rawCreds = { apiKey: 'kora_sk_sync_test_key_123', baseUrl: 'https://korastore.cv/v1' }
+    const { sealCredential } = await import('../server/supplier-crypto.ts')
+    const testSecret = btoa('s'.repeat(32))
+    const sealed = await sealCredential(JSON.stringify(rawCreds), 'korastore', testSecret)
+
+    sql.prepare(`
+      INSERT INTO korastore_connection(id, ciphertext, nonce, enabled, base_url, auto_monitor, monitor_interval_hours, revision, requested, phase, scanned, next_attempt, last_status)
+      VALUES('korastore', ?, ?, 1, 'https://korastore.cv/v1', 1, 6, 1, 0, 'idle', 0, 0, 'Ready')
+    `).run(sealed.ciphertext, sealed.nonce)
+
+    // Mock Kora products API returning 3 products
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/products')) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            products: [
+              { id: 'chatgpt-plus-1m', name: 'ChatGPT Plus 1 Month', price_kobo: 3000000, price_naira: 30000, stock: 50, available: true, delivery: 'instant' },
+              { id: 'claude-pro-1m', name: 'Claude Pro 1 Month', price_kobo: 4000000, price_naira: 40000, stock: null, available: true, delivery: 'instant' },
+              { id: 'muse-ai-annual', name: 'Muse AI Annual', price_kobo: 2000000, price_naira: 20000, stock: 0, available: false, delivery: 'manual' },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      }
+      return new Response('{}', { status: 404 })
+    }
+
+    const mockEnv: any = {
+      DB: db,
+      ENVIRONMENT: 'production',
+      SUPPLIER_ENCRYPTION_KEY: testSecret,
+      CATALOG_SYNC_ENABLED: 'true',
+    }
+
+    const { syncKoraStoreCatalog } = await import('../workers/api/korastore-manager.ts')
+
+    // Run Pass 1: Initial catalog synchronization
+    const result1 = await syncKoraStoreCatalog(mockEnv)
+    assert.equal(result1.total_synced, 3)
+    assert.equal(result1.published, 2, 'In-stock products (ChatGPT, Claude) must be published, out-of-stock (Muse) unpublished')
+
+    // Verify korastore_catalog_items entries
+    const items = sql.prepare('SELECT * FROM korastore_catalog_items ORDER BY external_id ASC').all() as any[]
+    assert.equal(items.length, 3)
+
+    const chatgpt = items.find((i) => i.external_id === 'chatgpt-plus-1m')
+    assert.ok(chatgpt)
+    assert.equal(chatgpt.cost_minor, 3000000)
+    // 50% markup on 3,000,000 kobo = 4,500,000 kobo (₦45,000)
+    assert.equal(chatgpt.selling_price_minor, 4500000)
+    assert.equal(chatgpt.approval_status, 'approved')
+    assert.ok(chatgpt.product_id)
+
+    // Verify published storefront products
+    const prods = sql.prepare("SELECT * FROM products WHERE server_number=4 AND supplier_name='KoraStore'").all() as any[]
+    assert.equal(prods.length, 2)
+    assert.ok(prods.some((p) => p.slug === 's4-kora-chatgpt-plus-1m' && p.status === 'active' && p.price_minor === 4500000))
+    assert.ok(prods.some((p) => p.slug === 's4-kora-claude-pro-1m' && p.status === 'active' && p.price_minor === 6000000))
+
+    // Verify product_authorizations
+    const auths = sql.prepare('SELECT * FROM product_authorizations').all() as any[]
+    assert.equal(auths.length, 2)
+
+    // Verify korastore_connection status
+    const conn = sql.prepare("SELECT total, scanned, phase, last_status FROM korastore_connection WHERE id='korastore'").get() as any
+    assert.equal(conn.total, 3)
+    assert.equal(conn.scanned, 3)
+    assert.equal(conn.phase, 'complete')
+
+    // Pass 2: Re-run sync with identical products -> strict write containment
+    const result2 = await syncKoraStoreCatalog(mockEnv)
+    assert.equal(result2.total_synced, 3)
+    assert.equal(result2.price_changes, 0)
+  } finally {
+    globalThis.fetch = origFetch
+    sql.close()
+  }
+})
+
