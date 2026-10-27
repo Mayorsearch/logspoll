@@ -62,7 +62,13 @@ function cleanBaseUrl(url?: string): string {
 }
 
 function buildHeaders(apiKey: string): Headers {
-  const cleanKey = apiKey.trim()
+  let cleanKey = apiKey.trim()
+  if (cleanKey.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(cleanKey)
+      if (parsed?.apiKey) cleanKey = String(parsed.apiKey).trim()
+    } catch {}
+  }
   if (!cleanKey) {
     throw new KoraStoreError(401, 'Kora Store API key is missing.')
   }
@@ -241,3 +247,4 @@ export function calculateKoraSellingPrice(costKobo: number, markupBps: number): 
   const result = (BigInt(costKobo) * multiplier + 9999n) / 10000n
   return Number(result)
 }
+

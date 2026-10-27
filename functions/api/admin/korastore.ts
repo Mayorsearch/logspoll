@@ -18,3 +18,4 @@ export async function onRequest({ request, env }: { request: Request; env: ApiEn
   headers.set('X-LogsPoll-Handler', 'korastore-direct-v1')
   return new Response(response.body, { status: response.status, headers })
 }
+

@@ -53,6 +53,9 @@ export type KoraCatalogItem = {
   checked_at: number
   reviewed_at: number | null
   price_updated_at: number | null
+  auth_evidence?: string | null
+  auth_verified_at?: number | null
+  auth_reviewer_id?: string | null
 }
 
 export async function korastoreAdmin(request: Request, env: ApiEnv) {
@@ -74,9 +77,11 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
 
     const items = await db
       .prepare(
-        `SELECT k.*, p.status AS product_status, p.slug AS product_slug
+        `SELECT k.*, p.status AS product_status, p.slug AS product_slug,
+                a.evidence AS auth_evidence, a.verified_at AS auth_verified_at, a.reviewer_id AS auth_reviewer_id
          FROM korastore_catalog_items k
          LEFT JOIN products p ON p.id = k.product_id
+         LEFT JOIN product_authorizations a ON a.product_id = k.product_id
          ORDER BY k.checked_at DESC`
       )
       .all<KoraCatalogItem & { product_status?: string; product_slug?: string }>()
@@ -413,7 +418,7 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
           .prepare(
             `UPDATE products
              SET price_minor=?, pricing_mode=?
-             WHERE id=? AND server_number=4`
+             WHERE id=? AND server_number=4 AND supplier_name='KoraStore'`
           )
           .bind(newSellingPrice, mode === 'markup' ? 'auto' : 'override', item.product_id)
       )
@@ -483,7 +488,7 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
             .prepare(
               `UPDATE products
                SET price_minor=?, pricing_mode='auto'
-               WHERE id=? AND server_number=4`
+               WHERE id=? AND server_number=4 AND supplier_name='KoraStore'`
             )
             .bind(newPrice, item.product_id)
         )
@@ -501,7 +506,106 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
     })
   }
 
-  // 9. Action: toggle publish / approve product to Server 4 storefront
+  // 9. Action: authorize product resale (genuine administrator review)
+  if (body.action === 'authorize_product') {
+    const externalId = String(body.external_id ?? '').trim()
+    const evidenceRef = String(body.evidence_reference ?? '').trim()
+    const deliveryVerified = Boolean(body.delivery_verified)
+    const privacyVerified = Boolean(body.privacy_verified)
+    const providerVerified = Boolean(body.provider_verified)
+
+    if (!externalId) throw new HttpError(400, 'Product external ID required.')
+    if (!evidenceRef || evidenceRef.length < 5) {
+      throw new HttpError(400, 'Enter a valid authorization documentation reference (minimum 5 characters).')
+    }
+    if (!deliveryVerified || !privacyVerified || !providerVerified) {
+      throw new HttpError(400, 'Administrator must explicitly verify delivery, privacy, and provider rights.')
+    }
+
+    const item = await db
+      .prepare('SELECT * FROM korastore_catalog_items WHERE external_id=?')
+      .bind(externalId)
+      .first<KoraCatalogItem>()
+    if (!item) throw new HttpError(404, 'Imported product not found.')
+
+    const productId = item.product_id || `s4-kora-${item.external_id}`
+    const slug = `s4-kora-${item.external_id}`
+    const deliveryMethod = item.delivery_type === 'instant' ? 'Subscription activation' : 'Manual fulfillment'
+    const features = JSON.stringify(['Authorized AI Tool License', 'Instant Digital Delivery', 'Kora Store Resale Rights'])
+    const now = Date.now()
+
+    const catRow = await db
+      .prepare(
+        "SELECT id FROM categories WHERE slug='server4' OR slug='ai-tools' OR active=1 ORDER BY CASE WHEN slug='server4' THEN 0 ELSE 1 END LIMIT 1"
+      )
+      .first<{ id: string }>()
+    const categoryId = catRow?.id ?? 'c8402d52-37ef-4dfb-df2f-47cd20cd7004'
+
+    const evidencePayload = JSON.stringify({
+      delivery: true,
+      privacy: true,
+      provider: true,
+      reference: evidenceRef,
+    })
+
+    const writes: Statement[] = [
+      db
+        .prepare(
+          `INSERT INTO products(
+             id, category_id, slug, name, description, price_minor, currency,
+             supplier_name, authorized_resale, status, delivery_type, term,
+             features, supplier_image_urls, pricing_mode, publication_verified, server_number
+           )
+           VALUES(?, ?, ?, ?, ?, ?, 'NGN', 'KoraStore', 1, 'draft', ?, 'Instant delivery', ?, '[]', ?, 0, 4)
+           ON CONFLICT(slug) DO UPDATE SET
+             authorized_resale=1,
+             name=excluded.name,
+             description=excluded.description,
+             delivery_type=excluded.delivery_type`
+        )
+        .bind(
+          productId,
+          categoryId,
+          slug,
+          item.name,
+          item.description || `Authorized ${item.name} license subscription via Kora Store`,
+          item.selling_price_minor,
+          deliveryMethod,
+          features,
+          item.pricing_mode === 'markup' ? 'auto' : 'override'
+        ),
+      db
+        .prepare(
+          `INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
+           VALUES(?, ?, ?, ?)
+           ON CONFLICT(product_id) DO UPDATE SET
+             evidence=excluded.evidence,
+             reviewer_id=excluded.reviewer_id,
+             verified_at=excluded.verified_at`
+        )
+        .bind(productId, evidencePayload, actor.id, now),
+      db
+        .prepare(
+          `UPDATE korastore_catalog_items
+           SET product_id=?, reviewed_at=?
+           WHERE external_id=?`
+        )
+        .bind(productId, now, externalId),
+    ]
+
+    await db.batch(writes)
+    return json({
+      ok: true,
+      authorized: true,
+      product_id: productId,
+      evidence_reference: evidenceRef,
+      reviewed_at: now,
+      reviewer_id: actor.id,
+      message: 'Resale authorization successfully verified and recorded.',
+    })
+  }
+
+  // 10. Action: toggle publish / approve product to Server 4 storefront
   if (body.action === 'toggle_publish') {
     const externalId = String(body.external_id ?? '').trim()
     const publish = Boolean(body.publish)
@@ -513,8 +617,39 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
     if (!item) throw new HttpError(404, 'Imported product not found.')
 
     const now = Date.now()
+    const productId = item.product_id || `s4-kora-${item.external_id}`
 
     if (publish) {
+      // Require genuine administrator-reviewed documentation establishing resale and delivery rights
+      const auth = await db
+        .prepare('SELECT evidence, reviewer_id, verified_at FROM product_authorizations WHERE product_id=?')
+        .bind(productId)
+        .first<{ evidence: string; reviewer_id: string; verified_at: number }>()
+
+      let validAuth = false
+      if (auth?.evidence) {
+        try {
+          const ev = JSON.parse(auth.evidence)
+          const isAffirmative = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
+          if (
+            isAffirmative(ev.delivery) &&
+            isAffirmative(ev.privacy) &&
+            isAffirmative(ev.provider) &&
+            typeof ev.reference === 'string' &&
+            ev.reference.trim().length >= 5
+          ) {
+            validAuth = true
+          }
+        } catch {}
+      }
+
+      if (!validAuth) {
+        throw new HttpError(
+          400,
+          'Product cannot be published: resale authorization has not been reviewed. An administrator must verify delivery, privacy, and provider evidence before publication.'
+        )
+      }
+
       // Find Server 4 category ID
       const catRow = await db
         .prepare(
@@ -523,7 +658,6 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
         .first<{ id: string }>()
       const categoryId = catRow?.id ?? 'c8402d52-37ef-4dfb-df2f-47cd20cd7004'
 
-      const productId = item.product_id || `s4-kora-${item.external_id}`
       const slug = `s4-kora-${item.external_id}`
       const deliveryMethod = item.delivery_type === 'instant' ? 'Subscription activation' : 'Manual fulfillment'
       const features = JSON.stringify(['Authorized AI Tool License', 'Instant Digital Delivery', 'Kora Store Resale Rights'])
@@ -561,18 +695,8 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
           ),
         db
           .prepare(
-            `INSERT INTO product_authorizations(product_id, evidence, reviewer_id, verified_at)
-             VALUES(?, json_object('delivery', 1, 'privacy', 1, 'provider', 1, 'reference', 'Kora Store authorized provider resale'), ?, ?)
-             ON CONFLICT(product_id) DO UPDATE SET
-               evidence=excluded.evidence,
-               reviewer_id=excluded.reviewer_id,
-               verified_at=excluded.verified_at`
-          )
-          .bind(productId, actor.id, now),
-        db
-          .prepare(
             `UPDATE korastore_catalog_items
-             SET approval_status='approved', product_id=?, reviewed_at=?
+             SET approval_status='approved', product_id=?, reviewed_at=COALESCE(reviewed_at, ?)
              WHERE external_id=?`
           )
           .bind(productId, now, externalId),
@@ -590,7 +714,7 @@ export async function korastoreAdmin(request: Request, env: ApiEnv) {
       if (item.product_id) {
         writes.push(
           db
-            .prepare("UPDATE products SET status='draft', publication_verified=0 WHERE id=?")
+            .prepare("UPDATE products SET status='draft', publication_verified=0 WHERE id=? AND server_number=4 AND supplier_name='KoraStore'")
             .bind(item.product_id)
         )
       }
@@ -701,7 +825,9 @@ export async function runKoraPriceSync(env: ApiEnv, row: KoraConnection) {
     const oldAvailable = item.available
     const newAvailable = live.available ? 1 : 0
 
-    const costChanged = oldCost !== newCost
+    // Strict safety: reject invalid, zero, or negative supplier costs to protect valid published prices
+    const validCost = Number.isSafeInteger(newCost) && newCost > 0
+    const costChanged = validCost && oldCost !== newCost
     const stockChanged = oldStock !== newStock || oldAvailable !== newAvailable
 
     // Strict write containment: if neither cost nor stock changed, DO NOT WRITE!
@@ -710,15 +836,16 @@ export async function runKoraPriceSync(env: ApiEnv, row: KoraConnection) {
       continue
     }
 
+    const effectiveCost = validCost ? newCost : oldCost
     let newSellingPrice = item.selling_price_minor
     if (costChanged) {
       if (item.pricing_mode === 'markup') {
         // Option A: recalculate selling price following percentage markup formula
-        newSellingPrice = calculateKoraSellingPrice(newCost, item.markup_bps)
+        newSellingPrice = calculateKoraSellingPrice(effectiveCost, item.markup_bps)
       }
       // Option B: fixed price (pricing_mode === 'override') stays completely unchanged!
 
-      if (newCost > oldCost) priceIncreases++
+      if (effectiveCost > oldCost) priceIncreases++
       else priceDecreases++
 
       writes.push(
@@ -731,11 +858,11 @@ export async function runKoraPriceSync(env: ApiEnv, row: KoraConnection) {
             crypto.randomUUID(),
             item.external_id,
             oldCost,
-            newCost,
+            effectiveCost,
             item.selling_price_minor,
             newSellingPrice,
             item.pricing_mode === 'markup' ? item.markup_bps : 0,
-            newCost > oldCost ? 'increase' : 'decrease',
+            effectiveCost > oldCost ? 'increase' : 'decrease',
             now
           )
       )
@@ -753,7 +880,7 @@ export async function runKoraPriceSync(env: ApiEnv, row: KoraConnection) {
            WHERE external_id=?`
         )
         .bind(
-          newCost,
+          effectiveCost,
           oldCost,
           newSellingPrice,
           newStock,
@@ -765,14 +892,14 @@ export async function runKoraPriceSync(env: ApiEnv, row: KoraConnection) {
         )
     )
 
-    // If published and in markup mode, update storefront product price
+    // If published and in markup mode, update storefront product price (strictly isolated to KoraStore products under Server 4)
     if (item.product_id && item.pricing_mode === 'markup' && costChanged) {
       writes.push(
         db
           .prepare(
             `UPDATE products
              SET price_minor=?
-             WHERE id=? AND server_number=4 AND (pricing_mode='auto' OR pricing_mode IS NULL)`
+             WHERE id=? AND server_number=4 AND supplier_name='KoraStore' AND (pricing_mode='auto' OR pricing_mode IS NULL)`
           )
           .bind(newSellingPrice, item.product_id)
       )
@@ -854,3 +981,4 @@ export async function syncKoraStoreBatch(env: ApiEnv) {
       .run()
   }
 }
+

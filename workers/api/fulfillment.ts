@@ -65,7 +65,23 @@ export async function runFulfillment(env:ApiEnv,orderId?:string,adminOverride=fa
   if(job.provider&&(job.provider!==mapping.provider||job.external_id!==mapping.external_id))throw new DeliveryError('Supplier mapping changed after purchase dispatch.','uncertain')
   if(!env.SUPPLIER_ENCRYPTION_KEY)throw new DeliveryError('Worker SUPPLIER_ENCRYPTION_KEY binding is missing.')
   const raw=await openCredential(mapping.ciphertext,mapping.nonce,mapping.scope,env.SUPPLIER_ENCRYPTION_KEY)
-  const credentials=(mapping.provider==='youngpg')?{key:raw,apiKey:raw}:(mapping.provider==='shopviaclone22'||mapping.provider==='digitalcore'||mapping.provider==='korastore')?{key:raw,apiKey:raw,baseUrl:mapping.base_url?.trim()||undefined}:JSON.parse(raw) as {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
+  let credentials: {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
+  if (mapping.provider === 'youngpg') {
+    credentials = {key:raw,apiKey:raw}
+  } else if (mapping.provider === 'shopviaclone22' || mapping.provider === 'digitalcore') {
+    credentials = {key:raw,apiKey:raw,baseUrl:mapping.base_url?.trim()||undefined}
+  } else if (mapping.provider === 'korastore') {
+    let koraKey = raw
+    let koraBase = mapping.base_url?.trim() || undefined
+    try {
+      const parsed = JSON.parse(raw) as {apiKey?:string;baseUrl?:string}
+      if (typeof parsed?.apiKey === 'string' && parsed.apiKey.trim()) koraKey = parsed.apiKey.trim()
+      if (typeof parsed?.baseUrl === 'string' && parsed.baseUrl.trim()) koraBase = parsed.baseUrl.trim()
+    } catch {}
+    credentials = {key:koraKey,apiKey:koraKey,baseUrl:koraBase}
+  } else {
+    credentials = JSON.parse(raw) as {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
+  }
   const fx=await db.prepare("SELECT usd_to_ngn_rate,fx_updated_at,fx_status FROM global_pricing_config WHERE id='global'").first<{usd_to_ngn_rate:number;fx_updated_at:number;fx_status:string}>().catch(()=>null)
   const recovering=job.state==='waiting'||Boolean(job.receipt)
   const fxActive=fx&&Number(fx.usd_to_ngn_rate)>0&&fx.fx_status==='active'

@@ -64,6 +64,9 @@ type KoraCatalogItem = {
   checked_at: number
   reviewed_at: number | null
   price_updated_at: number | null
+  auth_evidence?: string | null
+  auth_verified_at?: number | null
+  auth_reviewer_id?: string | null
 }
 
 type PriceHistoryEntry = {
@@ -142,6 +145,13 @@ export default function KoraStoreManager({ onComplete }: { onComplete?: () => vo
   // History modal
   const [historyModalItem, setHistoryModalItem] = useState<string | null>(null)
 
+  // Resale Authorization Modal State
+  const [authorizingItem, setAuthorizingItem] = useState<KoraCatalogItem | null>(null)
+  const [authEvidenceRef, setAuthEvidenceRef] = useState('')
+  const [authDeliveryVerified, setAuthDeliveryVerified] = useState(false)
+  const [authPrivacyVerified, setAuthPrivacyVerified] = useState(false)
+  const [authProviderVerified, setAuthProviderVerified] = useState(false)
+
   // Sync Settings
   const [autoMonitor, setAutoMonitor] = useState(false)
   const [syncIntervalHours, setSyncIntervalHours] = useState(6)
@@ -214,6 +224,14 @@ export default function KoraStoreManager({ onComplete }: { onComplete?: () => vo
         executeAction('fetch_catalog')
       } else if (action === 'update_pricing' || action === 'bulk_pricing') {
         setBulkPricingIds([])
+        await loadData()
+      } else if (action === 'authorize_product') {
+        setAuthorizingItem(null)
+        setAuthEvidenceRef('')
+        setAuthDeliveryVerified(false)
+        setAuthPrivacyVerified(false)
+        setAuthProviderVerified(false)
+        if (res.message) setMessage(res.message)
         await loadData()
       } else if (action === 'toggle_publish') {
         await loadData()
@@ -1244,13 +1262,32 @@ export default function KoraStoreManager({ onComplete }: { onComplete?: () => vo
                   <th style={{ padding: '8px 10px' }}>Selling Price</th>
                   <th style={{ padding: '8px 10px' }}>Stock Status</th>
                   <th style={{ padding: '8px 10px' }}>Delivery Type</th>
+                  <th style={{ padding: '8px 10px' }}>Resale Authorization</th>
                   <th style={{ padding: '8px 10px' }}>Storefront Status</th>
-                  <th style={{ padding: '8px 10px' }}>Publication Toggle</th>
+                  <th style={{ padding: '8px 10px' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {importedItems.map((item) => {
                   const isApproved = item.approval_status === 'approved'
+                  let hasAuth = false
+                  let authRef = ''
+                  if (item.auth_evidence) {
+                    try {
+                      const parsed = JSON.parse(item.auth_evidence)
+                      if (
+                        parsed.delivery &&
+                        parsed.privacy &&
+                        parsed.provider &&
+                        typeof parsed.reference === 'string' &&
+                        parsed.reference.trim().length >= 5
+                      ) {
+                        hasAuth = true
+                        authRef = parsed.reference.trim()
+                      }
+                    } catch {}
+                  }
+
                   return (
                     <tr key={item.external_id} style={{ borderBottom: '1px solid var(--admin-border, #f1f5f9)' }}>
                       <td style={{ padding: '8px 10px', fontWeight: 600 }}>
@@ -1300,6 +1337,65 @@ export default function KoraStoreManager({ onComplete }: { onComplete?: () => vo
                         </span>
                       </td>
                       <td style={{ padding: '8px 10px' }}>
+                        {hasAuth ? (
+                          <div>
+                            <span
+                              style={{
+                                fontSize: '0.7rem',
+                                padding: '2px 8px',
+                                borderRadius: 10,
+                                background: '#10b98120',
+                                color: '#10b981',
+                                fontWeight: 700,
+                                display: 'inline-block',
+                              }}
+                            >
+                              ✓ Authorized
+                            </span>
+                            <div style={{ fontSize: '0.65rem', color: 'var(--admin-muted, #64748b)', marginTop: 2 }}>
+                              Ref: {authRef}
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span
+                              style={{
+                                fontSize: '0.7rem',
+                                padding: '2px 8px',
+                                borderRadius: 10,
+                                background: '#f59e0b20',
+                                color: '#d97706',
+                                fontWeight: 700,
+                              }}
+                            >
+                              ⚠️ Unreviewed
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAuthorizingItem(item)
+                                setAuthEvidenceRef('')
+                                setAuthDeliveryVerified(false)
+                                setAuthPrivacyVerified(false)
+                                setAuthProviderVerified(false)
+                              }}
+                              style={{
+                                padding: '2px 8px',
+                                borderRadius: 4,
+                                border: '1px solid #d97706',
+                                background: '#fffbeb',
+                                color: '#b45309',
+                                fontSize: '0.7rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Authorize
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ padding: '8px 10px' }}>
                         <span
                           style={{
                             fontSize: '0.7rem',
@@ -1314,28 +1410,54 @@ export default function KoraStoreManager({ onComplete }: { onComplete?: () => vo
                         </span>
                       </td>
                       <td style={{ padding: '8px 10px' }}>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            executeAction('toggle_publish', {
-                              external_id: item.external_id,
-                              publish: !isApproved,
-                            })
-                          }
-                          style={{
-                            padding: '5px 12px',
-                            borderRadius: 6,
-                            border: 'none',
-                            background: isApproved ? '#64748b' : '#10b981',
-                            color: '#fff',
-                            fontSize: '0.75rem',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {isApproved ? 'Unpublish' : 'Publish to Storefront'}
-                        </button>
+                        {isApproved ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              executeAction('toggle_publish', {
+                                external_id: item.external_id,
+                                publish: false,
+                              })
+                            }
+                            style={{
+                              padding: '5px 12px',
+                              borderRadius: 6,
+                              border: 'none',
+                              background: '#64748b',
+                              color: '#fff',
+                              fontSize: '0.75rem',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Unpublish
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy || !hasAuth}
+                            title={!hasAuth ? 'Resale authorization review required before publishing' : ''}
+                            onClick={() =>
+                              executeAction('toggle_publish', {
+                                external_id: item.external_id,
+                                publish: true,
+                              })
+                            }
+                            style={{
+                              padding: '5px 12px',
+                              borderRadius: 6,
+                              border: 'none',
+                              background: hasAuth ? '#10b981' : '#94a3b8',
+                              color: '#fff',
+                              fontSize: '0.75rem',
+                              fontWeight: 700,
+                              cursor: hasAuth ? 'pointer' : 'not-allowed',
+                            }}
+                          >
+                            Publish to Storefront
+                          </button>
+                        )}
                       </td>
                     </tr>
                   )
@@ -1686,6 +1808,152 @@ export default function KoraStoreManager({ onComplete }: { onComplete?: () => vo
                   ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Resale Authorization Review Modal */}
+      {authorizingItem && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 16,
+          }}
+          onClick={() => setAuthorizingItem(null)}
+        >
+          <div
+            style={{
+              background: 'var(--admin-card-bg, #ffffff)',
+              borderRadius: 12,
+              maxWidth: 520,
+              width: '100%',
+              padding: 24,
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.2)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ShieldCheck size={20} color="#10b981" />
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>
+                  Administrator Resale Review
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAuthorizingItem(null)}
+                style={{ border: 'none', background: 'transparent', fontSize: '1.2rem', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.82rem', color: 'var(--admin-muted, #64748b)', margin: '0 0 16px', lineHeight: 1.5 }}>
+              In accordance with LogsPoll stock and publication safety architecture, an administrator must review and record legitimate resale documentation before <strong>{authorizingItem.name}</strong> can be published to Server 4.
+            </p>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: 6 }}>
+                Documentation / Agreement Reference ID (minimum 5 characters) *
+              </label>
+              <input
+                type="text"
+                value={authEvidenceRef}
+                onChange={(e) => setAuthEvidenceRef(e.target.value)}
+                placeholder="e.g. KORA-AGREEMENT-2026-AI or PARTNER-DOC-0492"
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--admin-border, #cbd5e1)',
+                  fontSize: '0.85rem',
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.8rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={authDeliveryVerified}
+                  onChange={(e) => setAuthDeliveryVerified(e.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+                <span>I verify that delivery capabilities for this digital tool license have been validated.</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.8rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={authPrivacyVerified}
+                  onChange={(e) => setAuthPrivacyVerified(e.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+                <span>I verify compliance with customer privacy and credential handling standards.</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.8rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={authProviderVerified}
+                  onChange={(e) => setAuthProviderVerified(e.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+                <span>I verify authorized resale and distribution rights from Kora Store.</span>
+              </label>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setAuthorizingItem(null)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 6,
+                  border: '1px solid var(--admin-border, #cbd5e1)',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy || authEvidenceRef.trim().length < 5 || !authDeliveryVerified || !authPrivacyVerified || !authProviderVerified}
+                onClick={() =>
+                  executeAction('authorize_product', {
+                    external_id: authorizingItem.external_id,
+                    evidence_reference: authEvidenceRef.trim(),
+                    delivery_verified: authDeliveryVerified,
+                    privacy_verified: authPrivacyVerified,
+                    provider_verified: authProviderVerified,
+                  })
+                }
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background:
+                    busy || authEvidenceRef.trim().length < 5 || !authDeliveryVerified || !authPrivacyVerified || !authProviderVerified
+                      ? '#94a3b8'
+                      : '#10b981',
+                  color: '#fff',
+                  fontWeight: 700,
+                  fontSize: '0.8rem',
+                  cursor:
+                    busy || authEvidenceRef.trim().length < 5 || !authDeliveryVerified || !authPrivacyVerified || !authProviderVerified
+                      ? 'not-allowed'
+                      : 'pointer',
+                }}
+              >
+                {busy ? 'Recording Authorization...' : 'Confirm Resale Authorization'}
+              </button>
+            </div>
           </div>
         </div>
       )}

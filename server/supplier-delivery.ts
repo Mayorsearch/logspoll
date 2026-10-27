@@ -154,9 +154,16 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
    }
   }
  }else if(provider==='korastore'){
-  const key=credentials.apiKey?.trim()||credentials.key?.trim()
+  let key=credentials.apiKey?.trim()||credentials.key?.trim()||''
+  let baseUrl=credentials.baseUrl?.trim()||'https://korastore.cv/v1'
+  if(key.startsWith('{')){
+   try{
+    const parsed=JSON.parse(key)
+    if(parsed?.apiKey)key=String(parsed.apiKey).trim()
+    if(parsed?.baseUrl)baseUrl=String(parsed.baseUrl).trim()
+   }catch{}
+  }
   if(!key)throw new DeliveryError('Kora Store API key is missing.')
-  const baseUrl=credentials.baseUrl?.trim()||'https://korastore.cv/v1'
   const parsedBase=new URL(baseUrl)
   if(parsedBase.protocol!=='https:'||parsedBase.hostname!=='korastore.cv')throw new DeliveryError('Kora Store purchase host is not verified.')
   if(!input.recovering){
@@ -204,8 +211,15 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
     return parse(await request(url,shopHeaders,'POST',body))
    }
    if(provider==='korastore'){
-    const baseUrl=credentials.baseUrl?.trim()||'https://korastore.cv/v1'
-    const key=credentials.apiKey?.trim()||credentials.key?.trim()||''
+    let baseUrl=credentials.baseUrl?.trim()||'https://korastore.cv/v1'
+    let key=credentials.apiKey?.trim()||credentials.key?.trim()||''
+    if(key.startsWith('{')){
+     try{
+      const parsed=JSON.parse(key)
+      if(parsed?.apiKey)key=String(parsed.apiKey).trim()
+      if(parsed?.baseUrl)baseUrl=String(parsed.baseUrl).trim()
+     }catch{}
+    }
     const res=await buyKoraProduct(key,input.externalId,input.requestId,baseUrl)
     const id=receipt(res.order_id)
     const deliveredItems=items(res.items,input.quantity)
@@ -228,8 +242,15 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
     return result
    }
    if(provider==='korastore'){
-    const baseUrl=credentials.baseUrl?.trim()||'https://korastore.cv/v1'
-    const key=credentials.apiKey?.trim()||credentials.key?.trim()||''
+    let baseUrl=credentials.baseUrl?.trim()||'https://korastore.cv/v1'
+    let key=credentials.apiKey?.trim()||credentials.key?.trim()||''
+    if(key.startsWith('{')){
+     try{
+      const parsed=JSON.parse(key)
+      if(parsed?.apiKey)key=String(parsed.apiKey).trim()
+      if(parsed?.baseUrl)baseUrl=String(parsed.baseUrl).trim()
+     }catch{}
+    }
     const res=await getKoraOrder(key,id,baseUrl)
     if(res.order_id!==id)throw new DeliveryError('Supplier receipt identity mismatch.','uncertain')
     const deliveredItems=items(res.items,input.quantity)
