@@ -42,113 +42,118 @@ export async function runFulfillment(env:ApiEnv,orderId?:string,adminOverride=fa
  const paymentProof=walletProof?`(${paidSQL} OR EXISTS(SELECT 1 FROM orders o JOIN wallet_transactions t ON t.order_id=o.id JOIN wallets w ON w.id=t.wallet_id WHERE o.id=fulfillment_jobs.order_id AND o.payment_method='wallet' AND o.payment_status='paid' AND t.customer_id=o.customer_id AND w.customer_id=o.customer_id AND t.type='purchase' AND t.direction='debit' AND t.status='completed' AND t.amount_minor=o.total_minor AND o.currency='NGN'))`:paidSQL
  const completed=await db.prepare("SELECT o.id FROM orders o WHERE o.payment_status='paid' AND o.fulfillment_status<>'delivered' AND EXISTS(SELECT 1 FROM order_items i WHERE i.order_id=o.id) AND NOT EXISTS(SELECT 1 FROM order_items i WHERE i.order_id=o.id AND NOT EXISTS(SELECT 1 FROM product_entitlements e WHERE e.order_item_id=i.id)) LIMIT 1").first<{id:string}>()
  if(completed)await finish(env,completed.id)
- await db.prepare("UPDATE fulfillment_jobs SET state=CASE WHEN provider='hstora' THEN 'waiting' ELSE 'uncertain' END,last_error='Interrupted purchase; reconcile supplier order before retrying.',next_attempt=?,updated_at=? WHERE state='dispatched' AND lease_until<=?").bind(now+60000,now,now).run()
- const job=await db.prepare(`UPDATE fulfillment_jobs SET lease_owner=?,lease_until=?,updated_at=?,
- state=CASE WHEN state='waiting' THEN 'waiting' ELSE 'preparing' END,attempts=attempts+1
- WHERE order_item_id=(SELECT order_item_id FROM fulfillment_jobs WHERE ${paymentProof}
- AND ((state IN ('queued','retry','waiting','retry_approved') AND next_attempt<=? AND (lease_until IS NULL OR lease_until<=?))
-      OR (state='blocked' AND last_error='Worker SUPPLIER_ENCRYPTION_KEY binding is missing.' AND lease_until IS NULL)
-      OR (state='preparing' AND lease_until<=?))
- ${orderId?'AND order_id=?':''} ORDER BY created_at,order_item_id LIMIT 1) RETURNING *`).bind(owner,now+180000,now,mode,now,now,now,...(orderId?[orderId]:[])).first<Job>()
- if(!job)return
- let dispatched=false
- try{
-  if(await db.prepare('SELECT 1 FROM product_entitlements WHERE order_item_id=?').bind(job.order_item_id).first()){
-   await db.prepare("UPDATE fulfillment_jobs SET state='delivered',lease_owner=NULL,lease_until=NULL,last_error=NULL WHERE order_item_id=? AND lease_owner=?").bind(job.order_item_id,owner).run();await finish(env,job.order_id);return
-  }
-  const item=await db.prepare('SELECT i.product_id,i.product_name,i.quantity,i.unit_price_minor,o.customer_id,p.authorized_resale,a.evidence FROM order_items i JOIN orders o ON o.id=i.order_id JOIN products p ON p.id=i.product_id LEFT JOIN product_authorizations a ON a.product_id=p.id WHERE i.id=?').bind(job.order_item_id).first<Item>()
-  if(!item||item.authorized_resale!==1)throw new DeliveryError('Product resale authorization is not verified.')
-  let rights:Record<string,unknown>;try{rights=JSON.parse(item.evidence??'null')}catch{throw new DeliveryError('Product delivery evidence is invalid.')}
-  const isOk=(v:unknown)=>v===true||v===1||v==='1'||v==='true'
-  if(!rights||!isOk(rights.delivery)||!isOk(rights.privacy)||!isOk(rights.provider))throw new DeliveryError('Product delivery, privacy and payment-provider evidence must remain verified.')
-  const mapping=await target(env,item.product_id)
-  if(job.provider&&(job.provider!==mapping.provider||job.external_id!==mapping.external_id))throw new DeliveryError('Supplier mapping changed after purchase dispatch.','uncertain')
-  if(!env.SUPPLIER_ENCRYPTION_KEY)throw new DeliveryError('Worker SUPPLIER_ENCRYPTION_KEY binding is missing.')
-  const raw=await openCredential(mapping.ciphertext,mapping.nonce,mapping.scope,env.SUPPLIER_ENCRYPTION_KEY)
-  let credentials: {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
-  if (mapping.provider === 'youngpg') {
-    credentials = {key:raw,apiKey:raw}
-  } else if (mapping.provider === 'shopviaclone22') {
-    credentials = {key:raw,apiKey:raw,baseUrl:mapping.base_url?.trim()||undefined}
-  } else if (mapping.provider === 'digitalcore') {
-    let dcKey = raw
-    let dcBase = mapping.base_url?.trim() || undefined
-    try {
-      const parsed = JSON.parse(raw) as { apiKey?: string; baseUrl?: string }
-      if (typeof parsed?.apiKey === 'string' && parsed.apiKey.trim()) {
-        dcKey = parsed.apiKey.trim()
-      }
-      if (typeof parsed?.baseUrl === 'string' && parsed.baseUrl.trim()) {
-        dcBase = parsed.baseUrl.trim()
-      }
-    } catch {}
-    credentials = { key: dcKey, apiKey: dcKey, baseUrl: dcBase }
-  } else if (mapping.provider === 'korastore') {
-    let koraKey = raw
-    let koraBase = mapping.base_url?.trim() || undefined
-    try {
-      const parsed = JSON.parse(raw) as {apiKey?:string;baseUrl?:string}
-      if (typeof parsed?.apiKey === 'string' && parsed.apiKey.trim()) koraKey = parsed.apiKey.trim()
-      if (typeof parsed?.baseUrl === 'string' && parsed.baseUrl.trim()) koraBase = parsed.baseUrl.trim()
-    } catch {}
-    credentials = {key:koraKey,apiKey:koraKey,baseUrl:koraBase}
-  } else {
-    credentials = JSON.parse(raw) as {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
-  }
-  const fx=await db.prepare("SELECT usd_to_ngn_rate,fx_updated_at,fx_status FROM global_pricing_config WHERE id='global'").first<{usd_to_ngn_rate:number;fx_updated_at:number;fx_status:string}>().catch(()=>null)
-  const recovering=job.state==='waiting'||Boolean(job.receipt)
-  const fxActive=fx&&Number(fx.usd_to_ngn_rate)>0&&fx.fx_status==='active'
-  const resolvedFxRate=fxActive?String(fx!.usd_to_ngn_rate):String(fx?.usd_to_ngn_rate??1400)
-  const isOverride=Boolean(adminOverride||job.last_error==='admin_override'||job.state==='retry_approved')
-  const usdProviders=['hstora','digitalcore','shopviaclone22']
-  if(!isOverride&&!recovering&&!fxActive&&usdProviders.includes(mapping.provider))throw new DeliveryError(`PRICE_REVIEW:live_cost=0:USD exchange rate is stale or missing (status: ${fx?.fx_status??'missing'}); update the FX rate before fulfillment can proceed.`)
-  const plan=await prepareDelivery(mapping.provider as DeliveryProvider,credentials,{externalId:mapping.external_id,slug:mapping.slug??undefined,quantity:item.quantity,requestId:job.request_id,maxCostMinor:isOverride?Math.max(item.quantity*item.unit_price_minor,100000000):item.quantity*item.unit_price_minor,recovering,adminOverride:isOverride,fxRate:resolvedFxRate})
-  if(!recovering){
-   const fence=await db.prepare(`UPDATE fulfillment_jobs SET state='dispatched',provider=?,external_id=?,updated_at=? WHERE order_item_id=? AND lease_owner=? AND state='preparing' AND lease_until>? AND ${paymentProof}
-    AND EXISTS(SELECT 1 FROM products p JOIN product_authorizations a ON a.product_id=p.id WHERE p.id=? AND p.authorized_resale=1 AND a.evidence=?)
-    AND EXISTS(SELECT 1 FROM (${mapping.query}) m WHERE m.provider=? AND m.external_id=? AND m.enabled=1 AND m.approval='approved' AND m.ciphertext=? AND m.nonce=?)
-    AND NOT EXISTS(SELECT 1 FROM product_entitlements e WHERE e.order_item_id=fulfillment_jobs.order_item_id) RETURNING order_item_id`).bind(mapping.provider,mapping.external_id,Date.now(),job.order_item_id,owner,Date.now(),mode,item.product_id,item.evidence,item.product_id,mapping.provider,mapping.external_id,mapping.ciphertext,mapping.nonce).first()
-   if(!fence)return
-   job.provider=mapping.provider;job.external_id=mapping.external_id
-   dispatched=true
-  }
-  const delivery=recovering?await plan.poll(job.receipt??''):await plan.buy()
-  await db.prepare("UPDATE fulfillment_jobs SET receipt=?,state='waiting',provider=?,external_id=?,next_attempt=?,updated_at=? WHERE order_item_id=? AND lease_owner=?").bind(delivery.receipt,mapping.provider,mapping.external_id,Date.now()+60000,Date.now(),job.order_item_id,owner).run()
-  if(delivery.delivered){
-   // The payment fence and unique entitlement make repeats safe; supplier metadata is never customer content.
-   const rawContent=delivery.items.join('\n')
-   const structured=parseDeliveryCredentials(rawContent,item.product_name)
-   const structuredJson=JSON.stringify(structured)
-   const hasStructured=Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('product_entitlements') WHERE name='structured_data'").first().catch(()=>null))
-   const insertSql=hasStructured
-    ? `INSERT INTO product_entitlements(id,order_item_id,instructions,structured_data) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM fulfillment_jobs WHERE order_item_id=? AND lease_owner=? AND ${paymentProof}) ON CONFLICT(order_item_id) DO NOTHING`
-    : `INSERT INTO product_entitlements(id,order_item_id,instructions) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM fulfillment_jobs WHERE order_item_id=? AND lease_owner=? AND ${paymentProof}) ON CONFLICT(order_item_id) DO NOTHING`
-   const insertArgs=hasStructured
-    ? [crypto.randomUUID(),job.order_item_id,rawContent,structuredJson,job.order_item_id,owner,mode]
-    : [crypto.randomUUID(),job.order_item_id,rawContent,job.order_item_id,owner,mode]
-   await db.batch([
-    db.prepare(insertSql).bind(...insertArgs),
-    db.prepare("UPDATE fulfillment_jobs SET state='delivered',last_error=NULL,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE order_item_id=? AND lease_owner=? AND EXISTS(SELECT 1 FROM product_entitlements e WHERE e.order_item_id=fulfillment_jobs.order_item_id)").bind(Date.now(),job.order_item_id,owner)
-   ])
-   await finish(env,job.order_id)
-  }else await db.prepare("UPDATE fulfillment_jobs SET lease_owner=NULL,lease_until=NULL,last_error='Supplier order is processing; awaiting genuine delivery content.' WHERE order_item_id=? AND lease_owner=?").bind(job.order_item_id,owner).run()
- }catch(error){
-  let state:string=error instanceof DeliveryError?error.state:dispatched?'uncertain':'blocked'
-  if(job.state==='waiting'||job.receipt)state='waiting'
-  if(dispatched&&job.provider==='hstora'&&state==='uncertain')state='waiting'
-  const message=error instanceof DeliveryError?error.message:'Credential/configuration or storage failure; no blind purchase retry.'
-  const isPriceReview=state==='blocked'&&message.startsWith('PRICE_REVIEW:')
-  if(isPriceReview){
-   const orderMeta=await db.prepare('SELECT customer_id FROM orders WHERE id=?').bind(job.order_id).first<{customer_id:string}>().catch(()=>null)
-   if(orderMeta){
-    const evC=crypto.randomUUID(),evA=crypto.randomUUID()
-    await db.batch([
-     db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) VALUES(?,'purchase_failed',?,?) ON CONFLICT(id) DO NOTHING").bind(evC,orderMeta.customer_id,Date.now()),
-     db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) SELECT ?,'security_alert',r.user_id,? FROM user_roles r WHERE r.role='admin' LIMIT 1 ON CONFLICT(id) DO NOTHING").bind(evA,Date.now())
-    ]).catch(()=>undefined)
+ await db.prepare("UPDATE fulfillment_jobs SET state=CASE WHEN receipt IS NOT NULL OR provider='hstora' THEN 'waiting' ELSE 'uncertain' END,last_error='Interrupted purchase; reconcile supplier order before retrying.',next_attempt=?,updated_at=? WHERE state='dispatched' AND lease_until<=?").bind(now+60000,now,now).run()
+ const maxSteps=orderId?10:5
+ for(let step=0;step<maxSteps;step++){
+  const nowStep=Date.now(),owner=crypto.randomUUID()
+  const job=await db.prepare(`UPDATE fulfillment_jobs SET lease_owner=?,lease_until=?,updated_at=?,
+  state=CASE WHEN state='waiting' THEN 'waiting' ELSE 'preparing' END,attempts=attempts+1
+  WHERE order_item_id=(SELECT order_item_id FROM fulfillment_jobs WHERE ${paymentProof}
+  AND ((state IN ('queued','retry','waiting','retry_approved') AND next_attempt<=? AND (lease_until IS NULL OR lease_until<=?))
+       OR (state='blocked' AND last_error='Worker SUPPLIER_ENCRYPTION_KEY binding is missing.' AND lease_until IS NULL)
+       OR (state='preparing' AND lease_until<=?))
+  ${orderId?'AND order_id=?':''} ORDER BY created_at,order_item_id LIMIT 1) RETURNING *`).bind(owner,nowStep+180000,nowStep,mode,nowStep,nowStep,nowStep,...(orderId?[orderId]:[])).first<Job>()
+  if(!job)break
+  let dispatched=false
+  try{
+   if(await db.prepare('SELECT 1 FROM product_entitlements WHERE order_item_id=?').bind(job.order_item_id).first()){
+    await db.prepare("UPDATE fulfillment_jobs SET state='delivered',lease_owner=NULL,lease_until=NULL,last_error=NULL WHERE order_item_id=? AND lease_owner=?").bind(job.order_item_id,owner).run();await finish(env,job.order_id);continue
    }
+   const item=await db.prepare('SELECT i.product_id,i.product_name,i.quantity,i.unit_price_minor,o.customer_id,p.authorized_resale,a.evidence FROM order_items i JOIN orders o ON o.id=i.order_id JOIN products p ON p.id=i.product_id LEFT JOIN product_authorizations a ON a.product_id=p.id WHERE i.id=?').bind(job.order_item_id).first<Item>()
+   if(!item||item.authorized_resale!==1)throw new DeliveryError('Product resale authorization is not verified.')
+   let rights:Record<string,unknown>;try{rights=JSON.parse(item.evidence??'null')}catch{throw new DeliveryError('Product delivery evidence is invalid.')}
+   const isOk=(v:unknown)=>v===true||v===1||v==='1'||v==='true'
+   if(!rights||!isOk(rights.delivery)||!isOk(rights.privacy)||!isOk(rights.provider))throw new DeliveryError('Product delivery, privacy and payment-provider evidence must remain verified.')
+   const mapping=await target(env,item.product_id)
+   if(job.provider&&(job.provider!==mapping.provider||job.external_id!==mapping.external_id))throw new DeliveryError('Supplier mapping changed after purchase dispatch.','uncertain')
+   if(!env.SUPPLIER_ENCRYPTION_KEY)throw new DeliveryError('Worker SUPPLIER_ENCRYPTION_KEY binding is missing.')
+   const raw=await openCredential(mapping.ciphertext,mapping.nonce,mapping.scope,env.SUPPLIER_ENCRYPTION_KEY)
+   let credentials: {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
+   if (mapping.provider === 'youngpg') {
+     credentials = {key:raw,apiKey:raw}
+   } else if (mapping.provider === 'shopviaclone22') {
+     credentials = {key:raw,apiKey:raw,baseUrl:mapping.base_url?.trim()||undefined}
+   } else if (mapping.provider === 'digitalcore') {
+     let dcKey = raw
+     let dcBase = mapping.base_url?.trim() || undefined
+     try {
+       const parsed = JSON.parse(raw) as { apiKey?: string; baseUrl?: string }
+       if (typeof parsed?.apiKey === 'string' && parsed.apiKey.trim()) {
+         dcKey = parsed.apiKey.trim()
+       }
+       if (typeof parsed?.baseUrl === 'string' && parsed.baseUrl.trim()) {
+         dcBase = parsed.baseUrl.trim()
+       }
+     } catch {}
+     credentials = { key: dcKey, apiKey: dcKey, baseUrl: dcBase }
+   } else if (mapping.provider === 'korastore') {
+     let koraKey = raw
+     let koraBase = mapping.base_url?.trim() || undefined
+     try {
+       const parsed = JSON.parse(raw) as {apiKey?:string;baseUrl?:string}
+       if (typeof parsed?.apiKey === 'string' && parsed.apiKey.trim()) koraKey = parsed.apiKey.trim()
+       if (typeof parsed?.baseUrl === 'string' && parsed.baseUrl.trim()) koraBase = parsed.baseUrl.trim()
+     } catch {}
+     credentials = {key:koraKey,apiKey:koraKey,baseUrl:koraBase}
+   } else {
+     credentials = JSON.parse(raw) as {apiKey?:string;key?:string;secret?:string;allowedOrigin?:string;baseUrl?:string}
+   }
+   const fx=await db.prepare("SELECT usd_to_ngn_rate,fx_updated_at,fx_status FROM global_pricing_config WHERE id='global'").first<{usd_to_ngn_rate:number;fx_updated_at:number;fx_status:string}>().catch(()=>null)
+   const recovering=job.state==='waiting'||Boolean(job.receipt)
+   const fxActive=fx&&Number(fx.usd_to_ngn_rate)>0&&fx.fx_status==='active'
+   const resolvedFxRate=fxActive?String(fx!.usd_to_ngn_rate):String(fx?.usd_to_ngn_rate??1400)
+   const isOverride=Boolean(adminOverride||job.last_error==='admin_override'||job.last_error?.startsWith('OVERRIDE:'))
+   const usdProviders=['hstora','digitalcore','shopviaclone22']
+   if(!isOverride&&!recovering&&!fxActive&&usdProviders.includes(mapping.provider))throw new DeliveryError(`PRICE_REVIEW:live_cost=0:USD exchange rate is stale or missing (status: ${fx?.fx_status??'missing'}); update the FX rate before fulfillment can proceed.`)
+   const plan=await prepareDelivery(mapping.provider as DeliveryProvider,credentials,{externalId:mapping.external_id,slug:mapping.slug??undefined,quantity:item.quantity,requestId:job.request_id,maxCostMinor:isOverride?Math.max(item.quantity*item.unit_price_minor,100000000):item.quantity*item.unit_price_minor,recovering,adminOverride:isOverride,fxRate:resolvedFxRate})
+   if(!recovering){
+    const fence=await db.prepare(`UPDATE fulfillment_jobs SET state='dispatched',provider=?,external_id=?,updated_at=? WHERE order_item_id=? AND lease_owner=? AND state='preparing' AND lease_until>? AND ${paymentProof}
+     AND EXISTS(SELECT 1 FROM products p JOIN product_authorizations a ON a.product_id=p.id WHERE p.id=? AND p.authorized_resale=1 AND a.evidence=?)
+     AND EXISTS(SELECT 1 FROM (${mapping.query}) m WHERE m.provider=? AND m.external_id=? AND m.enabled=1 AND m.approval='approved' AND m.ciphertext=? AND m.nonce=?)
+     AND NOT EXISTS(SELECT 1 FROM product_entitlements e WHERE e.order_item_id=fulfillment_jobs.order_item_id) RETURNING order_item_id`).bind(mapping.provider,mapping.external_id,Date.now(),job.order_item_id,owner,Date.now(),mode,item.product_id,item.evidence,item.product_id,mapping.provider,mapping.external_id,mapping.ciphertext,mapping.nonce).first()
+    if(!fence)continue
+    job.provider=mapping.provider;job.external_id=mapping.external_id
+    dispatched=true
+   }
+   const delivery=recovering?await plan.poll(job.receipt??''):await plan.buy()
+   await db.prepare("UPDATE fulfillment_jobs SET receipt=?,state='waiting',provider=?,external_id=?,next_attempt=?,updated_at=? WHERE order_item_id=? AND lease_owner=?").bind(delivery.receipt,mapping.provider,mapping.external_id,Date.now()+60000,Date.now(),job.order_item_id,owner).run()
+   if(delivery.delivered){
+    // The payment fence and unique entitlement make repeats safe; supplier metadata is never customer content.
+    const rawContent=delivery.items.join('\n')
+    const structured=parseDeliveryCredentials(rawContent,item.product_name)
+    const structuredJson=JSON.stringify(structured)
+    const hasStructured=Boolean(await db.prepare("SELECT 1 FROM pragma_table_info('product_entitlements') WHERE name='structured_data'").first().catch(()=>null))
+    const insertSql=hasStructured
+     ? `INSERT INTO product_entitlements(id,order_item_id,instructions,structured_data) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM fulfillment_jobs WHERE order_item_id=? AND lease_owner=? AND ${paymentProof}) ON CONFLICT(order_item_id) DO NOTHING`
+     : `INSERT INTO product_entitlements(id,order_item_id,instructions) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM fulfillment_jobs WHERE order_item_id=? AND lease_owner=? AND ${paymentProof}) ON CONFLICT(order_item_id) DO NOTHING`
+    const insertArgs=hasStructured
+     ? [crypto.randomUUID(),job.order_item_id,rawContent,structuredJson,job.order_item_id,owner,mode]
+     : [crypto.randomUUID(),job.order_item_id,rawContent,job.order_item_id,owner,mode]
+    await db.batch([
+     db.prepare(insertSql).bind(...insertArgs),
+     db.prepare("UPDATE fulfillment_jobs SET state='delivered',last_error=NULL,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE order_item_id=? AND lease_owner=? AND EXISTS(SELECT 1 FROM product_entitlements e WHERE e.order_item_id=fulfillment_jobs.order_item_id)").bind(Date.now(),job.order_item_id,owner)
+    ])
+    await finish(env,job.order_id)
+   }else await db.prepare("UPDATE fulfillment_jobs SET lease_owner=NULL,lease_until=NULL,last_error='Supplier order is processing; awaiting genuine delivery content.' WHERE order_item_id=? AND lease_owner=?").bind(job.order_item_id,owner).run()
+  }catch(error){
+   let state:string=error instanceof DeliveryError?error.state:dispatched?'uncertain':'blocked'
+   if(job.state==='waiting'||job.receipt)state='waiting'
+   if(dispatched&&job.provider==='hstora'&&state==='uncertain')state='waiting'
+   const message=error instanceof DeliveryError?error.message:'Credential/configuration or storage failure; no blind purchase retry.'
+   const isPriceReview=state==='blocked'&&message.startsWith('PRICE_REVIEW:')
+   if(isPriceReview){
+    const orderMeta=await db.prepare('SELECT customer_id FROM orders WHERE id=?').bind(job.order_id).first<{customer_id:string}>().catch(()=>null)
+    if(orderMeta){
+     const evC=crypto.randomUUID(),evA=crypto.randomUUID()
+     await db.batch([
+      db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) VALUES(?,'purchase_failed',?,?) ON CONFLICT(id) DO NOTHING").bind(evC,orderMeta.customer_id,Date.now()),
+      db.prepare("INSERT INTO business_mail_events(id,kind,user_id,created_at) SELECT ?,'security_alert',r.user_id,? FROM user_roles r WHERE r.role='admin' LIMIT 1 ON CONFLICT(id) DO NOTHING").bind(evA,Date.now())
+     ]).catch(()=>undefined)
+    }
+   }
+   await db.prepare('UPDATE fulfillment_jobs SET state=?,last_error=?,next_attempt=?,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE order_item_id=? AND lease_owner=?').bind(state,message,Date.now()+Math.min(1800000,60000*2**Math.min(job.attempts,5)),Date.now(),job.order_item_id,owner).run()
+   if(orderId)break
   }
-  await db.prepare('UPDATE fulfillment_jobs SET state=?,last_error=?,next_attempt=?,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE order_item_id=? AND lease_owner=?').bind(state,message,Date.now()+Math.min(1800000,60000*2**Math.min(job.attempts,5)),Date.now(),job.order_item_id,owner).run()
  }
 }
 async function finish(env:ApiEnv,orderId:string){
@@ -182,7 +187,11 @@ export async function fulfillPaidOrder(env:ApiEnv,orderId:string,options?:{admin
  await db.prepare(`INSERT OR IGNORE INTO fulfillment_jobs(order_item_id,order_id,request_id,created_at,updated_at)
   SELECT i.id,i.order_id,'delivery_'||i.id,?,?
   FROM order_items i WHERE i.order_id=? AND NOT EXISTS(SELECT 1 FROM product_entitlements e WHERE e.order_item_id=i.id)`).bind(Date.now(),Date.now(),orderId).run().catch(()=>undefined)
- await db.prepare("UPDATE fulfillment_jobs SET state='queued',next_attempt=0,last_error=NULL WHERE order_id=? AND state='blocked'").bind(orderId).run().catch(()=>undefined)
+ if(options?.adminOverride){
+  await db.prepare("UPDATE fulfillment_jobs SET state='queued',next_attempt=0,last_error=CASE WHEN last_error LIKE 'OVERRIDE:%' THEN last_error ELSE 'admin_override' END WHERE order_id=? AND state<>'delivered'").bind(orderId).run().catch(()=>undefined)
+ }else{
+  await db.prepare("UPDATE fulfillment_jobs SET state='queued',next_attempt=0,last_error=NULL WHERE order_id=? AND state IN ('blocked','retry')").bind(orderId).run().catch(()=>undefined)
+ }
  await runFulfillment(env,orderId,options?.adminOverride)
  await drainBusinessMail(env).catch(()=>undefined)
  await drainMail(env).catch(()=>undefined)

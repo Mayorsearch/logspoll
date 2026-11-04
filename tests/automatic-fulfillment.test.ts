@@ -297,3 +297,65 @@ test('DigitalCore permits Gemini Pro 18 Months when price is $0.90 USD', async t
  assert.equal(delivery.delivered, true)
  assert.deepEqual(delivery.items, ['gemini:pro:license'])
 })
+
+test('YoungPG real response shape with numeric id and accounts parses receipt and items cleanly', async t => {
+ const creds = { key: 'ypg_' + 'b'.repeat(48) }
+ t.mock.method(globalThis, 'fetch', async (url, init) => {
+  const u = new URL(String(url))
+  if (init?.method === 'POST') {
+   assert.equal(u.pathname, '/api/v1/purchase')
+   return Response.json({
+    success: true,
+    message: null,
+    data: {
+     id: 26512,
+     reference: 'YPG-O-1793746197054-9bd003',
+     quantity: 1,
+     amount_ngn: '500.00',
+     status: 'completed',
+     accounts: ['user:pass:mail:mailpass:link']
+    }
+   })
+  }
+  return Response.json({
+   success: true,
+   data: { id: 2072, slug: 'test-tiktok-slug', price_ngn: '500.00', available_stock: 10 }
+  })
+ })
+ const plan = await prepareDelivery('youngpg', creds, { externalId: '2072', slug: 'test-tiktok-slug', quantity: 1, requestId: 'req_ypg_real', maxCostMinor: 75000 })
+ const delivery = await plan.buy()
+ assert.equal(delivery.receipt, '26512')
+ assert.equal(delivery.delivered, true)
+ assert.deepEqual(delivery.items, ['user:pass:mail:mailpass:link'])
+})
+
+test('YoungPG polling reconciliation without prior receipt queries orders history and recovers delivery', async t => {
+ const creds = { key: 'ypg_' + 'c'.repeat(48) }
+ t.mock.method(globalThis, 'fetch', async (url, init) => {
+  const u = new URL(String(url))
+  if (u.pathname === '/api/v1/orders') {
+   return Response.json({
+    success: true,
+    data: [
+     { id: 26512, reference: 'YPG-O-1793746197054-9bd003', listing: 'test-tiktok-slug', quantity: 1, status: 'completed' }
+    ]
+   })
+  }
+  if (u.pathname === '/api/v1/orders/26512') {
+   return Response.json({
+    success: true,
+    data: {
+     id: 26512,
+     reference: 'YPG-O-1793746197054-9bd003',
+     accounts: ['recovered_user:recovered_pass:mail:mailpass:link']
+    }
+   })
+  }
+  throw Error('Unexpected url: ' + url)
+ })
+ const plan = await prepareDelivery('youngpg', creds, { externalId: '2072', slug: 'test-tiktok-slug', quantity: 1, requestId: 'req_ypg_recon', maxCostMinor: 75000, recovering: true })
+ const delivery = await plan.poll('')
+ assert.equal(delivery.receipt, '26512')
+ assert.equal(delivery.delivered, true)
+ assert.deepEqual(delivery.items, ['recovered_user:recovered_pass:mail:mailpass:link'])
+})

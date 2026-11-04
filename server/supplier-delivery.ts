@@ -1,6 +1,6 @@
 import {hstoraHeaders,type HstoraCredentials} from './hstora.ts'
 import {youngpgGet,YOUNGPG_ORIGIN,listingSlug} from './youngpg.ts'
-import {fetchKoraProducts,buyKoraProduct,getKoraOrder} from './korastore.ts'
+import {fetchKoraProducts,buyKoraProduct,getKoraOrder,getKoraOrders} from './korastore.ts'
 
 export type DeliveryProvider='youngpg'|'hstora'|'digitalcore'|'shopviaclone22'|'korastore'
 export type Delivery={receipt:string;items:string[];delivered:boolean}
@@ -24,11 +24,11 @@ async function request(url:string,headers:Headers,method='GET',body?:string){
  const parsed=new URL(url)
  if(parsed.protocol!=='https:'||!['youngpgmedia.com.ng','hstora.com','digitalcore.top','shopviaclone22.com','korastore.cv'].includes(parsed.hostname)||parsed.port||parsed.username||parsed.password)throw new DeliveryError('Supplier purchase host is not verified.')
  let r:Response
- try{r=await fetch(url,{method,headers,body,redirect:'manual',signal:AbortSignal.timeout(12000)})}catch{throw new DeliveryError('Supplier connection failed; check order history before any purchase retry.',method==='POST'?'uncertain':'retry')}
+ try{r=await fetch(url,{method,headers,body,redirect:'manual',signal:AbortSignal.timeout(25000)})}catch{throw new DeliveryError('Supplier connection failed; check order history before any purchase retry.',method==='POST'?'uncertain':'retry')}
  if([301,302,307,308].includes(r.status)&&r.headers.get('location')){
   const loc=new URL(r.headers.get('location')!,url)
   if(loc.protocol==='https:'&&['youngpgmedia.com.ng','hstora.com','digitalcore.top','shopviaclone22.com','korastore.cv'].includes(loc.hostname)){
-   try{r=await fetch(loc.toString(),{method:method==='POST'?'POST':'GET',headers,body,redirect:'manual',signal:AbortSignal.timeout(12000)})}catch{throw new DeliveryError('Supplier connection failed; check order history before any purchase retry.',method==='POST'?'uncertain':'retry')}
+   try{r=await fetch(loc.toString(),{method:method==='POST'?'POST':'GET',headers,body,redirect:'manual',signal:AbortSignal.timeout(25000)})}catch{throw new DeliveryError('Supplier connection failed; check order history before any purchase retry.',method==='POST'?'uncertain':'retry')}
   }
  }
  const reader=r.body?.getReader();let raw='',size=0;const decoder=new TextDecoder()
@@ -199,14 +199,14 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
   if(!input.adminOverride){const liveCost=deliveryCostMinor(price,input.quantity,currency!,input.fxRate);if(liveCost>input.maxCostMinor)throw new DeliveryError(`PRICE_REVIEW:live_cost=${liveCost}:Supplier cost (${liveCost}) exceeds locked payment (${input.maxCostMinor}); administrator review required.`)}
  }
  const parse=(payload:Record<string,unknown>):Delivery=>{
-  const d=provider==='digitalcore'?payload:provider==='shopviaclone22'?(objectSafe(payload.order)??objectSafe(payload.data)??payload):object(payload.data)
-  const rawId=provider==='hstora'?d.id:provider==='shopviaclone22'?(d.order_id??d.id??payload.order_id??payload.id??d.trans_id??payload.trans_id??d.transaction_id):d.order_id
+  const d=provider==='digitalcore'?(objectSafe(payload.data)??payload):provider==='shopviaclone22'?(objectSafe(payload.order)??objectSafe(payload.data)??payload):object(payload.data)
+  const rawId=(provider==='hstora'||provider==='youngpg')?(d.id??d.order_id??d.reference):provider==='shopviaclone22'?(d.order_id??d.id??payload.order_id??payload.id??d.trans_id??payload.trans_id??d.transaction_id):(d.order_id??d.id)
   const id=receipt(rawId)
   if(provider==='hstora'&&d.external_order_id!==input.requestId)throw new DeliveryError('HStora order reference mismatch.','uncertain')
   const delivery=objectSafe(d.delivery)
-  const rawItems=provider==='youngpg'?d.accounts:provider==='hstora'?delivery?.items:provider==='shopviaclone22'?(d.items??d.accounts??d.code??d.data??d.text??payload.items??payload.accounts??payload.code??payload.data??payload.text):d.items
+  const rawItems=provider==='youngpg'?d.accounts:provider==='hstora'?delivery?.items:provider==='shopviaclone22'?(d.items??d.accounts??d.code??d.data??d.text??payload.items??payload.accounts??payload.code??payload.data??payload.text):(d.items??d.accounts??d.data??payload.items)
   const deliveredItems=items(rawItems,input.quantity)
-  const ready=provider==='hstora'?d.status==='delivered'&&delivery?.available===true:provider==='digitalcore'?Number(d.quantity)===input.quantity:provider==='shopviaclone22'?(d.status==='completed'||d.status==='delivered'||d.status==='success'||payload.status==='success'||deliveredItems.length===input.quantity):true
+  const ready=provider==='hstora'?d.status==='delivered'&&delivery?.available===true:provider==='digitalcore'?(Number(d.quantity)===input.quantity||deliveredItems.length===input.quantity):provider==='shopviaclone22'?(d.status==='completed'||d.status==='delivered'||d.status==='success'||payload.status==='success'||deliveredItems.length===input.quantity):true
   return{receipt:id,items:deliveredItems,delivered:ready&&deliveredItems.length===input.quantity}
  }
  return{
@@ -262,13 +262,34 @@ export async function prepareDelivery(provider:DeliveryProvider,credentials:Cred
       if(parsed?.baseUrl)baseUrl=String(parsed.baseUrl).trim()
      }catch{}
     }
-    const res=await getKoraOrder(key,id,baseUrl)
-    if(res.order_id!==id)throw new DeliveryError('Supplier receipt identity mismatch.','uncertain')
+    let resolvedId=id
+    if(!resolvedId){
+     const orders=await getKoraOrders(key,baseUrl)
+     const match=orders.find(o=>o&&o.product===input.externalId)
+     if(match&&match.order_id)resolvedId=match.order_id
+     else throw new DeliveryError('Supplier order receipt not found in recent orders history.','uncertain')
+    }
+    const res=await getKoraOrder(key,receipt(resolvedId),baseUrl)
+    if(id&&res.order_id!==id)throw new DeliveryError('Supplier receipt identity mismatch.','uncertain')
     const deliveredItems=items(res.items,input.quantity)
-    return{receipt:id,items:deliveredItems,delivered:res.status==='delivered'&&deliveredItems.length===input.quantity}
+    return{receipt:receipt(resolvedId),items:deliveredItems,delivered:res.status==='delivered'&&deliveredItems.length===input.quantity}
+   }
+   if(provider==='youngpg'){
+    let resolvedId=id
+    if(!resolvedId){
+     const listData=objectSafe(await request(YOUNGPG_ORIGIN+'/api/v1/orders',headers))
+     const list=Array.isArray(listData?.data)?listData.data:[]
+     const match=list.find((o:any)=>o&&Number(o.quantity)===input.quantity&&(o.listing===input.slug||(typeof o.reference==='string'&&o.reference.includes(input.requestId))))
+     if(match&&match.id)resolvedId=String(match.id)
+     else throw new DeliveryError('Supplier order receipt not found in recent orders history.','uncertain')
+    }
+    const url=YOUNGPG_ORIGIN+'/api/v1/orders/'+encodeURIComponent(receipt(resolvedId))
+    const result=parse(await request(url,headers))
+    if(id&&result.receipt!==id)throw new DeliveryError('Supplier receipt identity mismatch.','uncertain')
+    return result
    }
    const dcBase=credentials.baseUrl?.trim().replace(/\/+$/,'')||'https://digitalcore.top'
-   const url=provider==='youngpg'?YOUNGPG_ORIGIN+'/api/v1/orders/'+encodeURIComponent(receipt(id)):dcBase+'/api/user/order?id='+encodeURIComponent(receipt(id))
+   const url=dcBase+'/api/user/order?id='+encodeURIComponent(receipt(id))
    const result=parse(await request(url,headers));if(result.receipt!==id)throw new DeliveryError('Supplier receipt identity mismatch.','uncertain');return result
   }
  }
