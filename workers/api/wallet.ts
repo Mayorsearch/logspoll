@@ -397,10 +397,16 @@ export async function payOrderWithWallet(
     throw new HttpError(400, 'Invalid JSON body.')
   }
 
-  const { requestId, items } = body
+  const rawRequestId = String((body as any)?.requestId || (body as any)?.request_id || '')
+  const rawItems = Array.isArray(body?.items) ? body.items : []
+  const items = rawItems.map((i: any) => ({
+    id: String(i?.id || i?.product_id || ''),
+    quantity: Number(i?.quantity || 1),
+  }))
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  const requestId = rawRequestId ? (uuidRegex.test(rawRequestId) ? rawRequestId : null) : crypto.randomUUID()
 
-  if (!requestId || !uuidRegex.test(requestId) || !items || !Array.isArray(items) || !items.length || items.length > 20) {
+  if (!requestId || !uuidRegex.test(requestId) || !items || !items.length || items.length > 20) {
     throw new HttpError(400, 'Invalid order request or item selection.')
   }
 

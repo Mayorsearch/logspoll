@@ -50,8 +50,10 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
       await drainMail(env).catch(()=>undefined)
       return json({ok:true})
     }
+    const authHeader = request.headers.get('Authorization')
+    const isApiKeyAuth = Boolean(authHeader && authHeader.trim().startsWith('Bearer lp_'))
     const origin = request.headers.get('Origin')
-    if (origin && origin !== url.origin) throw new HttpError(403, 'Origin not permitted.')
+    if (!isApiKeyAuth && origin && origin !== url.origin) throw new HttpError(403, 'Origin not permitted.')
     if (!env.DB) throw new HttpError(503, 'Staging database is not configured.')
     const groupedStorefront=await storefrontCategories(request,env);if(groupedStorefront)return groupedStorefront
     if (url.pathname.startsWith('/api/auth/')) {
@@ -107,7 +109,25 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
     if (url.pathname === '/api/admin/wallets') return await (await import('./wallet.ts')).adminGetWallets(request, env)
     if (url.pathname === '/api/admin/wallets/freeze') return await (await import('./wallet.ts')).adminFreezeWallet(request, env)
     if (url.pathname === '/api/admin/wallets/adjust') return await (await import('./wallet.ts')).adminAdjustWallet(request, env)
-    if (url.pathname === '/api/wallet') {
+    if (url.pathname === '/api/account/api-keys' || url.pathname === '/api/v1/account/api-keys') {
+      const user = await identity(request, env)
+      const { handleGetApiKeys, handleCreateApiKey, handleRevokeApiKey } = await import('./api-keys.ts')
+      if (request.method === 'GET') return await handleGetApiKeys(request, env, user)
+      if (request.method === 'POST') return await handleCreateApiKey(request, env, user)
+      if (request.method === 'DELETE') return await handleRevokeApiKey(request, env, user)
+      throw new HttpError(405, 'Method not permitted.')
+    }
+    if (url.pathname === '/api/account/api-keys/revoke' || url.pathname === '/api/v1/account/api-keys/revoke') {
+      const user = await identity(request, env)
+      const { handleRevokeApiKey } = await import('./api-keys.ts')
+      return await handleRevokeApiKey(request, env, user)
+    }
+    if (url.pathname === '/api/account/api-keys/rotate' || url.pathname === '/api/v1/account/api-keys/rotate') {
+      const user = await identity(request, env)
+      const { handleRotateApiKey } = await import('./api-keys.ts')
+      return await handleRotateApiKey(request, env, user)
+    }
+    if (url.pathname === '/api/wallet' || url.pathname === '/api/v1/wallet') {
       if (request.method !== 'GET') throw new HttpError(405, 'GET required.')
       const user = await identity(request, env)
       const { getWalletOverview } = await import('./wallet.ts')
@@ -118,7 +138,12 @@ export async function apiFetch(request: Request, env: ApiEnv, context?: Executio
       const { initiateWalletFunding } = await import('./wallet.ts')
       return await initiateWalletFunding(request, env, user)
     }
-    if (url.pathname === '/api/wallet/pay-order' || url.pathname === '/api/wallet/checkout') {
+    if (
+      url.pathname === '/api/wallet/pay-order' ||
+      url.pathname === '/api/wallet/checkout' ||
+      url.pathname === '/api/v1/wallet/checkout' ||
+      (isApiKeyAuth && request.method === 'POST' && (url.pathname === '/api/orders' || url.pathname === '/api/v1/orders'))
+    ) {
       const user = await identity(request, env)
       const { payOrderWithWallet } = await import('./wallet.ts')
       return await payOrderWithWallet(request, env, user)

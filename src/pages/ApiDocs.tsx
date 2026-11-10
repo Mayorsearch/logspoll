@@ -203,7 +203,7 @@ export function ApiDocs() {
             <p>
               To make your first API request, all public catalog endpoints (such as categories and product search) 
               can be queried immediately without authentication. For creating orders and accessing delivery entitlements, 
-              obtain an API key from your customer dashboard.
+              generate an API key from your <Link to="/dashboard/api" style={{ color: '#10b981', fontWeight: 600, textDecoration: 'underline' }}>Reseller API Dashboard →</Link>
             </p>
             <p>Test your connection using cURL:</p>
             <CodeBlock 
@@ -247,6 +247,7 @@ export function ApiDocs() {
             <p>
               API keys are cryptographically generated using high-entropy random identifiers (<code>lp_live_...</code>).
               Only the SHA-256 hash of the key is stored in LogsPoll Cloudflare D1 database.
+              You can generate, view, rotate, and revoke your keys in the <Link to="/dashboard/api" style={{ color: '#10b981', fontWeight: 600, textDecoration: 'underline' }}>Reseller API Dashboard</Link>.
             </p>
             <div className="docs-table-wrapper">
               <table className="docs-table">

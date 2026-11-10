@@ -18,6 +18,7 @@ import { ProtectedRoute, AdminGate } from './auth/ProtectedRoute'
 import { AuthPage, AuthCallback, RecoveryRedirect } from './pages/Auth'
 import { DashboardLayout, CustomerRecords, Profile, AccountSettings } from './pages/Dashboard'
 import { WalletPage } from './pages/WalletPage'
+import { ResellerApiPage } from './pages/ResellerApiPage'
 import { AcceptInvitation } from './pages/AcceptInvitation'
 
 export default function App() {
@@ -85,6 +86,9 @@ export default function App() {
                     <Route path="support" element={<CustomerRecords key="support" mode="support" />} />
                     <Route path="wallet" element={<WalletPage />} />
                     <Route path="transactions" element={<WalletPage />} />
+                    <Route path="api" element={<ResellerApiPage />} />
+                    <Route path="api-keys" element={<ResellerApiPage />} />
+                    <Route path="reseller" element={<ResellerApiPage />} />
                     <Route path="settings" element={<AccountSettings />} />
                   </Route>
                 </Route>

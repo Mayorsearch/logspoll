@@ -80,6 +80,7 @@ function DashboardShellInner() {
     const p = location.pathname
     if (p === '/dashboard' || p === '/dashboard/') return 'Dashboard'
     if (p.includes('/wallet') || p.includes('/transactions')) return 'My Wallet'
+    if (p.includes('/api') || p.includes('/reseller')) return 'Reseller API'
     if (p.includes('/orders')) return 'My Orders'
     if (p.includes('/purchases') || p.includes('/downloads')) return 'Delivery Vault'
     if (p.includes('/favorites') || p.includes('/saved')) return 'Saved Items'
@@ -124,6 +125,13 @@ function DashboardShellInner() {
           >
             <Wallet size={18} />
             <span>My Wallet</span>
+          </NavLink>
+          <NavLink
+            to="/dashboard/api"
+            className={({ isActive }) => `side-nav-link ${isActive ? 'active' : ''}`}
+          >
+            <Key size={18} />
+            <span>Reseller API</span>
           </NavLink>
           <NavLink
             to="/dashboard/orders"

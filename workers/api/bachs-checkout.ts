@@ -70,14 +70,23 @@ export async function bachsCheckout(request:Request,env:ApiEnv){
   if(request.method!=='POST')throw new HttpError(405,'POST required.')
   paymentMode(env)
   const origin=new URL(request.url).origin
-  if(origin!==env.AUTH_ORIGIN)throw new HttpError(403,'Use the configured checkout origin.')
-  if(request.headers.get('Origin')!==origin||!request.headers.get('Content-Type')?.startsWith('application/json'))throw new HttpError(403,'Same-origin JSON required.')
-  await requireRuntime(env);const buyer=await identity(request,env)
+  await requireRuntime(env)
+  const buyer=await identity(request,env)
+  const isApiKey=Boolean((buyer as any).isApiKey)
+  if(!isApiKey){
+   if(origin!==env.AUTH_ORIGIN)throw new HttpError(403,'Use the configured checkout origin.')
+   if(request.headers.get('Origin')!==origin||!request.headers.get('Content-Type')?.startsWith('application/json'))throw new HttpError(403,'Same-origin JSON required.')
+  }else{
+   if(!request.headers.get('Content-Type')?.startsWith('application/json'))throw new HttpError(415,'JSON required.')
+  }
   const reader=request.body?.getReader();if(!reader)throw new HttpError(400,'Body required.')
   let raw='',size=0;const decoder=new TextDecoder()
   while(true){const next=await reader.read();if(next.done)break;size+=next.value.length;if(size>8192){await reader.cancel();throw new HttpError(413,'Checkout too large.')}raw+=decoder.decode(next.value,{stream:true})}raw+=decoder.decode()
-  let body:{requestId:string;items:Item[]};try{body=JSON.parse(raw);if(!body||!Array.isArray(body.items))throw Error()}catch{throw new HttpError(400,'Invalid checkout JSON.')}
-  return json(await initiateCheckout(env,buyer,body.requestId,body.items,origin))
+  let body:{requestId?:string;request_id?:string;items:any[]};try{body=JSON.parse(raw);if(!body||!Array.isArray(body.items))throw Error()}catch{throw new HttpError(400,'Invalid checkout JSON.')}
+  const rawReqId=String(body.requestId||body.request_id||'')
+  const reqId=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawReqId)?rawReqId:crypto.randomUUID()
+  const normItems=body.items.map(i=>({id:String(i?.id||i?.product_id||''),quantity:Number(i?.quantity||1)}))
+  return json(await initiateCheckout(env,buyer,reqId,normItems,origin))
  }catch(error){
   if(error instanceof BachsCheckoutError){
    console.warn('Bachs checkout failed',{providerStatus:error.providerStatus,providerCode:error.providerCode})

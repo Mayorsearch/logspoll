@@ -88,6 +88,31 @@ export async function consumeVerification(request:Request,env:ApiEnv) {
   await env.DB!.prepare('DELETE FROM auth_otp_cooldowns WHERE next_send_at<?').bind(now-86400000).run()
 }
 export async function identity(request: Request, env: ApiEnv) {
+  const authHeader = request.headers.get('Authorization')
+  if (authHeader && authHeader.startsWith('Bearer lp_')) {
+    const rawKey = authHeader.slice(7).trim()
+    if (rawKey.length >= 20 && env.DB) {
+      const { authenticateByApiKey } = await import('./api-keys.ts')
+      const apiKeyUser = await authenticateByApiKey(env, rawKey)
+      if (!apiKeyUser) throw new HttpError(401, 'Invalid or revoked API key.')
+
+      const window = Math.floor(Date.now() / 60000)
+      const limit = await env.DB.prepare('INSERT INTO request_limits(subject,window,hits) VALUES(?,?,1) ON CONFLICT(subject,window) DO UPDATE SET hits=hits+1 RETURNING hits').bind(apiKeyUser.id, window).first<{ hits: number }>()
+      if (!limit || limit.hits > 60) throw new HttpError(429, 'Request limit reached. Retry later.')
+      await env.DB.prepare('DELETE FROM request_limits WHERE window < ?').bind(window - 15).run()
+
+      return {
+        id: apiKeyUser.id,
+        role: apiKeyUser.role,
+        email: apiKeyUser.email,
+        name: apiKeyUser.name,
+        isApiKey: true,
+        apiKeyId: apiKeyUser.keyId,
+        scopes: apiKeyUser.scopes,
+      }
+    }
+  }
+
   const result = await createAuth(env).api.getSession({ headers: request.headers })
   if (!result?.user.emailVerified) throw new HttpError(401, 'Verified sign-in required.')
   // Provision by authenticated UUID only. Never join an imported customer/admin by email.
